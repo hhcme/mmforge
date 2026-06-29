@@ -1,0 +1,38 @@
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Rust
+/target/
+
+# Swift / Xcode
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# C / C++ / CMake
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
+# Android / Gradle
+.gradle/
+local.properties
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# Generated artifacts
+dist/
+out/
+coverage/

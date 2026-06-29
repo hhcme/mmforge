@@ -1,0 +1,15 @@
+MMForge License Summary
+=======================
+
+Unless otherwise noted, MMForge is licensed under either of:
+
+- MIT License, see LICENSE-MIT
+- Apache License, Version 2.0, see LICENSE-APACHE
+
+You may choose either license, at your option.
+
+Third-party dependencies and optional integrations may be distributed under
+their own licenses. In particular, optional DWG support based on LibreDWG is
+subject to GPL v3 terms and must be treated as a separable component.
+
+See OPEN_SOURCE.md for the project open-source policy.
