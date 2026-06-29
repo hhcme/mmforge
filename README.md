@@ -4,7 +4,7 @@
 
 [中文文档](README_zh.md)
 
-![Project Status](https://img.shields.io/badge/status-full--scope%20planning%20%2F%20pre--alpha-orange)
+![Project Status](https://img.shields.io/badge/status-Phase%200%20complete--%20Phase%201%20in%20progress-orange)
 ![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
 
 ---
@@ -13,7 +13,7 @@
 
 MMForge is an open-source industrial model parsing and rendering solution. It targets a complete, full-featured pipeline from file format parsing to cross-platform native rendering, with a permissively licensed core that can be used in both open-source and commercial projects.
 
-> **Project status:** MMForge is currently in the planning and architecture stage for the full product scope. The repository primarily contains design documents and the intended module layout; production code will land incrementally.
+> **Project status:** Phase 0 (repository foundation) is complete. The Rust workspace, macOS SwiftUI app shell, and CI pipeline are operational. Phase 1 (LSM runtime model, OCCT integration, Metal rendering) is in progress. See [docs/progress/](docs/progress/) for handoff reports.
 
 **Key Features:**
 - Multi-format parsing (STEP, IGES, glTF, STL, DXF, DWG)
@@ -102,37 +102,80 @@ MMForge is an open-source industrial model parsing and rendering solution. It ta
 ```
 mmforge/
 ├── crates/                        # Rust core library
-│   ├── mmforge-core/             # Core data model (LSM runtime model)
-│   ├── mmforge-geometry/         # Geometry processing (OCCT binding)
-│   ├── mmforge-render/           # Render data preparation
-│   ├── mmforge-format-step/      # STEP parser
-│   ├── mmforge-format-gltf/      # glTF parser
-│   ├── mmforge-format-stl/       # STL parser
-│   ├── mmforge-format-dxf/       # DXF parser
-│   ├── mmforge-format-dwg/       # DWG parser
+│   ├── mmforge-core/             # Core types, error model, parser traits, LSM runtime model
+│   ├── mmforge-geometry/         # Geometry processing (OCCT binding, tessellation)
+│   ├── mmforge-render/           # RenderPacket, camera, render data preparation
 │   └── mmforge-cli/              # CLI tool
 ├── macos/                         # macOS client (SwiftUI + Metal)
-├── ios/                           # iOS client (shared with macOS)
-├── windows/                       # Windows client (WinUI + D3D12)
-├── android/                       # Android client (Compose + Vulkan)
+│   └── MMForge/                  # Xcode project
+│       ├── App/                  # SwiftUI App entry, AppDelegate
+│       ├── Views/                # ContentView, Sidebar, Inspector, Viewport
+│       ├── Document/             # FileDocument type
+│       ├── Metal/                # Metal view placeholder
+│       ├── RustBridge/           # Swift ↔ Rust FFI bridge
+│       ├── DesignSystem/         # Color tokens, design constants
+│       └── Resources/            # Info.plist
 ├── docs/                          # Documentation
+│   ├── development-plan.md       # Full-scope phased development plan
 │   ├── requirements.md           # Requirements
 │   ├── architecture.md           # Architecture overview
+│   ├── progress/                 # Goal completion handoff reports
+│   ├── adr/                      # Architecture Decision Records
 │   ├── parser/                   # Parser design docs
 │   ├── geometry/                 # Geometry engine docs
 │   ├── lsm/                      # LSM runtime model and future file format draft
 │   ├── renderer/                 # Renderer design docs
 │   ├── client/                   # Client design docs
 │   └── cli/                      # CLI design docs
-├── examples/                      # Example files
-├── .github/                       # CI/CD
+├── .github/                       # CI/CD workflows
 ├── README.md                     # This file
 ├── README_zh.md                  # Chinese documentation
+├── Cargo.toml                    # Rust workspace root
 ├── LICENSE                       # License summary
-├── LICENSE-MIT
-├── LICENSE-APACHE
-├── OPEN_SOURCE.md
-└── CONTRIBUTING.md
+├── LICENSE-APACHE                # Apache 2.0 license
+├── OPEN_SOURCE.md                # Open-source compliance
+└── CONTRIBUTING.md               # Contribution guidelines
+```
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- **Rust** 1.85+ (stable) — install via [rustup](https://rustup.rs/)
+- **Xcode** 16+ (for macOS builds) — install from the Mac App Store
+
+### Build & Test (Rust)
+
+```bash
+# Build the workspace
+cargo build --workspace
+
+# Run all tests
+cargo test --workspace
+
+# Check formatting
+cargo fmt --check
+
+# Run linter
+cargo clippy --workspace -- -D warnings
+
+# Run the CLI
+cargo run --bin mmforge -- version
+```
+
+### Build macOS App
+
+```bash
+xcodebuild build \
+  -project macos/MMForge.xcodeproj \
+  -scheme MMForge \
+  -configuration Debug \
+  -destination 'platform=macOS' \
+  CODE_SIGN_IDENTITY="" \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGNING_ALLOWED=NO
 ```
 
 ---

@@ -1,0 +1,16 @@
+[package]
+name = "mmforge-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "RenderPacket generation, batching, and material mapping for MMForge"
+
+[dependencies]
+mmforge-core = { workspace = true }
+mmforge-geometry = { workspace = true }
+glam = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }

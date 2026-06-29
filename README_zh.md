@@ -4,7 +4,7 @@
 
 [English](README.md)
 
-![项目状态](https://img.shields.io/badge/status-full--scope%20planning%20%2F%20pre--alpha-orange)
+![项目状态](https://img.shields.io/badge/status-Phase%200%20complete--%20Phase%201%20in%20progress-orange)
 ![许可证](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
 
 ---
@@ -13,7 +13,7 @@
 
 MMForge 是一套开源工业模型解析与渲染方案，目标是构建完整的全功能链路：从文件格式解析、统一运行时模型、渲染数据准备，到跨平台原生渲染。项目核心采用宽松开源许可证，允许在开源和商业项目中使用。
 
-> **项目状态：** 当前处于完整产品范围的规划与架构设计阶段。仓库主要包含设计文档和目标模块结构，生产代码会逐步落地。
+> **项目状态：** Phase 0（仓库工程基础）已完成。Rust workspace、macOS SwiftUI 应用壳和 CI 流水线已可运行。Phase 1（LSM 运行时模型、OCCT 集成、Metal 渲染）正在进行中。交接报告见 [docs/progress/](docs/progress/)。
 
 **核心特性：**
 - 多格式解析（STEP、IGES、glTF、STL、DXF、DWG）
@@ -102,37 +102,80 @@ MMForge 是一套开源工业模型解析与渲染方案，目标是构建完整
 ```
 mmforge/
 ├── crates/                        # Rust 核心库
-│   ├── mmforge-core/             # 核心数据模型（LSM 运行时模型）
-│   ├── mmforge-geometry/         # 几何处理（OCCT 绑定）
-│   ├── mmforge-render/           # 渲染数据准备
-│   ├── mmforge-format-step/      # STEP 解析器
-│   ├── mmforge-format-gltf/      # glTF 解析器
-│   ├── mmforge-format-stl/       # STL 解析器
-│   ├── mmforge-format-dxf/       # DXF 解析器
-│   ├── mmforge-format-dwg/       # DWG 解析器
+│   ├── mmforge-core/             # 核心类型、错误模型、解析器 trait、LSM 运行时模型
+│   ├── mmforge-geometry/         # 几何处理（OCCT 绑定、tessellation）
+│   ├── mmforge-render/           # RenderPacket、相机、渲染数据准备
 │   └── mmforge-cli/              # 命令行工具
 ├── macos/                         # macOS 客户端（SwiftUI + Metal）
-├── ios/                           # iOS 客户端（与 macOS 共享代码）
-├── windows/                       # Windows 客户端（WinUI + D3D12）
-├── android/                       # Android 客户端（Compose + Vulkan）
+│   └── MMForge/                  # Xcode 工程
+│       ├── App/                  # SwiftUI App 入口、AppDelegate
+│       ├── Views/                # ContentView、Sidebar、Inspector、Viewport
+│       ├── Document/             # FileDocument 类型
+│       ├── Metal/                # Metal 视图占位
+│       ├── RustBridge/           # Swift ↔ Rust FFI 桥接
+│       ├── DesignSystem/         # 颜色 token、设计常量
+│       └── Resources/            # Info.plist
 ├── docs/                          # 文档
+│   ├── development-plan.md       # 全功能分阶段开发计划
 │   ├── requirements.md           # 需求文档
 │   ├── architecture.md           # 架构总览
+│   ├── progress/                 # 目标完成后的交接报告
+│   ├── adr/                      # 架构决策记录
 │   ├── parser/                   # 解析器设计文档
 │   ├── geometry/                 # 几何引擎文档
 │   ├── lsm/                      # LSM 运行时模型与未来文件格式草案
 │   ├── renderer/                 # 渲染器设计文档
 │   ├── client/                   # 客户端设计文档
 │   └── cli/                      # CLI 工具文档
-├── examples/                      # 示例文件
-├── .github/                       # CI/CD
+├── .github/                       # CI/CD 工作流
 ├── README.md                     # 英文文档
 ├── README_zh.md                  # 本文件
+├── Cargo.toml                    # Rust workspace 根配置
 ├── LICENSE                       # 许可证摘要
-├── LICENSE-MIT
-├── LICENSE-APACHE
-├── OPEN_SOURCE.md
-└── CONTRIBUTING.md
+├── LICENSE-APACHE                # Apache 2.0 许可证
+├── OPEN_SOURCE.md                # 开源合规说明
+└── CONTRIBUTING.md               # 贡献指南
+```
+
+---
+
+## 快速开始
+
+### 环境要求
+
+- **Rust** 1.85+（stable）— 通过 [rustup](https://rustup.rs/) 安装
+- **Xcode** 16+（macOS 构建）— 从 Mac App Store 安装
+
+### 构建与测试（Rust）
+
+```bash
+# 构建 workspace
+cargo build --workspace
+
+# 运行所有测试
+cargo test --workspace
+
+# 检查格式
+cargo fmt --check
+
+# 运行 linter
+cargo clippy --workspace -- -D warnings
+
+# 运行 CLI
+cargo run --bin mmforge -- version
+```
+
+### 构建 macOS 应用
+
+```bash
+xcodebuild build \
+  -project macos/MMForge.xcodeproj \
+  -scheme MMForge \
+  -configuration Debug \
+  -destination 'platform=macOS' \
+  CODE_SIGN_IDENTITY="" \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGNING_ALLOWED=NO
 ```
 
 ---

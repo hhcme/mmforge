@@ -1,0 +1,16 @@
+[package]
+name = "mmforge-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core types, error model, and parser traits for MMForge"
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true }
+glam = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mmforge-core",
+    "crates/mmforge-geometry",
+    "crates/mmforge-render",
+    "crates/mmforge-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hhcme/mmforge"
+description = "Industrial 2D/3D model parser and native renderer"
+
+[workspace.dependencies]
+# Internal crates
+mmforge-core = { path = "crates/mmforge-core" }
+mmforge-geometry = { path = "crates/mmforge-geometry" }
+mmforge-render = { path = "crates/mmforge-render" }
+
+# External dependencies
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+glam = "0.29"

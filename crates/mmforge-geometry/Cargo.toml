@@ -1,0 +1,13 @@
+[package]
+name = "mmforge-geometry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Geometry types, B-Rep handles, tessellation adapter, and OCCT FFI for MMForge"
+
+[dependencies]
+mmforge-core = { workspace = true }
+glam = { workspace = true }
+thiserror = { workspace = true }

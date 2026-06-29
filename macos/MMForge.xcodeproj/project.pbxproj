@@ -1,0 +1,333 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10001 /* MMForgeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10001; };
+		A10002 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10002; };
+		A10003 /* MMForgeDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10003; };
+		A10004 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10004; };
+		A10005 /* StructureSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10005; };
+		A10006 /* InspectorPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10006; };
+		A10007 /* ViewportContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10007; };
+		A10008 /* MetalViewPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10008; };
+		A10009 /* RustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10009; };
+		A10010 /* Colors.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10010; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		B10001 /* MMForgeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MMForgeApp.swift; sourceTree = "<group>"; };
+		B10002 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		B10003 /* MMForgeDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MMForgeDocument.swift; sourceTree = "<group>"; };
+		B10004 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		B10005 /* StructureSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructureSidebar.swift; sourceTree = "<group>"; };
+		B10006 /* InspectorPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorPanel.swift; sourceTree = "<group>"; };
+		B10007 /* ViewportContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewportContainer.swift; sourceTree = "<group>"; };
+		B10008 /* MetalViewPlaceholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalViewPlaceholder.swift; sourceTree = "<group>"; };
+		B10009 /* RustBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustBridge.swift; sourceTree = "<group>"; };
+		B10010 /* Colors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Colors.swift; sourceTree = "<group>"; };
+		B10011 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B10012 /* MMForge-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "MMForge-Bridging-Header.h"; sourceTree = "<group>"; };
+		C10001 /* MMForge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MMForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		D10001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		E10001 /* Root */ = {
+			isa = PBXGroup;
+			children = (
+				E10002 /* MMForge */,
+				E10008 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		E10002 /* MMForge */ = {
+			isa = PBXGroup;
+			children = (
+				E10003 /* App */,
+				E10004 /* Views */,
+				E10005 /* Document */,
+				E10006 /* Metal */,
+				E10007 /* RustBridge */,
+				E10009 /* DesignSystem */,
+				E10010 /* Resources */,
+			);
+			path = MMForge;
+			sourceTree = "<group>";
+		};
+		E10003 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				B10001 /* MMForgeApp.swift */,
+				B10002 /* AppDelegate.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		E10004 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				B10004 /* ContentView.swift */,
+				B10005 /* StructureSidebar.swift */,
+				B10006 /* InspectorPanel.swift */,
+				B10007 /* ViewportContainer.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		E10005 /* Document */ = {
+			isa = PBXGroup;
+			children = (
+				B10003 /* MMForgeDocument.swift */,
+			);
+			path = Document;
+			sourceTree = "<group>";
+		};
+		E10006 /* Metal */ = {
+			isa = PBXGroup;
+			children = (
+				B10008 /* MetalViewPlaceholder.swift */,
+			);
+			path = Metal;
+			sourceTree = "<group>";
+		};
+		E10007 /* RustBridge */ = {
+			isa = PBXGroup;
+			children = (
+				B10009 /* RustBridge.swift */,
+				B10012 /* MMForge-Bridging-Header.h */,
+			);
+			path = RustBridge;
+			sourceTree = "<group>";
+		};
+		E10008 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C10001 /* MMForge.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		E10009 /* DesignSystem */ = {
+			isa = PBXGroup;
+			children = (
+				B10010 /* Colors.swift */,
+			);
+			path = DesignSystem;
+			sourceTree = "<group>";
+		};
+		E10010 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				B10011 /* Info.plist */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		F10001 /* MMForge */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F10003 /* Build configuration list for PBXNativeTarget "MMForge" */;
+			buildPhases = (
+				F10004 /* Sources */,
+				D10001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MMForge;
+			productName = MMForge;
+			productReference = C10001 /* MMForge.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		F10002 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = F10005 /* Build configuration list for PBXProject "MMForge" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = E10001 /* Root */;
+			productRefGroup = E10008 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F10001 /* MMForge */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		F10004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10001 /* MMForgeApp.swift in Sources */,
+				A10002 /* AppDelegate.swift in Sources */,
+				A10003 /* MMForgeDocument.swift in Sources */,
+				A10004 /* ContentView.swift in Sources */,
+				A10005 /* StructureSidebar.swift in Sources */,
+				A10006 /* InspectorPanel.swift in Sources */,
+				A10007 /* ViewportContainer.swift in Sources */,
+				A10008 /* MetalViewPlaceholder.swift in Sources */,
+				A10009 /* RustBridge.swift in Sources */,
+				A10010 /* Colors.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		G10001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		G10002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		G10003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = MMForge/Resources/Info.plist;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 MMForge Contributors. MIT OR Apache-2.0.";
+				INFOPLIST_KEY_NSMainStoryboardFile = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mmforge.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "MMForge/RustBridge/MMForge-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		G10004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = MMForge/Resources/Info.plist;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 MMForge Contributors. MIT OR Apache-2.0.";
+				INFOPLIST_KEY_NSMainStoryboardFile = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mmforge.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "MMForge/RustBridge/MMForge-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		F10003 /* Build configuration list for PBXNativeTarget "MMForge" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				G10003 /* Debug */,
+				G10004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F10005 /* Build configuration list for PBXProject "MMForge" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				G10001 /* Debug */,
+				G10002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = F10002 /* Project object */;
+}
