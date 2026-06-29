@@ -12,3 +12,9 @@ pub mod version;
 
 pub use error::{Error, Result};
 pub use version::{VERSION, Version};
+
+// Re-export key model types for convenience.
+pub use model::{
+    DanglingRef, LsmModel, ModelBuilder, ParseOutput, ParseStats, ParseWarning, RemoveError,
+    ValidationIssue, ValidationIssueKind,
+};
