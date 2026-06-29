@@ -1,10 +1,16 @@
 //! MMForge Geometry — B-Rep handles, tessellation adapter, and OCCT FFI.
 //!
 //! This crate bridges the core model to heavy geometry operations.
-//! In Phase 0 it only re-exports core math types; OCCT integration
-//! will arrive in Phase 1.
+//! OCCT integration is feature-gated: compile with `--features occt`
+//! to enable real STEP/IGES parsing via OpenCASCADE.
+//!
+//! # Safety
+//!
+//! All `unsafe` OCCT FFI is confined to the [`occt`] module.  The rest
+//! of the crate is safe Rust.
 
 pub mod brep;
+pub mod occt;
 pub mod tessellation;
 
 // Re-export core geometry types for convenience.

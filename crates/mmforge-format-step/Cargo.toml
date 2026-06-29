@@ -1,0 +1,23 @@
+[package]
+name = "mmforge-format-step"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "STEP (AP203/AP214) file parser for MMForge"
+
+[features]
+default = []
+# Enable OCCT-backed STEP parsing.  When disabled, the crate still
+# compiles and provides format detection, but parse() returns an error
+# indicating OCCT is not available.
+occt = ["mmforge-geometry/occt"]
+
+[dependencies]
+mmforge-core = { workspace = true }
+mmforge-geometry = { workspace = true }
+thiserror = { workspace = true }
+glam = { workspace = true }
+
+[dev-dependencies]

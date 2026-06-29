@@ -4,6 +4,7 @@ members = [
     "crates/mmforge-core",
     "crates/mmforge-geometry",
     "crates/mmforge-render",
+    "crates/mmforge-format-step",
     "crates/mmforge-cli",
 ]
 
@@ -20,6 +21,7 @@ description = "Industrial 2D/3D model parser and native renderer"
 mmforge-core = { path = "crates/mmforge-core" }
 mmforge-geometry = { path = "crates/mmforge-geometry" }
 mmforge-render = { path = "crates/mmforge-render" }
+mmforge-format-step = { path = "crates/mmforge-format-step" }
 
 # External dependencies
 thiserror = "2"
