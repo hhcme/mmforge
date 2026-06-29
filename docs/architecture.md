@@ -263,6 +263,13 @@ mmforge-core (核心数据模型)
 |------|------|
 | [cli/design.md](cli/design.md) | CLI 工具设计 |
 
+### 开发计划
+
+| 文档 | 内容 |
+|------|------|
+| [development-plan.md](development-plan.md) | 全功能分阶段开发计划 |
+| [progress/](progress/) | 目标完成后的交接报告 |
+
 ---
 
 *本文档随开发持续更新。*

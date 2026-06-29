@@ -161,6 +161,8 @@ mmforge/
 | Document | Description |
 |----------|-------------|
 | [docs/requirements.md](docs/requirements.md) | Requirements document |
+| [docs/development-plan.md](docs/development-plan.md) | Full-scope phased development plan |
+| [docs/progress/](docs/progress/) | Goal completion handoff reports |
 | [docs/architecture.md](docs/architecture.md) | Architecture overview |
 | [docs/parser/](docs/parser/) | Parser design (STEP, glTF, STL, DXF, DWG, algorithms) |
 | [docs/geometry/](docs/geometry/) | Geometry engine (OCCT, B-Rep, curves/surfaces, spatial indexing) |

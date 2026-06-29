@@ -161,6 +161,8 @@ mmforge/
 | 文档 | 说明 |
 |------|------|
 | [docs/requirements.md](docs/requirements.md) | 需求文档 |
+| [docs/development-plan.md](docs/development-plan.md) | 全功能分阶段开发计划 |
+| [docs/progress/](docs/progress/) | 目标完成后的交接报告 |
 | [docs/architecture.md](docs/architecture.md) | 架构总览 |
 | [docs/parser/](docs/parser/) | 解析器设计（STEP、glTF、STL、DXF、DWG、算法） |
 | [docs/geometry/](docs/geometry/) | 几何引擎（OCCT、B-Rep、曲线曲面、空间索引） |

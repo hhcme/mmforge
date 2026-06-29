@@ -19,6 +19,29 @@
 
 ---
 
+## Apple 设计规范
+
+macOS 客户端必须按 Apple Human Interface Guidelines 设计和验收：
+
+- 窗口：采用文档型应用结构，支持文件打开、最近文件、拖放和多窗口策略。
+- 菜单栏：常用命令进入系统菜单，保留标准快捷键，例如 `Cmd+O`、`Cmd+S`、`Cmd+,`。
+- Toolbar：放置高频查看工具，例如打开、适配视图、渲染模式、测量、剖切；按钮需要图标、label 和 tooltip。
+- Sidebar：用于文件列表、产品结构树、图层树等导航信息。
+- Inspector：用于当前选择对象属性、材质、测量结果、剖切参数和标注参数。
+- Status bar：显示坐标、单位、选择数量、三角形数、fps、解析进度等状态。
+- Accessibility：所有主要控件提供可读 label，支持键盘导航和 VoiceOver 基础使用。
+- Appearance：支持系统 Dark Mode，颜色不硬编码到单一主题。
+- Long-running tasks：解析、tessellation、导出等长任务必须显示进度并支持取消。
+
+参考：
+
+- Apple Human Interface Guidelines: https://developer.apple.com/design/human-interface-guidelines/
+- macOS app design: https://developer.apple.com/design/human-interface-guidelines/macos
+- SwiftUI: https://developer.apple.com/xcode/swiftui/
+- Metal: https://developer.apple.com/metal/
+
+---
+
 ## 项目结构
 
 ```
