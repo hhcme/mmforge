@@ -304,6 +304,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         var closestDist: Float = .infinity
         var closestNode: Int?
         for mesh in gpuMeshes where mesh.visible {
+            // Skip meshes whose center is clipped away.
+            if clipPlane.w > -999990 {
+                let center = (mesh.boundsMin + mesh.boundsMax) * 0.5
+                let normal = simd_float3(clipPlane.x, clipPlane.y, clipPlane.z)
+                if dot(normal, center) + clipPlane.w < 0 { continue }
+            }
             if let t = rayAABBIntersect(origin: rayOrigin, dir: rayDir,
                                         bmin: mesh.boundsMin, bmax: mesh.boundsMax),
                t < closestDist {
@@ -368,13 +374,30 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                      depthWrite: false, fillMode: .lines)
 
         case .transparent:
+            // Back-to-front sorting for correct alpha blending.
+            let sorted = backToFrontIndices()
             drawPass(encoder: encoder, pipeline: transparentPipeline, mvp: mvp,
-                     highlightTint: highlightTint, mode: 3, depthWrite: false, fillMode: .fill)
+                     highlightTint: highlightTint, mode: 3, depthWrite: false,
+                     fillMode: .fill, meshOrder: sorted)
         }
 
         encoder.endEncoding()
         cmdBuf.present(drawable)
         cmdBuf.commit()
+    }
+
+    /// Returns visible mesh indices sorted back-to-front (farthest first)
+    /// for correct alpha blending in transparent mode.
+    private func backToFrontIndices() -> [Int] {
+        let eye = camera.eye
+        return gpuMeshes.enumerated()
+            .filter { $0.element.visible }
+            .sorted { a, b in
+                let ca = (a.element.boundsMin + a.element.boundsMax) * 0.5
+                let cb = (b.element.boundsMin + b.element.boundsMax) * 0.5
+                return length(ca - eye) > length(cb - eye)
+            }
+            .map { $0.offset }
     }
 
     private func drawPass(encoder: MTLRenderCommandEncoder,
@@ -383,12 +406,15 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                           highlightTint: simd_float4,
                           mode: UInt32,
                           depthWrite: Bool,
-                          fillMode: MTLTriangleFillMode) {
+                          fillMode: MTLTriangleFillMode,
+                          meshOrder: [Int]? = nil) {
         encoder.setRenderPipelineState(pipeline)
         encoder.setDepthStencilState(depthWrite ? depthStencilState : depthStencilStateNoWrite)
         encoder.setTriangleFillMode(fillMode)
 
-        for mesh in gpuMeshes {
+        let indices = meshOrder ?? Array(gpuMeshes.indices)
+        for idx in indices {
+            let mesh = gpuMeshes[idx]
             guard mesh.visible else { continue }
             let isHighlighted = (mesh.nodeIndex == selectedNodeIndex)
             var uniforms = Uniforms(

@@ -72,6 +72,9 @@ final class DocumentViewModel: ObservableObject {
 
     func setRenderer(_ renderer: MetalRenderer) {
         self.renderer = renderer
+        // Sync current state to the new renderer.
+        renderer.renderMode = renderMode
+        updateClipPlane()
         // Upload any pending mesh data that arrived before the renderer.
         if let dto = pendingDTO {
             pendingDTO = nil
