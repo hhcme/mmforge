@@ -292,6 +292,21 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     // MARK: - Picking
 
+    /// Compute the ray–clip-plane intersection parameter.
+    ///
+    /// The clip plane is `dot(n, P) + d = 0`.  For a ray `P = O + t*D`:
+    ///   t_clip = -(dot(n, O) + d) / dot(n, D)
+    ///
+    /// Returns the t parameter where the ray crosses the plane, or nil
+    /// if the ray is parallel to the plane.
+    private func rayClipPlaneIntersect(origin: simd_float3, dir: simd_float3) -> Float? {
+        let normal = simd_float3(clipPlane.x, clipPlane.y, clipPlane.z)
+        let denom = dot(normal, dir)
+        guard abs(denom) > 1e-12 else { return nil } // ray parallel to plane
+        let t = -(dot(normal, origin) + clipPlane.w) / denom
+        return t
+    }
+
     func pickNode(at viewSize: CGSize, point: CGPoint) -> Int? {
         let aspect = Float(viewSize.width / max(viewSize.height, 1))
         let invVP = (camera.projectionMatrix(aspect: aspect) * camera.viewMatrix).inverse
@@ -301,39 +316,83 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let far4 = invVP * simd_float4(ndcX, ndcY, 1, 1)
         let rayOrigin = simd_float3(near4.x, near4.y, near4.z) / near4.w
         let rayDir = normalize(simd_float3(far4.x, far4.y, far4.z) / far4.w - rayOrigin)
+
+        // Pre-compute the clip-plane intersection for the ray.
+        // The visible half-space is dot(n, P) + d >= 0.
+        // After crossing the plane at t_clip, the ray is in the visible
+        // half-space for t >= t_clip (if dot(n, dir) > 0) or t <= t_clip
+        // (if dot(n, dir) < 0).  We compute the minimum t that is visible.
+        let clipping = clipPlane.w > -999990
+        var clipTMin: Float = 0 // minimum t that is on the visible side
+        if clipping {
+            let normal = simd_float3(clipPlane.x, clipPlane.y, clipPlane.z)
+            let denom = dot(normal, rayDir)
+            if abs(denom) > 1e-12 {
+                let tClip = -(dot(normal, rayOrigin) + clipPlane.w) / denom
+                // If denom > 0, visible side is t >= tClip.
+                // If denom < 0, visible side is t <= tClip (ray starts visible).
+                if denom > 0 {
+                    clipTMin = max(tClip, 0)
+                }
+                // If denom < 0, the ray origin is on the visible side and
+                // crosses to the clipped side at tClip — the visible interval
+                // is [0, tClip], so clipTMin stays 0.
+            } else {
+                // Ray parallel to plane — check if origin is on visible side.
+                let originDist = dot(normal, rayOrigin) + clipPlane.w
+                if originDist < 0 {
+                    return nil // entire ray is clipped
+                }
+            }
+        }
+
         var closestDist: Float = .infinity
         var closestNode: Int?
+
         for mesh in gpuMeshes where mesh.visible {
-            // Skip meshes whose center is clipped away.
-            if clipPlane.w > -999990 {
-                let center = (mesh.boundsMin + mesh.boundsMax) * 0.5
-                let normal = simd_float3(clipPlane.x, clipPlane.y, clipPlane.z)
-                if dot(normal, center) + clipPlane.w < 0 { continue }
-            }
-            if let t = rayAABBIntersect(origin: rayOrigin, dir: rayDir,
-                                        bmin: mesh.boundsMin, bmax: mesh.boundsMax),
-               t < closestDist {
+            // Ray–AABB intersection: returns [tmin, tmax] interval.
+            guard let (tmin, tmax) = rayAABBIntersectRange(
+                origin: rayOrigin, dir: rayDir,
+                bmin: mesh.boundsMin, bmax: mesh.boundsMax
+            ) else { continue }
+
+            // Intersect with clip half-space: visible interval is
+            // [max(tmin, clipTMin), tmax].
+            let visibleMin = max(tmin, clipTMin)
+            if visibleMin > tmax { continue } // fully clipped
+
+            // The first visible hit is at visibleMin.
+            let t = max(visibleMin, 0)
+            if t < closestDist {
                 closestDist = t
                 closestNode = mesh.nodeIndex
             }
         }
+
         return closestNode
     }
 
-    private func rayAABBIntersect(origin: simd_float3, dir: simd_float3,
-                                   bmin: simd_float3, bmax: simd_float3) -> Float? {
+    /// Slab-method ray–AABB intersection.
+    /// Returns the (tmin, tmax) interval of the intersection, or nil.
+    private func rayAABBIntersectRange(
+        origin: simd_float3, dir: simd_float3,
+        bmin: simd_float3, bmax: simd_float3
+    ) -> (Float, Float)? {
         var tmin: Float = -.infinity, tmax: Float = .infinity
         for axis in 0..<3 {
             let o = origin[axis], d = dir[axis], lo = bmin[axis], hi = bmax[axis]
-            if abs(d) < 1e-12 { if o < lo || o > hi { return nil } }
-            else {
+            if abs(d) < 1e-12 {
+                if o < lo || o > hi { return nil }
+            } else {
                 var t1 = (lo - o) / d, t2 = (hi - o) / d
                 if t1 > t2 { swap(&t1, &t2) }
-                tmin = max(tmin, t1); tmax = min(tmax, t2)
+                tmin = max(tmin, t1)
+                tmax = min(tmax, t2)
                 if tmin > tmax { return nil }
             }
         }
-        return tmax >= 0 ? max(tmin, 0) : nil
+        guard tmax >= 0 else { return nil }
+        return (max(tmin, 0), tmax)
     }
 
     // MARK: - MTKViewDelegate
