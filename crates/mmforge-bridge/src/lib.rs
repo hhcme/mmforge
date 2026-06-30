@@ -285,6 +285,24 @@ pub extern "C" fn mmf_node_has_geometry(
     }
 }
 
+/// Get the GeometryId for a node.
+/// Returns -1 if the node has no geometry or index is invalid.
+/// This is the authoritative key for node↔mesh mapping.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_node_geometry_id(doc: *const MmfDocument, index: u32) -> i32 {
+    if doc.is_null() {
+        return -1;
+    }
+    let doc = unsafe { &*doc };
+    match doc.model.scene.nodes.get(index as usize) {
+        Some(node) => match node.geometry {
+            Some(id) => id.get() as i32,
+            None => -1,
+        },
+        None => -1,
+    }
+}
+
 /// Get the mesh index in the RenderPacket for a given node.
 /// Returns -1 if the node has no geometry or index is invalid.
 ///

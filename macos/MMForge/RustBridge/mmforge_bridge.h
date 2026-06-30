@@ -98,6 +98,9 @@ int32_t mmf_node_parent(const MmfDocument* doc, uint32_t index);
 /** Whether the node at index has associated geometry. */
 int mmf_node_has_geometry(const MmfDocument* doc, uint32_t index);
 
+/** GeometryId for a node.  Returns -1 if no geometry or invalid index. */
+int32_t mmf_node_geometry_id(const MmfDocument* doc, uint32_t index);
+
 /**
  * Get the mesh index in the RenderPacket for a given node.
  * Returns -1 if the node has no geometry or index is invalid.

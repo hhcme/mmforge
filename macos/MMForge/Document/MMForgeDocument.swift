@@ -163,20 +163,18 @@ final class DocumentViewModel: ObservableObject {
         renderer.clearMeshes()
 
         // Build geometryId → nodeIndex mapping from NodeInfo.
-        // Each node with hasGeometry has a meshIndex that equals the
-        // geometry's position in the sorted-by-GeometryId mesh list.
-        // We use geometryId as the authoritative key.
+        // This is the authoritative key — geometryId in NodeInfo matches
+        // geometryId in Mesh because both come from the same Rust model.
         var geomIdToNodeIdx = [Int: Int]()
         for (nodeIdx, node) in dto.nodes.enumerated() {
-            if node.hasGeometry && node.meshIndex >= 0 {
-                // meshIndex == geometry rank == mesh index in sorted order
-                geomIdToNodeIdx[node.meshIndex] = nodeIdx
+            if node.geometryId >= 0 {
+                geomIdToNodeIdx[node.geometryId] = nodeIdx
             }
         }
 
-        for (meshIdx, mesh) in dto.meshes.enumerated() {
-            // Use geometryId from the mesh to find the owning node.
-            let nodeIdx = geomIdToNodeIdx[meshIdx] ?? -1
+        // Upload each mesh, using mesh.geometryId to find the owning node.
+        for mesh in dto.meshes {
+            let nodeIdx = geomIdToNodeIdx[mesh.geometryId] ?? -1
             let node = nodeIdx >= 0 && nodeIdx < dto.nodes.count ? dto.nodes[nodeIdx] : nil
             renderer.upload(
                 positions: mesh.positions,
