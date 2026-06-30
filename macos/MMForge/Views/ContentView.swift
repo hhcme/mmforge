@@ -77,6 +77,13 @@ struct ContentView: View {
                 .onChange(of: viewModel.renderMode) { _, newMode in
                     viewModel.setRenderMode(newMode)
                 }
+
+                Button(action: { viewModel.toggleMeasurementMode() }) {
+                    Image(systemName: viewModel.measurementMode ? "ruler.fill" : "ruler")
+                }
+                .help("Toggle point-to-point measurement mode")
+                .accessibilityLabel(viewModel.measurementMode
+                                    ? "Exit measurement mode" : "Enter measurement mode")
             }
 
             ToolbarItemGroup(placement: .primaryAction) {

@@ -8,6 +8,26 @@ extension UTType {
     static let step = UTType("com.mmforge.step")!
 }
 
+// MARK: - Measurement
+
+/// A point-to-point measurement in world coordinates.
+struct Measurement: Identifiable {
+    let id = UUID()
+    let start: simd_float3
+    let end: simd_float3
+
+    /// Euclidean distance between start and end.
+    var distance: Float {
+        let d = end - start
+        return sqrt(d.x * d.x + d.y * d.y + d.z * d.z)
+    }
+
+    /// Per-axis deltas.
+    var deltaX: Float { end.x - start.x }
+    var deltaY: Float { end.y - start.y }
+    var deltaZ: Float { end.z - start.z }
+}
+
 /// The document type for MMForge model files.
 struct MMForgeDocument: FileDocument {
     static var readableContentTypes: [UTType] {
@@ -61,6 +81,11 @@ final class DocumentViewModel: ObservableObject {
     // Sidebar tree state
     @Published var expandedIndices: Set<Int> = []
     @Published var searchText: String = ""
+
+    // Measurement state
+    @Published var measurementMode: Bool = false
+    @Published var measurements: [Measurement] = []
+    @Published var pendingPoint: simd_float3?
 
     private var rustDoc: OpaquePointer?
     private var renderer: MetalRenderer?
@@ -316,6 +341,58 @@ final class DocumentViewModel: ObservableObject {
     /// Hide all nodes except the selected one (alias for toolbar).
     func hideOtherNodes() {
         isolateSelectedNode()
+    }
+
+    // MARK: - Measurement
+
+    /// Toggle measurement mode.  When active, viewport clicks pick
+    /// world-space points instead of nodes.
+    func toggleMeasurementMode() {
+        measurementMode.toggle()
+        if !measurementMode { pendingPoint = nil }
+        syncOverlay()
+    }
+
+    /// Record a measurement point.  First click stores pending point,
+    /// second click creates a Measurement.
+    func addMeasurementPoint(_ point: simd_float3) {
+        if let start = pendingPoint {
+            measurements.append(Measurement(start: start, end: point))
+            pendingPoint = nil
+        } else {
+            pendingPoint = point
+        }
+        syncOverlay()
+    }
+
+    /// Cancel the current pending measurement.
+    func cancelMeasurement() {
+        pendingPoint = nil
+        syncOverlay()
+    }
+
+    /// Clear all measurements.
+    func clearMeasurements() {
+        measurements.removeAll()
+        pendingPoint = nil
+        syncOverlay()
+    }
+
+    /// Remove a single measurement by ID.
+    func removeMeasurement(_ id: UUID) {
+        measurements.removeAll { $0.id == id }
+        syncOverlay()
+    }
+
+    /// Sync measurement data to the Metal renderer overlay.
+    private func syncOverlay() {
+        guard let renderer else { return }
+        if measurements.isEmpty && pendingPoint == nil {
+            renderer.clearOverlay()
+        } else {
+            let overlayData = measurements.map { (start: $0.start, end: $0.end) }
+            renderer.updateOverlay(measurements: overlayData, pendingPoint: pendingPoint)
+        }
     }
 
     // MARK: - Tree expand/collapse

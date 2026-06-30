@@ -10,7 +10,8 @@ struct InspectorPanel: View {
         VStack(alignment: .leading, spacing: 0) {
             Picker("", selection: $selectedTab) {
                 Text("Properties").tag(0)
-                Text("Settings").tag(1)
+                Text("Measure").tag(1)
+                Text("Settings").tag(2)
             }
             .pickerStyle(.segmented)
             .padding(8)
@@ -21,6 +22,8 @@ struct InspectorPanel: View {
                 switch selectedTab {
                 case 0:
                     propertiesView
+                case 1:
+                    measureView
                 default:
                     settingsView
                 }
@@ -182,6 +185,106 @@ struct InspectorPanel: View {
                 collectDescendants(i, into: &set)
             }
         }
+    }
+
+    // MARK: - Measure
+
+    private var measureView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Measurement mode toggle
+            HStack {
+                Text("Point-to-Point")
+                    .font(.headline)
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { viewModel.measurementMode },
+                    set: { _ in viewModel.toggleMeasurementMode() }
+                ))
+                .labelsHidden()
+                .accessibilityLabel("Measurement mode")
+            }
+
+            if viewModel.measurementMode {
+                Text("Click two points in the viewport to measure distance.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if viewModel.pendingPoint != nil {
+                    Text("First point set. Click second point.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            Divider()
+
+            // Selected node bounding box
+            if let index = viewModel.selectedIndex,
+               index < viewModel.nodes.count {
+                let node = viewModel.nodes[index]
+                if let bmin = node.boundsMin, let bmax = node.boundsMax {
+                    Text("Selection Bounds")
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                    let size = bmax - bmin
+                    LabeledContent("Size X", value: String(format: "%.2f", size.x))
+                    LabeledContent("Size Y", value: String(format: "%.2f", size.y))
+                    LabeledContent("Size Z", value: String(format: "%.2f", size.z))
+                    let diag = sqrt(size.x * size.x + size.y * size.y + size.z * size.z)
+                    LabeledContent("Diagonal", value: String(format: "%.2f", diag))
+                }
+            }
+
+            Divider()
+
+            // Measurement results
+            HStack {
+                Text("Measurements")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                if !viewModel.measurements.isEmpty {
+                    Button("Clear All") { viewModel.clearMeasurements() }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                        .accessibilityLabel("Clear all measurements")
+                }
+            }
+
+            if viewModel.measurements.isEmpty {
+                Text("No measurements yet.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else {
+                ForEach(viewModel.measurements) { m in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(String(format: "Δ %.2f", m.distance))
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Button(action: { viewModel.removeMeasurement(m.id) }) {
+                                Image(systemName: "trash")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Remove measurement")
+                        }
+                        HStack(spacing: 8) {
+                            Text(String(format: "X: %.2f", m.deltaX))
+                            Text(String(format: "Y: %.2f", m.deltaY))
+                            Text(String(format: "Z: %.2f", m.deltaZ))
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                    Divider()
+                }
+            }
+        }
+        .padding(12)
     }
 
     private var noSelectionSection: some View {

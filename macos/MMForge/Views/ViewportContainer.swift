@@ -135,9 +135,18 @@ struct MetalViewWrapper: NSViewRepresentable {
             guard let renderer, let viewModel, let view = gesture.view else { return }
             let point = gesture.location(in: view)
             let viewSize = view.bounds.size
-            let picked = renderer.pickNode(at: viewSize, point: point)
+
+            // Check measurement mode and pick on main thread to avoid
+            // actor-isolation issues.
             DispatchQueue.main.async {
-                viewModel.selectNode(picked)
+                if viewModel.measurementMode {
+                    if let worldPoint = renderer.pickWorldPoint(at: viewSize, point: point) {
+                        viewModel.addMeasurementPoint(worldPoint)
+                    }
+                } else {
+                    let picked = renderer.pickNode(at: viewSize, point: point)
+                    viewModel.selectNode(picked)
+                }
             }
         }
 

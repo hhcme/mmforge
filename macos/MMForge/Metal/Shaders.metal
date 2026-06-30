@@ -49,3 +49,34 @@ fragment float4 fragment_main(VertexOut in [[stage_in]],
     float alpha = (u.renderMode == 3) ? u.baseColor.a : 1.0;
     return float4(color, alpha);
 }
+
+// =====================================================================
+// Overlay shaders — for measurement lines, markers, grid, axes.
+// No lighting, no clipping.  Position + color only.
+// =====================================================================
+
+struct OverlayVertexIn {
+    float3 position [[attribute(0)]];
+    float4 color    [[attribute(1)]];
+};
+
+struct OverlayOut {
+    float4 position [[position]];
+    float4 color;
+};
+
+struct OverlayUniforms {
+    float4x4 mvp;
+};
+
+vertex OverlayOut overlay_vertex(OverlayVertexIn in [[stage_in]],
+                                 constant OverlayUniforms& u [[buffer(1)]]) {
+    OverlayOut out;
+    out.position = u.mvp * float4(in.position, 1.0);
+    out.color = in.color;
+    return out;
+}
+
+fragment float4 overlay_fragment(OverlayOut in [[stage_in]]) {
+    return in.color;
+}

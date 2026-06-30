@@ -127,14 +127,29 @@ struct GPUMesh {
 
 // MARK: - MetalRenderer
 
+/// Overlay vertex: position + color (no normals, no lighting).
+struct OverlayVertex {
+    var position: simd_float3
+    var color: simd_float4
+}
+
+struct OverlayUniforms {
+    var mvp: simd_float4x4
+}
+
 final class MetalRenderer: NSObject, MTKViewDelegate {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     private let solidPipeline: MTLRenderPipelineState
     private let wireframePipeline: MTLRenderPipelineState
     private let transparentPipeline: MTLRenderPipelineState
+    private let overlayPipeline: MTLRenderPipelineState
     private let depthStencilState: MTLDepthStencilState
     private let depthStencilStateNoWrite: MTLDepthStencilState
+
+    // Measurement overlay state
+    private var overlayVertexBuffer: MTLBuffer?
+    private var overlayVertexCount: Int = 0
 
     private var gpuMeshes: [GPUMesh] = []
     private var sceneBounds: (min: simd_float3, max: simd_float3) = (.zero, .zero)
@@ -276,6 +291,28 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         dsNoWrite.isDepthWriteEnabled = false
         self.depthStencilStateNoWrite = device.makeDepthStencilState(descriptor: dsNoWrite)!
 
+        // Overlay pipeline (lines/points with position + color, no lighting)
+        let overlayVertexFunc = library.makeFunction(name: "overlay_vertex")!
+        let overlayFragmentFunc = library.makeFunction(name: "overlay_fragment")!
+        let overlayDesc = MTLRenderPipelineDescriptor()
+        overlayDesc.vertexFunction = overlayVertexFunc
+        overlayDesc.fragmentFunction = overlayFragmentFunc
+        overlayDesc.colorAttachments[0].pixelFormat = mtkView.colorPixelFormat
+        overlayDesc.colorAttachments[0].isBlendingEnabled = true
+        overlayDesc.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
+        overlayDesc.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        overlayDesc.depthAttachmentPixelFormat = .depth32Float
+        let overlayVD = MTLVertexDescriptor()
+        overlayVD.attributes[0].format = .float3
+        overlayVD.attributes[0].offset = 0
+        overlayVD.attributes[0].bufferIndex = 0
+        overlayVD.attributes[1].format = .float4
+        overlayVD.attributes[1].offset = 12
+        overlayVD.attributes[1].bufferIndex = 0
+        overlayVD.layouts[0].stride = 28  // 3+4 floats = 28 bytes
+        overlayDesc.vertexDescriptor = overlayVD
+        self.overlayPipeline = try! device.makeRenderPipelineState(descriptor: overlayDesc)
+
         super.init()
     }
 
@@ -313,6 +350,65 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         gpuMeshes.removeAll()
         selectedNodeIndex = nil
         hiddenNodeIndices = []
+    }
+
+    // MARK: - Measurement overlay
+
+    /// Update the overlay vertex buffer with measurement lines and markers.
+    /// Each measurement is a line from start to end (yellow) with endpoint markers.
+    /// The pending point (if any) is drawn as a small cross marker.
+    func updateOverlay(measurements: [(start: simd_float3, end: simd_float3)],
+                       pendingPoint: simd_float3?) {
+        var verts: [OverlayVertex] = []
+        let lineColor = simd_float4(1.0, 0.85, 0.0, 1.0)  // yellow
+        let pendingColor = simd_float4(0.2, 0.8, 1.0, 1.0)  // cyan
+        let markerSize: Float = 0.005
+
+        for m in measurements {
+            // Line from start to end
+            verts.append(OverlayVertex(position: m.start, color: lineColor))
+            verts.append(OverlayVertex(position: m.end, color: lineColor))
+
+            // Endpoint markers (small cross)
+            appendMarker(&verts, center: m.start, size: markerSize, color: lineColor)
+            appendMarker(&verts, center: m.end, size: markerSize, color: lineColor)
+        }
+
+        // Pending point marker
+        if let p = pendingPoint {
+            appendMarker(&verts, center: p, size: markerSize * 1.5, color: pendingColor)
+        }
+
+        overlayVertexCount = verts.count
+        if verts.isEmpty {
+            overlayVertexBuffer = nil
+            return
+        }
+
+        let size = verts.count * MemoryLayout<OverlayVertex>.size
+        if overlayVertexBuffer == nil || overlayVertexBuffer!.length < size {
+            overlayVertexBuffer = device.makeBuffer(length: size, options: .storageModeShared)
+        }
+        overlayVertexBuffer?.contents().copyMemory(from: verts, byteCount: size)
+    }
+
+    /// Clear the overlay.
+    func clearOverlay() {
+        overlayVertexBuffer = nil
+        overlayVertexCount = 0
+    }
+
+    private func appendMarker(_ verts: inout [OverlayVertex],
+                              center: simd_float3, size: Float,
+                              color: simd_float4) {
+        // 6 lines forming a 3D cross at the center point
+        let axes: [simd_float3] = [
+            simd_float3(size, 0, 0), simd_float3(0, size, 0), simd_float3(0, 0, size)
+        ]
+        for axis in axes {
+            verts.append(OverlayVertex(position: center - axis, color: color))
+            verts.append(OverlayVertex(position: center + axis, color: color))
+        }
     }
 
     // MARK: - Selection / Visibility
@@ -421,6 +517,56 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         return closestNode
     }
 
+    /// Pick a world-space point on the closest visible mesh AABB.
+    /// Used for measurement point picking.  Returns the ray–AABB
+    /// intersection point (first visible hit).
+    func pickWorldPoint(at viewSize: CGSize, point: CGPoint) -> simd_float3? {
+        let aspect = Float(viewSize.width / max(viewSize.height, 1))
+        let invVP = (camera.projectionMatrix(aspect: aspect) * camera.viewMatrix).inverse
+        let ndcX = Float(point.x / viewSize.width) * 2 - 1
+        let ndcY = Float(1 - point.y / viewSize.height) * 2 - 1
+        let near4 = invVP * simd_float4(ndcX, ndcY, -1, 1)
+        let far4 = invVP * simd_float4(ndcX, ndcY, 1, 1)
+        let rayOrigin = simd_float3(near4.x, near4.y, near4.z) / near4.w
+        let rayDir = normalize(simd_float3(far4.x, far4.y, far4.z) / far4.w - rayOrigin)
+
+        // Compute clip interval (same logic as pickNode).
+        let clipping = clipPlane.w > -999990
+        var clipTMin: Float = 0
+        var clipTMax: Float = .infinity
+        if clipping {
+            let normal = simd_float3(clipPlane.x, clipPlane.y, clipPlane.z)
+            let originDist = dot(normal, rayOrigin) + clipPlane.w
+            let denom = dot(normal, rayDir)
+            if abs(denom) < 1e-12 {
+                if originDist < 0 { return nil }
+            } else {
+                let tClip = -originDist / denom
+                if denom > 0 { clipTMin = max(tClip, 0) }
+                else { clipTMax = tClip; if clipTMax < 0 { return nil } }
+            }
+        }
+
+        var closestDist: Float = .infinity
+        var closestPoint: simd_float3?
+
+        for mesh in gpuMeshes where mesh.visible {
+            guard let (tmin, tmax) = rayAABBIntersectRange(
+                origin: rayOrigin, dir: rayDir,
+                bmin: mesh.boundsMin, bmax: mesh.boundsMax
+            ) else { continue }
+            let visibleMin = max(tmin, clipTMin)
+            let visibleMax = min(tmax, clipTMax)
+            if visibleMin > visibleMax { continue }
+            let t = max(visibleMin, 0)
+            if t < closestDist {
+                closestDist = t
+                closestPoint = rayOrigin + rayDir * t
+            }
+        }
+        return closestPoint
+    }
+
     /// Slab-method ray–AABB intersection.
     /// Returns the (tmin, tmax) interval of the intersection, or nil.
     private func rayAABBIntersectRange(
@@ -487,6 +633,18 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             drawPass(encoder: encoder, pipeline: transparentPipeline, mvp: mvp,
                      highlightTint: highlightTint, mode: 3, depthWrite: false,
                      fillMode: .fill, meshOrder: sorted)
+        }
+
+        // Measurement overlay pass (lines/markers on top, no depth write).
+        if let vb = overlayVertexBuffer, overlayVertexCount > 0 {
+            encoder.setRenderPipelineState(overlayPipeline)
+            encoder.setDepthStencilState(depthStencilStateNoWrite)
+            var overlayUniforms = OverlayUniforms(mvp: mvp)
+            encoder.setVertexBuffer(vb, offset: 0, index: 0)
+            encoder.setVertexBytes(&overlayUniforms,
+                                   length: MemoryLayout<OverlayUniforms>.size, index: 1)
+            encoder.drawPrimitives(type: .line, vertexStart: 0,
+                                   vertexCount: overlayVertexCount)
         }
 
         encoder.endEncoding()

@@ -60,6 +60,18 @@ struct SelectionCommandsView: View {
                 viewModel?.toggleClipping()
             }
             .keyboardShortcut("k", modifiers: .command)
+
+            Divider()
+
+            Button("Toggle Measurement") {
+                viewModel?.toggleMeasurementMode()
+            }
+            .keyboardShortcut("m", modifiers: .command)
+
+            Button("Clear Measurements") {
+                viewModel?.clearMeasurements()
+            }
+            .disabled(viewModel?.measurements.isEmpty ?? true)
         }
     }
 }
