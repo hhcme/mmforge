@@ -64,6 +64,18 @@ Freed when `mmf_document_free()` is called.
 Added `-lc++` and all 21 OCCT libraries to `OTHER_LDFLAGS` in the
 Xcode project.  Added `/opt/homebrew/lib` to `LIBRARY_SEARCH_PATHS`.
 
+### 6. Deployment target raised to macOS 26.0
+
+`MACOSX_DEPLOYMENT_TARGET` raised from 14.0 to 26.0 to match the
+minimum deployment target of the Homebrew OCCT 7.9.3 dylibs.  The
+linker warning "was built for newer 'macOS' version" is now eliminated.
+
+**Rationale**: The app links OCCT shared libraries that were compiled
+for macOS 26.0 (Tahoe).  The deployment target cannot be lower than
+the minimum version required by any linked dylib.  This is a hard
+constraint imposed by the OCCT binary distribution — building OCCT
+from source with a lower deployment target would be the alternative.
+
 ---
 
 ## Architecture
