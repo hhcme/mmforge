@@ -1,24 +1,25 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The main document window content: sidebar + viewport + inspector.
 struct ContentView: View {
-    @State private var document: MMForgeDocument
+    @Binding var document: MMForgeDocument
+    @StateObject private var viewModel = DocumentViewModel()
     @State private var sidebarVisible = true
     @State private var inspectorVisible = true
-
-    init(document: MMForgeDocument) {
-        _document = State(initialValue: document)
-    }
 
     var body: some View {
         HSplitView {
             if sidebarVisible {
-                StructureSidebar()
+                StructureSidebar(nodeNames: viewModel.nodeNames)
                     .frame(minWidth: 180, idealWidth: 220, maxWidth: 300)
             }
 
-            ViewportContainer()
+            ViewportContainer(viewModel: viewModel)
                 .frame(minWidth: 400, minHeight: 300)
+                .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                    handleDrop(providers: providers)
+                }
 
             if inspectorVisible {
                 InspectorPanel()
@@ -35,7 +36,7 @@ struct ContentView: View {
             }
 
             ToolbarItemGroup(placement: .principal) {
-                Button(action: {}) {
+                Button(action: { viewModel.fitToView() }) {
                     Label("Fit View", systemImage: "arrow.up.left.and.arrow.down.right")
                 }
                 .help("Fit the model to the viewport")
@@ -58,5 +59,29 @@ struct ContentView: View {
                 .keyboardShortcut("i", modifiers: .command)
             }
         }
+        .onAppear {
+            if !document.fileData.isEmpty {
+                viewModel.parseFile(data: document.fileData)
+            }
+        }
+        .onChange(of: document.fileData) { _, newData in
+            if !newData.isEmpty {
+                viewModel.parseFile(data: newData)
+            }
+        }
+    }
+
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+            guard let data = item as? Data,
+                  let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+            DispatchQueue.main.async {
+                if let fileData = try? Data(contentsOf: url) {
+                    document.fileData = fileData
+                }
+            }
+        }
+        return true
     }
 }

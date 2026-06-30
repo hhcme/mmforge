@@ -29,8 +29,37 @@
             <string>Viewer</string>
             <key>LSItemContentTypes</key>
             <array>
+                <string>com.mmforge.step</string>
                 <string>public.data</string>
             </array>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>step</string>
+                <string>stp</string>
+                <string>STEP</string>
+                <string>STP</string>
+            </array>
+        </dict>
+    </array>
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.mmforge.step</string>
+            <key>UTTypeDescription</key>
+            <string>STEP File</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>step</string>
+                    <string>stp</string>
+                </array>
+            </dict>
         </dict>
     </array>
     <key>NSHumanReadableCopyright</key>

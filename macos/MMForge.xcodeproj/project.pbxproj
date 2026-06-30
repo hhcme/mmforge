@@ -17,6 +17,8 @@
 		A10008 /* MetalViewPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10008; };
 		A10009 /* RustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10009; };
 		A10010 /* Colors.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10010; };
+		A10011 /* MetalRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10013; };
+		A10012 /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = B10014; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -32,6 +34,9 @@
 		B10010 /* Colors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Colors.swift; sourceTree = "<group>"; };
 		B10011 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B10012 /* MMForge-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "MMForge-Bridging-Header.h"; sourceTree = "<group>"; };
+		B10013 /* MetalRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalRenderer.swift; sourceTree = "<group>"; };
+		B10014 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
+		B10015 /* mmforge_bridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = mmforge_bridge.h; sourceTree = "<group>"; };
 		C10001 /* MMForge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MMForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -100,6 +105,8 @@
 			isa = PBXGroup;
 			children = (
 				B10008 /* MetalViewPlaceholder.swift */,
+				B10013 /* MetalRenderer.swift */,
+				B10014 /* Shaders.metal */,
 			);
 			path = Metal;
 			sourceTree = "<group>";
@@ -109,6 +116,7 @@
 			children = (
 				B10009 /* RustBridge.swift */,
 				B10012 /* MMForge-Bridging-Header.h */,
+				B10015 /* mmforge_bridge.h */,
 			);
 			path = RustBridge;
 			sourceTree = "<group>";
@@ -144,6 +152,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = F10003 /* Build configuration list for PBXNativeTarget "MMForge" */;
 			buildPhases = (
+				H10001 /* Build Rust Bridge */,
 				F10004 /* Sources */,
 				D10001 /* Frameworks */,
 			);
@@ -199,10 +208,30 @@
 				A10008 /* MetalViewPlaceholder.swift in Sources */,
 				A10009 /* RustBridge.swift in Sources */,
 				A10010 /* Colors.swift in Sources */,
+				A10011 /* MetalRenderer.swift in Sources */,
+				A10012 /* Shaders.metal in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		H10001 /* Build Rust Bridge */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust Bridge";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "cd \"${SRCROOT}/..\"\ncargo build --release -p mmforge-bridge 2>&1\ncp target/release/libmmforge_bridge.a \"${BUILT_PRODUCTS_DIR}/\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
 		G10001 /* Debug */ = {
@@ -272,7 +301,15 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(BUILT_PRODUCTS_DIR)",
+				);
 				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lmmforge_bridge",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.mmforge.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -296,7 +333,15 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(BUILT_PRODUCTS_DIR)",
+				);
 				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lmmforge_bridge",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.mmforge.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;

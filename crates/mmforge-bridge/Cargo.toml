@@ -1,0 +1,23 @@
+[package]
+name = "mmforge-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "C ABI bridge for MMForge macOS app"
+
+[lib]
+crate-type = ["staticlib"]
+
+[features]
+default = []
+occt = ["mmforge-format-step/occt", "mmforge-geometry/occt"]
+
+[dependencies]
+mmforge-core = { workspace = true }
+mmforge-geometry = { workspace = true }
+mmforge-render = { workspace = true }
+mmforge-format-step = { workspace = true }
+glam = { workspace = true }
+serde_json = { workspace = true }

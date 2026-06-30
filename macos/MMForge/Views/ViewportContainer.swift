@@ -1,52 +1,151 @@
 import SwiftUI
+import MetalKit
 
-/// Container for the 3D/2D viewport.  Wraps the Metal view in Phase 1.
+/// Container for the 3D viewport.  Shows Metal view when loaded,
+/// loading spinner when parsing, error view on failure, and
+/// empty state when no file is open.
 struct ViewportContainer: View {
+    @ObservedObject var viewModel: DocumentViewModel
+
     var body: some View {
         ZStack {
-            // Background
             Color(nsColor: .controlBackgroundColor)
 
-            // Empty state (shown when no document is loaded)
-            EmptyStateView()
+            switch viewModel.state {
+            case .empty:
+                EmptyStateView()
+            case .loading:
+                LoadingStateView()
+            case .loaded:
+                MetalViewWrapper(viewModel: viewModel)
+            case .error(let message):
+                ErrorStateView(message: message)
+            }
         }
     }
 }
 
-/// The empty state shown when no model is loaded.
+// MARK: - States
+
 struct EmptyStateView: View {
     var body: some View {
         VStack(spacing: 16) {
             Image(systemName: "cube.transparent")
                 .font(.system(size: 48))
                 .foregroundStyle(.tertiary)
-
             Text("No Model Loaded")
                 .font(.title2)
                 .foregroundStyle(.secondary)
-
-            Text("Open a STEP, glTF, STL, or DXF file to begin.")
+            Text("Open a STEP file to begin.")
                 .font(.body)
                 .foregroundStyle(.tertiary)
-
-            Button("Open File…") {
-                openFilePanel()
-            }
-            .keyboardShortcut("o", modifiers: .command)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
 
-    private func openFilePanel() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.allowedContentTypes = [.data]
-        panel.begin { response in
-            if response == .OK, let url = panel.url {
-                // Phase 1: pass to Rust bridge for parsing.
-                print("Open: \(url.path)")
+struct LoadingStateView: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .scaleEffect(1.5)
+            Text("Parsing STEP file…")
+                .font(.body)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct ErrorStateView: View {
+    let message: String
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 48))
+                .foregroundStyle(.orange)
+            Text("Error")
+                .font(.title2)
+                .foregroundStyle(.primary)
+            Text(message)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 400)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Metal View
+
+struct MetalViewWrapper: NSViewRepresentable {
+    @ObservedObject var viewModel: DocumentViewModel
+
+    func makeNSView(context: Context) -> MTKView {
+        let mtkView = MTKView()
+        mtkView.device = MTLCreateSystemDefaultDevice()
+        mtkView.colorPixelFormat = .bgra8Unorm
+        mtkView.depthStencilPixelFormat = .depth32Float
+        mtkView.clearColor = MTLClearColor(red: 0.12, green: 0.12, blue: 0.14, alpha: 1)
+        mtkView.preferredFramesPerSecond = 60
+
+        if let renderer = MetalRenderer(mtkView: mtkView) {
+            mtkView.delegate = renderer
+            context.coordinator.renderer = renderer
+            viewModel.setRenderer(renderer)
+        }
+
+        // Gesture recognizers for orbit/pan/zoom.
+        let pan = NSPanGestureRecognizer(target: context.coordinator,
+                                         action: #selector(Coordinator.handlePan(_:)))
+        mtkView.addGestureRecognizer(pan)
+
+        let magnify = NSMagnificationGestureRecognizer(target: context.coordinator,
+                                                       action: #selector(Coordinator.handleMagnify(_:)))
+        mtkView.addGestureRecognizer(magnify)
+
+        return mtkView
+    }
+
+    func updateNSView(_ nsView: MTKView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    class Coordinator {
+        var renderer: MetalRenderer?
+        private var lastPanPoint: CGPoint = .zero
+
+        @objc func handlePan(_ gesture: NSPanGestureRecognizer) {
+            guard let renderer else { return }
+            let view = gesture.view!
+            let point = gesture.location(in: view)
+
+            switch gesture.state {
+            case .began:
+                lastPanPoint = point
+            case .changed:
+                let dx = Float(point.x - lastPanPoint.x)
+                let dy = Float(point.y - lastPanPoint.y)
+                lastPanPoint = point
+
+                if NSApp.currentEvent?.modifierFlags.contains(.option) == true {
+                    // Alt+drag = pan
+                    renderer.pan(dx: dx, dy: dy)
+                } else {
+                    // Drag = orbit
+                    renderer.rotate(dx: dx, dy: dy)
+                }
+            default:
+                break
+            }
+        }
+
+        @objc func handleMagnify(_ gesture: NSMagnificationGestureRecognizer) {
+            guard let renderer else { return }
+            if gesture.state == .changed {
+                renderer.zoom(delta: Float(gesture.magnification) * 10)
+                gesture.magnification = 0
             }
         }
     }

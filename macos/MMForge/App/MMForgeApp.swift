@@ -6,7 +6,7 @@ struct MMForgeApp: App {
 
     var body: some Scene {
         DocumentGroup(newDocument: MMForgeDocument()) { file in
-            ContentView(document: file.document)
+            ContentView(document: file.$document)
         }
         .commands {
             SidebarCommands()
