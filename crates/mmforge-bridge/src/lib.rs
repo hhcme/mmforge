@@ -20,6 +20,8 @@ fn set_last_error(msg: &str) {
 pub struct MmfDocument {
     packet: RenderPacket,
     model: mmforge_core::model::LsmModel,
+    /// Pre-computed CStrings for node names (borrowed by mmf_node_name).
+    node_names: Vec<CString>,
 }
 
 // --- Lifecycle ---
@@ -42,9 +44,17 @@ pub extern "C" fn mmf_parse_step(path: *const c_char) -> *mut MmfDocument {
     match mmforge_format_step::parse_step_with_tessellation(path) {
         Ok((output, registry)) => {
             let packet = mmforge_render::build_render_packet(&registry);
+            let node_names: Vec<CString> = output
+                .model
+                .scene
+                .nodes
+                .iter()
+                .map(|n| CString::new(n.name.as_str()).unwrap_or_default())
+                .collect();
             let doc = MmfDocument {
                 packet,
                 model: output.model,
+                node_names,
             };
             Box::into_raw(Box::new(doc))
         }
@@ -186,14 +196,8 @@ pub extern "C" fn mmf_node_name(doc: *const MmfDocument, index: u32) -> *const c
         return ptr::null();
     }
     let doc = unsafe { &*doc };
-    match doc.model.scene.nodes.get(index as usize) {
-        Some(n) => {
-            // Leak a CString — caller does not free.
-            // For a production app, use a string table in MmfDocument.
-            CString::new(n.name.as_str())
-                .map(|s| s.into_raw())
-                .unwrap_or(ptr::null_mut())
-        }
+    match doc.node_names.get(index as usize) {
+        Some(s) => s.as_ptr(),
         None => ptr::null(),
     }
 }

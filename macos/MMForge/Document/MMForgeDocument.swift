@@ -51,6 +51,8 @@ final class DocumentViewModel: ObservableObject {
 
     private var rustDoc: OpaquePointer?
     private var renderer: MetalRenderer?
+    /// Stores DTO from async parse when renderer isn't ready yet.
+    private var pendingDTO: RenderPacketDTO?
 
     var isLoaded: Bool {
         if case .loaded = state { return true }
@@ -59,6 +61,11 @@ final class DocumentViewModel: ObservableObject {
 
     func setRenderer(_ renderer: MetalRenderer) {
         self.renderer = renderer
+        // Upload any pending mesh data that arrived before the renderer.
+        if let dto = pendingDTO {
+            pendingDTO = nil
+            uploadToRenderer(dto: dto)
+        }
     }
 
     func parseFile(data: Data) {
@@ -107,7 +114,10 @@ final class DocumentViewModel: ObservableObject {
     }
 
     private func uploadToRenderer(dto: RenderPacketDTO) {
-        guard let renderer else { return }
+        guard let renderer else {
+            pendingDTO = dto
+            return
+        }
         renderer.clearMeshes()
         for mesh in dto.meshes {
             renderer.upload(

@@ -12,9 +12,38 @@ Target: macOS SwiftUI/AppKit document-based app with Metal 3D viewer,
 The macOS app now has a working main chain: STEP file → Rust C ABI
 bridge → tessellation → RenderPacket → Metal 3D rendering.
 
-The app builds with `xcodebuild`, opens STEP files via Cmd+O or
-drag-and-drop, parses them through the Rust bridge, and renders the
-tessellated mesh in a Metal view with diffuse lighting.
+The app builds with `xcodebuild` (with real OCCT), opens STEP files
+via Cmd+O or drag-and-drop, parses them through the Rust bridge, and
+renders the tessellated mesh in a Metal view with diffuse lighting.
+
+---
+
+## Fixes Applied (this round)
+
+### 1. Xcode Run Script builds with OCCT
+
+The Run Script build phase now:
+- Detects `libmmforge_occt_shim.a` at `MMFORGE_SHIM_DIR`
+- If found: builds with `--features occt` and sets OCCT env vars
+- If not found: builds without OCCT (stub mode)
+- Default OCCT paths: `/opt/homebrew/include/opencascade`, `/opt/homebrew/lib`
+
+### 2. Renderer race condition fixed
+
+`DocumentViewModel` now stores a `pendingDTO` when parsing completes
+before the Metal renderer is created.  When `setRenderer()` is called,
+the pending DTO is uploaded immediately.
+
+### 3. CString leak fixed
+
+`mmf_node_name` no longer leaks CString.  Node names are pre-computed
+as `Vec<CString>` in `MmfDocument` and returned as borrowed pointers.
+Freed when `mmf_document_free()` is called.
+
+### 4. C++ stdlib + OCCT libs linked
+
+Added `-lc++` and all 21 OCCT libraries to `OTHER_LDFLAGS` in the
+Xcode project.  Added `/opt/homebrew/lib` to `LIBRARY_SEARCH_PATHS`.
 
 ---
 
@@ -157,10 +186,12 @@ STEP file
 | Command | Result |
 |---------|--------|
 | `cargo test --workspace` | ✅ 79 tests pass |
+| `cargo test --workspace --features occt` (real OCCT) | ✅ 84 tests pass |
 | `cargo fmt --check` | ✅ Clean |
 | `cargo clippy --workspace -- -D warnings` | ✅ No warnings |
-| `cargo build --release -p mmforge-bridge` | ✅ Builds |
-| `xcodebuild -project macos/MMForge.xcodeproj -scheme MMForge build` | ✅ BUILD SUCCEEDED |
+| `cargo clippy --workspace --features occt -- -D warnings` | ✅ No warnings |
+| `cargo build --release -p mmforge-bridge --features occt` | ✅ Builds with OCCT |
+| `xcodebuild -scheme MMForge build` (real OCCT) | ✅ BUILD SUCCEEDED |
 
 ---
 

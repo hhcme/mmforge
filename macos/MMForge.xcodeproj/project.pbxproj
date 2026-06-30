@@ -229,7 +229,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "cd \"${SRCROOT}/..\"\ncargo build --release -p mmforge-bridge 2>&1\ncp target/release/libmmforge_bridge.a \"${BUILT_PRODUCTS_DIR}/\"\n";
+			shellScript = "cd \"${SRCROOT}/..\"\n\n# OCCT paths — adjust these if OCCT is installed elsewhere.\nexport OCCT_INCLUDE_DIR=\"${OCCT_INCLUDE_DIR:-/opt/homebrew/include/opencascade}\"\nexport OCCT_LIB_DIR=\"${OCCT_LIB_DIR:-/opt/homebrew/lib}\"\nexport OCCT_LIBS=\"TKernel;TKMath;TKG3d;TKBRep;TKTopAlgo;TKGeomAlgo;TKGeomBase;TKShHealing;TKMesh;TKBO;TKBool;TKXSBase;TKDESTEP;TKXCAF;TKCAF;TKCDF;TKLCAF;TKStd;TKStdL;TKXmlXCAF;TKService\"\nexport MMFORGE_SHIM_DIR=\"${MMFORGE_SHIM_DIR:-${SRCROOT}/../crates/mmforge-geometry/shim/build}\"\n\nif [ ! -f \"${MMFORGE_SHIM_DIR}/libmmforge_occt_shim.a\" ]; then\necho \"warning: libmmforge_occt_shim.a not found at ${MMFORGE_SHIM_DIR}. Building without OCCT.\"\ncargo build --release -p mmforge-bridge 2>&1\nelse\necho \"Building mmforge-bridge with OCCT support.\"\ncargo build --release -p mmforge-bridge --features occt 2>&1\nfi\n\ncp target/release/libmmforge_bridge.a \"${BUILT_PRODUCTS_DIR}/\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -304,11 +304,34 @@
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(BUILT_PRODUCTS_DIR)",
+					"/opt/homebrew/lib",
 				);
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lmmforge_bridge",
+					"-lc++",
+					"-lTKernel",
+					"-lTKMath",
+					"-lTKG3d",
+					"-lTKBRep",
+					"-lTKTopAlgo",
+					"-lTKGeomAlgo",
+					"-lTKGeomBase",
+					"-lTKShHealing",
+					"-lTKMesh",
+					"-lTKBO",
+					"-lTKBool",
+					"-lTKXSBase",
+					"-lTKDESTEP",
+					"-lTKXCAF",
+					"-lTKCAF",
+					"-lTKCDF",
+					"-lTKLCAF",
+					"-lTKStd",
+					"-lTKStdL",
+					"-lTKXmlXCAF",
+					"-lTKService",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.mmforge.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -336,11 +359,34 @@
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(BUILT_PRODUCTS_DIR)",
+					"/opt/homebrew/lib",
 				);
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lmmforge_bridge",
+					"-lc++",
+					"-lTKernel",
+					"-lTKMath",
+					"-lTKG3d",
+					"-lTKBRep",
+					"-lTKTopAlgo",
+					"-lTKGeomAlgo",
+					"-lTKGeomBase",
+					"-lTKShHealing",
+					"-lTKMesh",
+					"-lTKBO",
+					"-lTKBool",
+					"-lTKXSBase",
+					"-lTKDESTEP",
+					"-lTKXCAF",
+					"-lTKCAF",
+					"-lTKCDF",
+					"-lTKLCAF",
+					"-lTKStd",
+					"-lTKStdL",
+					"-lTKXmlXCAF",
+					"-lTKService",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.mmforge.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
