@@ -153,6 +153,7 @@ dependencies = [
  "glam",
  "mmforge-core",
  "mmforge-geometry",
+ "pkg-config",
  "thiserror",
 ]
 
