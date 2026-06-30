@@ -65,6 +65,12 @@ struct SelectionCommandsView: View {
 }
 
 /// Camera and view menu commands.
+///
+/// Shortcut policy (Apple HIG):
+/// - Cmd+F = Fit to View (consistent with toolbar)
+/// - Home/Reset has no shortcut to avoid conflicts
+/// - Individual view presets have no shortcuts (accessible via menu)
+/// - Cmd+Shift+P = Toggle projection (Cmd+P is Print)
 struct CameraCommandsView: View {
     @FocusedObject private var viewModel: DocumentViewModel?
 
@@ -75,10 +81,10 @@ struct CameraCommandsView: View {
             }
             .keyboardShortcut("f", modifiers: .command)
 
-            Button("Home (Reset Camera)") {
+            Button("Reset Camera") {
                 viewModel?.resetCamera()
             }
-            .keyboardShortcut("h", modifiers: .command)
+            // No shortcut — avoids Cmd+H conflict with Hide Application.
 
             Divider()
 
@@ -88,6 +94,7 @@ struct CameraCommandsView: View {
             Button("Right View") { viewModel?.setNamedView(.right) }
             Button("Top View") { viewModel?.setNamedView(.top) }
             Button("Bottom View") { viewModel?.setNamedView(.bottom) }
+            Divider()
             Button("Isometric View") { viewModel?.setNamedView(.isometric) }
 
             Divider()
@@ -95,7 +102,7 @@ struct CameraCommandsView: View {
             Button("Toggle Perspective/Orthographic") {
                 viewModel?.toggleProjection()
             }
-            .keyboardShortcut("p", modifiers: .command)
+            .keyboardShortcut("P", modifiers: .command)
         }
     }
 }

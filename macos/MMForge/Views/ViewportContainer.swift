@@ -126,10 +126,9 @@ struct MetalViewWrapper: NSViewRepresentable {
         var viewModel: DocumentViewModel?
         private var lastPanPoint: CGPoint = .zero
         private var scrollMonitor: Any?
-        private var keyMonitor: Any?
 
         deinit {
-            teardownMonitors()
+            if let m = scrollMonitor { NSEvent.removeMonitor(m) }
         }
 
         @objc func handleClick(_ gesture: NSClickGestureRecognizer) {
@@ -176,7 +175,7 @@ struct MetalViewWrapper: NSViewRepresentable {
         }
 
         func setupMonitors() {
-            // Scroll wheel zoom (when pointer is over the viewport).
+            // Scroll wheel zoom (only when pointer is over the MTKView).
             scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) {
                 [weak self] event in
                 guard let self, let renderer = self.renderer,
@@ -190,33 +189,6 @@ struct MetalViewWrapper: NSViewRepresentable {
                 }
                 return event
             }
-
-            // Keyboard shortcuts for camera views.
-            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
-                [weak self] event in
-                guard let self, let viewModel = self.viewModel else { return event }
-                switch event.keyCode {
-                case 3:  // F — Fit to view
-                    viewModel.fitToView()
-                    return nil
-                case 4:  // H — Home/Reset
-                    viewModel.resetCamera()
-                    return nil
-                case 34: // I — Isometric
-                    viewModel.setNamedView(.isometric)
-                    return nil
-                case 35: // P — Toggle projection
-                    viewModel.toggleProjection()
-                    return nil
-                default:
-                    return event
-                }
-            }
-        }
-
-        func teardownMonitors() {
-            if let m = scrollMonitor { NSEvent.removeMonitor(m) }
-            if let m = keyMonitor { NSEvent.removeMonitor(m) }
         }
     }
 }
