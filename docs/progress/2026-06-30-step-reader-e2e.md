@@ -130,7 +130,8 @@ read_step_file(path)
 |------|------|---------|
 | `crates/mmforge-geometry/testdata/PQ-04909-A.STEP` | 37 KB | 1 solid body, product name "PQ-04909-A" |
 
-Committed to the repo — no external dependency for CI.
+Committed to the repo (mode 100644, trailing whitespace stripped).
+No external dependency for CI.  `git diff --check` clean.
 
 Other fixtures in `testfile/` (not committed to crate testdata):
 - `方盒子.step` (21 MB)
