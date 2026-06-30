@@ -128,8 +128,17 @@ struct GPUMesh {
 // MARK: - MetalRenderer
 
 /// Overlay vertex: position + color (no normals, no lighting).
+///
+/// Layout must match MTLVertexDescriptor and Metal shader exactly:
+///   position: float4 at offset 0  (16 bytes)
+///   color:    float4 at offset 16 (16 bytes)
+///   stride:   32 bytes
+///
+/// We use simd_float4 (not simd_float3) for position because Swift's
+/// simd_float3 has 16-byte alignment with padding, which would mismatch
+/// Metal's float3 (12 bytes, 4-byte alignment).
 struct OverlayVertex {
-    var position: simd_float3
+    var position: simd_float4  // xyz in xyz, w unused
     var color: simd_float4
 }
 
@@ -302,14 +311,18 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         overlayDesc.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
         overlayDesc.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
         overlayDesc.depthAttachmentPixelFormat = .depth32Float
+        // Vertex descriptor must match OverlayVertex layout exactly:
+        //   position: float4 at offset 0  (16 bytes)
+        //   color:    float4 at offset 16 (16 bytes)
+        //   stride:   32 bytes
         let overlayVD = MTLVertexDescriptor()
-        overlayVD.attributes[0].format = .float3
+        overlayVD.attributes[0].format = .float4
         overlayVD.attributes[0].offset = 0
         overlayVD.attributes[0].bufferIndex = 0
         overlayVD.attributes[1].format = .float4
-        overlayVD.attributes[1].offset = 12
+        overlayVD.attributes[1].offset = 16
         overlayVD.attributes[1].bufferIndex = 0
-        overlayVD.layouts[0].stride = 28  // 3+4 floats = 28 bytes
+        overlayVD.layouts[0].stride = 32  // 2 × float4 = 32 bytes
         overlayDesc.vertexDescriptor = overlayVD
         self.overlayPipeline = try! device.makeRenderPipelineState(descriptor: overlayDesc)
 
@@ -365,16 +378,14 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let markerSize: Float = 0.005
 
         for m in measurements {
-            // Line from start to end
-            verts.append(OverlayVertex(position: m.start, color: lineColor))
-            verts.append(OverlayVertex(position: m.end, color: lineColor))
-
-            // Endpoint markers (small cross)
+            let s = simd_float4(m.start.x, m.start.y, m.start.z, 1)
+            let e = simd_float4(m.end.x, m.end.y, m.end.z, 1)
+            verts.append(OverlayVertex(position: s, color: lineColor))
+            verts.append(OverlayVertex(position: e, color: lineColor))
             appendMarker(&verts, center: m.start, size: markerSize, color: lineColor)
             appendMarker(&verts, center: m.end, size: markerSize, color: lineColor)
         }
 
-        // Pending point marker
         if let p = pendingPoint {
             appendMarker(&verts, center: p, size: markerSize * 1.5, color: pendingColor)
         }
@@ -401,13 +412,15 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private func appendMarker(_ verts: inout [OverlayVertex],
                               center: simd_float3, size: Float,
                               color: simd_float4) {
-        // 6 lines forming a 3D cross at the center point
-        let axes: [simd_float3] = [
-            simd_float3(size, 0, 0), simd_float3(0, size, 0), simd_float3(0, 0, size)
+        // 6 lines forming a 3D cross at the center point.
+        // Convert simd_float3 → simd_float4 for consistent layout.
+        let c = simd_float4(center.x, center.y, center.z, 1)
+        let axes: [simd_float4] = [
+            simd_float4(size, 0, 0, 0), simd_float4(0, size, 0, 0), simd_float4(0, 0, size, 0)
         ]
         for axis in axes {
-            verts.append(OverlayVertex(position: center - axis, color: color))
-            verts.append(OverlayVertex(position: center + axis, color: color))
+            verts.append(OverlayVertex(position: c - axis, color: color))
+            verts.append(OverlayVertex(position: c + axis, color: color))
         }
     }
 

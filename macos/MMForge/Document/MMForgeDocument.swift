@@ -119,6 +119,7 @@ final class DocumentViewModel: ObservableObject {
         }
         pendingDTO = nil
         renderer?.clearMeshes()
+        renderer?.clearOverlay()
         nodeNames = []
         nodes = []
         stats = nil
@@ -126,6 +127,9 @@ final class DocumentViewModel: ObservableObject {
         hiddenNodeIndices = []
         expandedIndices = []
         searchText = ""
+        measurementMode = false
+        measurements = []
+        pendingPoint = nil
     }
 
     func parseFile(data: Data) {

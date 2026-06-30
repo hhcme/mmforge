@@ -56,7 +56,7 @@ fragment float4 fragment_main(VertexOut in [[stage_in]],
 // =====================================================================
 
 struct OverlayVertexIn {
-    float3 position [[attribute(0)]];
+    float4 position [[attribute(0)]];  // xyz used, w ignored
     float4 color    [[attribute(1)]];
 };
 
@@ -72,7 +72,7 @@ struct OverlayUniforms {
 vertex OverlayOut overlay_vertex(OverlayVertexIn in [[stage_in]],
                                  constant OverlayUniforms& u [[buffer(1)]]) {
     OverlayOut out;
-    out.position = u.mvp * float4(in.position, 1.0);
+    out.position = u.mvp * float4(in.position.xyz, 1.0);
     out.color = in.color;
     return out;
 }
