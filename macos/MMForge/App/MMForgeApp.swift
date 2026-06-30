@@ -50,6 +50,13 @@ struct SelectionCommandsView: View {
             }
             .keyboardShortcut("h", modifiers: [.command, .shift])
             .disabled(viewModel?.hiddenNodeIndices.isEmpty ?? true)
+
+            Divider()
+
+            Button("Toggle Clipping Plane") {
+                viewModel?.toggleClipping()
+            }
+            .keyboardShortcut("k", modifiers: .command)
         }
     }
 }

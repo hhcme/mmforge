@@ -44,14 +44,18 @@ struct ContentView: View {
                 .keyboardShortcut("f", modifiers: .command)
                 .accessibilityLabel("Fit model to viewport")
 
-                Picker("", selection: .constant(0)) {
-                    Image(systemName: "cube").tag(0)
-                    Image(systemName: "square.dashed").tag(1)
-                    Image(systemName: "cube.transparent").tag(2)
+                Picker("", selection: $viewModel.renderMode) {
+                    Image(systemName: "cube").tag(RenderMode.solid)
+                    Image(systemName: "square.dashed").tag(RenderMode.wireframe)
+                    Image(systemName: "cube.fill").tag(RenderMode.solidWireframe)
+                    Image(systemName: "cube.transparent").tag(RenderMode.transparent)
                 }
                 .pickerStyle(.segmented)
-                .help("Render mode: Solid / Wireframe / Transparent")
+                .help("Render mode: Solid / Wireframe / Solid+Wire / Transparent")
                 .accessibilityLabel("Render mode")
+                .onChange(of: viewModel.renderMode) { _, newMode in
+                    viewModel.setRenderMode(newMode)
+                }
             }
 
             ToolbarItemGroup(placement: .primaryAction) {

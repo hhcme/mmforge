@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import simd
 
 // MARK: - Supported file types
 
@@ -52,6 +53,10 @@ final class DocumentViewModel: ObservableObject {
     @Published var stats: RenderPacketDTO.ModelStats?
     @Published var selectedIndex: Int?
     @Published var hiddenNodeIndices: Set<Int> = []
+    @Published var renderMode: RenderMode = .solid
+    @Published var clipEnabled: Bool = false
+    @Published var clipAxis: Int = 2  // 0=X, 1=Y, 2=Z
+    @Published var clipDistance: Float = 0.0
 
     private var rustDoc: OpaquePointer?
     private var renderer: MetalRenderer?
@@ -221,6 +226,50 @@ final class DocumentViewModel: ObservableObject {
     func hideSelectedNode() {
         if let idx = selectedIndex {
             toggleNodeVisibility(idx)
+        }
+    }
+
+    // MARK: - Render Mode
+
+    func setRenderMode(_ mode: RenderMode) {
+        renderMode = mode
+        renderer?.renderMode = mode
+    }
+
+    // MARK: - Clipping Plane
+
+    func setClipEnabled(_ enabled: Bool) {
+        clipEnabled = enabled
+        updateClipPlane()
+    }
+
+    func setClipAxis(_ axis: Int) {
+        clipAxis = axis
+        updateClipPlane()
+    }
+
+    func setClipDistance(_ distance: Float) {
+        clipDistance = distance
+        updateClipPlane()
+    }
+
+    func toggleClipping() {
+        clipEnabled.toggle()
+        updateClipPlane()
+    }
+
+    private func updateClipPlane() {
+        guard let renderer else { return }
+        if clipEnabled {
+            var normal: simd_float3
+            switch clipAxis {
+            case 0: normal = simd_float3(1, 0, 0)
+            case 1: normal = simd_float3(0, 1, 0)
+            default: normal = simd_float3(0, 0, 1)
+            }
+            renderer.clipPlane = simd_float4(normal.x, normal.y, normal.z, clipDistance)
+        } else {
+            renderer.clipPlane = simd_float4(0, 0, 0, -999999)
         }
     }
 

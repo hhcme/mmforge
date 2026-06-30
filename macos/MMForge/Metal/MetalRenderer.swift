@@ -31,11 +31,9 @@ extension simd_float4x4 {
         ))
     }
 
-    /// Inverse of a 4x4 matrix using cofactor expansion.
     var inverse: simd_float4x4 {
         let m = self
         var inv = simd_float4x4()
-
         inv[0][0] =  m[1][1]*m[2][2]*m[3][3] - m[1][1]*m[2][3]*m[3][2] - m[2][1]*m[1][2]*m[3][3]
                    + m[2][1]*m[1][3]*m[3][2] + m[3][1]*m[1][2]*m[2][3] - m[3][1]*m[1][3]*m[2][2]
         inv[1][0] = -m[1][0]*m[2][2]*m[3][3] + m[1][0]*m[2][3]*m[3][2] + m[2][0]*m[1][2]*m[3][3]
@@ -44,25 +42,21 @@ extension simd_float4x4 {
                    + m[2][0]*m[1][3]*m[3][1] + m[3][0]*m[1][1]*m[2][3] - m[3][0]*m[1][3]*m[2][1]
         inv[3][0] = -m[1][0]*m[2][1]*m[3][2] + m[1][0]*m[2][2]*m[3][1] + m[2][0]*m[1][1]*m[3][2]
                    - m[2][0]*m[1][2]*m[3][1] - m[3][0]*m[1][1]*m[2][2] + m[3][0]*m[1][2]*m[2][1]
-
         let det = m[0][0]*inv[0][0] + m[0][1]*inv[1][0] + m[0][2]*inv[2][0] + m[0][3]*inv[3][0]
         guard abs(det) > 1e-12 else { return matrix_identity_float4x4 }
         let invDet = 1.0 / det
-
         inv[0][1] = (-m[0][1]*m[2][2]*m[3][3] + m[0][1]*m[2][3]*m[3][2] + m[2][1]*m[0][2]*m[3][3]
                     - m[2][1]*m[0][3]*m[3][2] - m[3][1]*m[0][2]*m[2][3] + m[3][1]*m[0][3]*m[2][2]) * invDet
         inv[0][2] = ( m[0][1]*m[1][2]*m[3][3] - m[0][1]*m[1][3]*m[3][2] - m[1][1]*m[0][2]*m[3][3]
                     + m[1][1]*m[0][3]*m[3][2] + m[3][1]*m[0][2]*m[1][3] - m[3][1]*m[0][3]*m[1][2]) * invDet
         inv[0][3] = (-m[0][1]*m[1][2]*m[2][3] + m[0][1]*m[1][3]*m[2][2] + m[1][1]*m[0][2]*m[2][3]
                     - m[1][1]*m[0][3]*m[2][2] - m[2][1]*m[0][2]*m[1][3] + m[2][1]*m[0][3]*m[1][2]) * invDet
-
         inv[1][1] = ( m[0][0]*m[2][2]*m[3][3] - m[0][0]*m[2][3]*m[3][2] - m[2][0]*m[0][2]*m[3][3]
                     + m[2][0]*m[0][3]*m[3][2] + m[3][0]*m[0][2]*m[2][3] - m[3][0]*m[0][3]*m[2][2]) * invDet
         inv[1][2] = (-m[0][0]*m[1][2]*m[3][3] + m[0][0]*m[1][3]*m[3][2] + m[1][0]*m[0][2]*m[3][3]
                     - m[1][0]*m[0][3]*m[3][2] - m[3][0]*m[0][2]*m[1][3] + m[3][0]*m[0][3]*m[1][2]) * invDet
         inv[1][3] = ( m[0][0]*m[1][2]*m[2][3] - m[0][0]*m[1][3]*m[2][2] - m[1][0]*m[0][2]*m[2][3]
                     + m[1][0]*m[0][3]*m[2][2] + m[2][0]*m[0][2]*m[1][3] - m[2][0]*m[0][3]*m[1][2]) * invDet
-
         inv[2][0] = inv[2][0] * invDet
         inv[2][1] = ( m[0][0]*m[2][1]*m[3][3] - m[0][0]*m[2][3]*m[3][1] - m[2][0]*m[0][1]*m[3][3]
                     + m[2][0]*m[0][3]*m[3][1] + m[3][0]*m[0][1]*m[2][3] - m[3][0]*m[0][3]*m[2][1]) * invDet
@@ -70,7 +64,6 @@ extension simd_float4x4 {
                     - m[1][0]*m[0][3]*m[3][1] - m[3][0]*m[0][1]*m[1][3] + m[3][0]*m[0][3]*m[1][1]) * invDet
         inv[2][3] = ( m[0][0]*m[1][1]*m[2][3] - m[0][0]*m[1][3]*m[2][1] - m[1][0]*m[0][1]*m[2][3]
                     + m[1][0]*m[0][3]*m[2][1] + m[2][0]*m[0][1]*m[1][3] - m[2][0]*m[0][3]*m[1][1]) * invDet
-
         inv[3][0] = inv[3][0] * invDet
         inv[3][1] = (-m[0][0]*m[2][1]*m[3][2] + m[0][0]*m[2][2]*m[3][1] + m[2][0]*m[0][1]*m[3][2]
                     - m[2][0]*m[0][2]*m[3][1] - m[3][0]*m[0][1]*m[2][2] + m[3][0]*m[0][2]*m[2][1]) * invDet
@@ -78,31 +71,26 @@ extension simd_float4x4 {
                     + m[1][0]*m[0][2]*m[3][1] + m[3][0]*m[0][1]*m[1][2] - m[3][0]*m[0][2]*m[1][1]) * invDet
         inv[3][3] = (-m[0][0]*m[1][1]*m[2][2] + m[0][0]*m[1][2]*m[2][1] + m[1][0]*m[0][1]*m[2][2]
                     - m[1][0]*m[0][2]*m[2][1] - m[2][0]*m[0][1]*m[1][2] + m[2][0]*m[0][2]*m[1][1]) * invDet
-
         inv[0][0] = inv[0][0] * invDet
         inv[1][0] = inv[1][0] * invDet
         return inv
     }
 }
 
-/// Subscript access to simd_float3 by axis index.
 extension simd_float3 {
     subscript(axis: Int) -> Float {
-        get {
-            switch axis {
-            case 0: return x
-            case 1: return y
-            default: return z
-            }
-        }
-        set {
-            switch axis {
-            case 0: x = newValue
-            case 1: y = newValue
-            default: z = newValue
-            }
-        }
+        get { switch axis { case 0: return x; case 1: return y; default: return z } }
+        set { switch axis { case 0: x = newValue; case 1: y = newValue; default: z = newValue } }
     }
+}
+
+// MARK: - Render mode
+
+enum RenderMode: Int {
+    case solid = 0
+    case wireframe = 1
+    case solidWireframe = 2
+    case transparent = 3
 }
 
 // MARK: - Uniforms / GPU types
@@ -111,7 +99,9 @@ struct Uniforms {
     var mvp: simd_float4x4
     var model: simd_float4x4
     var baseColor: simd_float4
-    var highlightColor: simd_float4  // rgb = tint, a = blend factor
+    var highlightColor: simd_float4
+    var clipPlane: simd_float4
+    var renderMode: UInt32
 }
 
 struct GPUMesh {
@@ -129,17 +119,20 @@ struct GPUMesh {
 final class MetalRenderer: NSObject, MTKViewDelegate {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
-    let pipelineState: MTLRenderPipelineState
-    let depthStencilState: MTLDepthStencilState
+    private let solidPipeline: MTLRenderPipelineState
+    private let wireframePipeline: MTLRenderPipelineState
+    private let transparentPipeline: MTLRenderPipelineState
+    private let depthStencilState: MTLDepthStencilState
+    private let depthStencilStateNoWrite: MTLDepthStencilState
 
     private var gpuMeshes: [GPUMesh] = []
     private var sceneBounds: (min: simd_float3, max: simd_float3) = (.zero, .zero)
     private var camera = CameraState()
 
-    /// Currently selected node index (highlighted in viewport).
     var selectedNodeIndex: Int?
-    /// Set of hidden node indices.
     var hiddenNodeIndices: Set<Int> = []
+    var renderMode: RenderMode = .solid
+    var clipPlane: simd_float4 = simd_float4(0, 0, 0, -999999)
 
     // MARK: - Camera
 
@@ -184,11 +177,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         mtkView.depthStencilPixelFormat = .depth32Float
 
         let library = device.makeDefaultLibrary()!
-        let desc = MTLRenderPipelineDescriptor()
-        desc.vertexFunction = library.makeFunction(name: "vertex_main")
-        desc.fragmentFunction = library.makeFunction(name: "fragment_main")
-        desc.colorAttachments[0].pixelFormat = mtkView.colorPixelFormat
-        desc.depthAttachmentPixelFormat = .depth32Float
+        let vertexFunc = library.makeFunction(name: "vertex_main")!
+        let fragmentFunc = library.makeFunction(name: "fragment_main")!
 
         let vd = MTLVertexDescriptor()
         vd.attributes[0].format = .float3
@@ -198,14 +188,51 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         vd.attributes[1].offset = 12
         vd.attributes[1].bufferIndex = 0
         vd.layouts[0].stride = 24
-        desc.vertexDescriptor = vd
 
-        self.pipelineState = try! device.makeRenderPipelineState(descriptor: desc)
+        // Solid pipeline
+        let solidDesc = MTLRenderPipelineDescriptor()
+        solidDesc.vertexFunction = vertexFunc
+        solidDesc.fragmentFunction = fragmentFunc
+        solidDesc.colorAttachments[0].pixelFormat = mtkView.colorPixelFormat
+        solidDesc.depthAttachmentPixelFormat = .depth32Float
+        solidDesc.vertexDescriptor = vd
+        self.solidPipeline = try! device.makeRenderPipelineState(descriptor: solidDesc)
 
+        // Wireframe pipeline (line fill mode)
+        let wireDesc = MTLRenderPipelineDescriptor()
+        wireDesc.vertexFunction = vertexFunc
+        wireDesc.fragmentFunction = fragmentFunc
+        wireDesc.colorAttachments[0].pixelFormat = mtkView.colorPixelFormat
+        wireDesc.depthAttachmentPixelFormat = .depth32Float
+        wireDesc.vertexDescriptor = vd
+        // Note: fillMode is set per-render-pass via MTLRenderCommandEncoder
+        self.wireframePipeline = try! device.makeRenderPipelineState(descriptor: wireDesc)
+
+        // Transparent pipeline (alpha blending)
+        let transDesc = MTLRenderPipelineDescriptor()
+        transDesc.vertexFunction = vertexFunc
+        transDesc.fragmentFunction = fragmentFunc
+        transDesc.colorAttachments[0].pixelFormat = mtkView.colorPixelFormat
+        transDesc.colorAttachments[0].isBlendingEnabled = true
+        transDesc.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
+        transDesc.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        transDesc.colorAttachments[0].sourceAlphaBlendFactor = .one
+        transDesc.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        transDesc.depthAttachmentPixelFormat = .depth32Float
+        transDesc.vertexDescriptor = vd
+        self.transparentPipeline = try! device.makeRenderPipelineState(descriptor: transDesc)
+
+        // Depth stencil: write enabled
         let dsDesc = MTLDepthStencilDescriptor()
         dsDesc.depthCompareFunction = .less
         dsDesc.isDepthWriteEnabled = true
         self.depthStencilState = device.makeDepthStencilState(descriptor: dsDesc)!
+
+        // Depth stencil: write disabled (for transparent/overlay)
+        let dsNoWrite = MTLDepthStencilDescriptor()
+        dsNoWrite.depthCompareFunction = .less
+        dsNoWrite.isDepthWriteEnabled = false
+        self.depthStencilStateNoWrite = device.makeDepthStencilState(descriptor: dsNoWrite)!
 
         super.init()
     }
@@ -217,7 +244,6 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 nodeIndex: Int, boundsMin: simd_float3, boundsMax: simd_float3) {
         let stride = vertexCount * 3 * MemoryLayout<Float>.size
         guard let vb = device.makeBuffer(length: stride * 2, options: .storageModeShared) else { return }
-
         let ptr = vb.contents().bindMemory(to: Float.self, capacity: vertexCount * 6)
         for i in 0..<vertexCount {
             ptr[i * 6 + 0] = positions[i * 3 + 0]
@@ -227,23 +253,18 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             ptr[i * 6 + 4] = normals[i * 3 + 1]
             ptr[i * 6 + 5] = normals[i * 3 + 2]
         }
-
         let ibSize = indexCount * MemoryLayout<UInt32>.size
         guard let ib = device.makeBuffer(bytes: indices, length: ibSize, options: .storageModeShared) else { return }
-
         gpuMeshes.append(GPUMesh(
             vertexBuffer: vb, indexBuffer: ib, indexCount: indexCount,
             visible: !hiddenNodeIndices.contains(nodeIndex),
-            nodeIndex: nodeIndex,
-            boundsMin: boundsMin, boundsMax: boundsMax
+            nodeIndex: nodeIndex, boundsMin: boundsMin, boundsMax: boundsMax
         ))
     }
 
     func setSceneBounds(min: simd_float3, max: simd_float3) {
         sceneBounds = (min, max)
-        let center = (min + max) * 0.5
-        let radius = length(max - min) * 0.5
-        camera.fit(center: center, radius: radius)
+        camera.fit(center: (min + max) * 0.5, radius: length(max - min) * 0.5)
     }
 
     func clearMeshes() {
@@ -254,9 +275,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     // MARK: - Selection / Visibility
 
-    func setSelectedNode(_ index: Int?) {
-        selectedNodeIndex = index
-    }
+    func setSelectedNode(_ index: Int?) { selectedNodeIndex = index }
 
     func setNodeVisible(_ index: Int, visible: Bool) {
         for i in gpuMeshes.indices where gpuMeshes[i].nodeIndex == index {
@@ -271,25 +290,19 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
     }
 
-    // MARK: - Picking (CPU AABB ray test)
+    // MARK: - Picking
 
-    /// Test a screen-space click against all visible meshes.
-    /// Returns the node index of the closest hit, or nil.
     func pickNode(at viewSize: CGSize, point: CGPoint) -> Int? {
         let aspect = Float(viewSize.width / max(viewSize.height, 1))
         let invVP = (camera.projectionMatrix(aspect: aspect) * camera.viewMatrix).inverse
-
         let ndcX = Float(point.x / viewSize.width) * 2 - 1
         let ndcY = Float(1 - point.y / viewSize.height) * 2 - 1
-
         let near4 = invVP * simd_float4(ndcX, ndcY, -1, 1)
         let far4 = invVP * simd_float4(ndcX, ndcY, 1, 1)
         let rayOrigin = simd_float3(near4.x, near4.y, near4.z) / near4.w
         let rayDir = normalize(simd_float3(far4.x, far4.y, far4.z) / far4.w - rayOrigin)
-
         var closestDist: Float = .infinity
         var closestNode: Int?
-
         for mesh in gpuMeshes where mesh.visible {
             if let t = rayAABBIntersect(origin: rayOrigin, dir: rayDir,
                                         bmin: mesh.boundsMin, bmax: mesh.boundsMax),
@@ -298,27 +311,19 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 closestNode = mesh.nodeIndex
             }
         }
-
         return closestNode
     }
 
-    /// Slab-method ray-AABB intersection.
     private func rayAABBIntersect(origin: simd_float3, dir: simd_float3,
                                    bmin: simd_float3, bmax: simd_float3) -> Float? {
-        var tmin: Float = -.infinity
-        var tmax: Float = .infinity
-
+        var tmin: Float = -.infinity, tmax: Float = .infinity
         for axis in 0..<3 {
-            let o = origin[axis], d = dir[axis]
-            let lo = bmin[axis], hi = bmax[axis]
-            if abs(d) < 1e-12 {
-                if o < lo || o > hi { return nil }
-            } else {
-                var t1 = (lo - o) / d
-                var t2 = (hi - o) / d
+            let o = origin[axis], d = dir[axis], lo = bmin[axis], hi = bmax[axis]
+            if abs(d) < 1e-12 { if o < lo || o > hi { return nil } }
+            else {
+                var t1 = (lo - o) / d, t2 = (hi - o) / d
                 if t1 > t2 { swap(&t1, &t2) }
-                tmin = max(tmin, t1)
-                tmax = min(tmax, t2)
+                tmin = max(tmin, t1); tmax = min(tmax, t2)
                 if tmin > tmax { return nil }
             }
         }
@@ -340,24 +345,58 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         rpd.depthAttachment.loadAction = .clear
         rpd.depthAttachment.clearDepth = 1.0
 
-        encoder.setRenderPipelineState(pipelineState)
-        encoder.setDepthStencilState(depthStencilState)
-
         let aspect = Float(view.drawableSize.width / max(view.drawableSize.height, 1))
         let mvp = camera.projectionMatrix(aspect: aspect) * camera.viewMatrix
         let highlightTint = simd_float4(0.2, 0.5, 1.0, 0.4)
 
+        switch renderMode {
+        case .solid:
+            drawPass(encoder: encoder, pipeline: solidPipeline, mvp: mvp,
+                     highlightTint: highlightTint, mode: 0, depthWrite: true, fillMode: .fill)
+
+        case .wireframe:
+            drawPass(encoder: encoder, pipeline: wireframePipeline, mvp: mvp,
+                     highlightTint: highlightTint, mode: 1, depthWrite: true, fillMode: .lines)
+
+        case .solidWireframe:
+            // Solid pass
+            drawPass(encoder: encoder, pipeline: solidPipeline, mvp: mvp,
+                     highlightTint: highlightTint, mode: 0, depthWrite: true, fillMode: .fill)
+            // Wireframe overlay (no depth write)
+            drawPass(encoder: encoder, pipeline: wireframePipeline, mvp: mvp,
+                     highlightTint: simd_float4(0, 0, 0, 0), mode: 1,
+                     depthWrite: false, fillMode: .lines)
+
+        case .transparent:
+            drawPass(encoder: encoder, pipeline: transparentPipeline, mvp: mvp,
+                     highlightTint: highlightTint, mode: 3, depthWrite: false, fillMode: .fill)
+        }
+
+        encoder.endEncoding()
+        cmdBuf.present(drawable)
+        cmdBuf.commit()
+    }
+
+    private func drawPass(encoder: MTLRenderCommandEncoder,
+                          pipeline: MTLRenderPipelineState,
+                          mvp: simd_float4x4,
+                          highlightTint: simd_float4,
+                          mode: UInt32,
+                          depthWrite: Bool,
+                          fillMode: MTLTriangleFillMode) {
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setDepthStencilState(depthWrite ? depthStencilState : depthStencilStateNoWrite)
+        encoder.setTriangleFillMode(fillMode)
+
         for mesh in gpuMeshes {
             guard mesh.visible else { continue }
-
             let isHighlighted = (mesh.nodeIndex == selectedNodeIndex)
             var uniforms = Uniforms(
-                mvp: mvp,
-                model: matrix_identity_float4x4,
-                baseColor: simd_float4(0.7, 0.7, 0.72, 1.0),
-                highlightColor: isHighlighted ? highlightTint : simd_float4(0, 0, 0, 0)
+                mvp: mvp, model: matrix_identity_float4x4,
+                baseColor: simd_float4(0.7, 0.7, 0.72, mode == 3 ? 0.6 : 1.0),
+                highlightColor: isHighlighted ? highlightTint : simd_float4(0, 0, 0, 0),
+                clipPlane: clipPlane, renderMode: mode
             )
-
             encoder.setVertexBuffer(mesh.vertexBuffer, offset: 0, index: 0)
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 2)
             encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 2)
@@ -366,10 +405,6 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 indexType: .uint32, indexBuffer: mesh.indexBuffer, indexBufferOffset: 0
             )
         }
-
-        encoder.endEncoding()
-        cmdBuf.present(drawable)
-        cmdBuf.commit()
     }
 
     // MARK: - Camera controls
@@ -385,15 +420,14 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     }
 
     func pan(dx: Float, dy: Float) {
-        let view = camera.viewMatrix
-        let right = simd_float3(view.columns.0.x, view.columns.1.x, view.columns.2.x)
-        let up = simd_float3(view.columns.0.y, view.columns.1.y, view.columns.2.y)
+        let v = camera.viewMatrix
+        let right = simd_float3(v.columns.0.x, v.columns.1.x, v.columns.2.x)
+        let up = simd_float3(v.columns.0.y, v.columns.1.y, v.columns.2.y)
         camera.target += (-dx * right + dy * up) * camera.distance * 0.001
     }
 
     func fitToView() {
-        let center = (sceneBounds.min + sceneBounds.max) * 0.5
-        let radius = length(sceneBounds.max - sceneBounds.min) * 0.5
-        camera.fit(center: center, radius: radius)
+        camera.fit(center: (sceneBounds.min + sceneBounds.max) * 0.5,
+                   radius: length(sceneBounds.max - sceneBounds.min) * 0.5)
     }
 }

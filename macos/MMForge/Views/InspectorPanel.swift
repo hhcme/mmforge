@@ -132,26 +132,96 @@ struct InspectorPanel: View {
     // MARK: - Settings
 
     private var settingsView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Settings")
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                // Render Mode
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Render Mode")
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
 
-            Toggle("Show Grid", isOn: .constant(true))
-                .accessibilityHint("Toggle grid display in viewport")
-            Toggle("Show Axes", isOn: .constant(true))
-                .accessibilityHint("Toggle axis indicator in viewport")
-            Toggle("Anti-aliasing", isOn: .constant(true))
-                .accessibilityHint("Toggle anti-aliasing")
+                    Picker("Mode", selection: $viewModel.renderMode) {
+                        Text("Solid").tag(RenderMode.solid)
+                        Text("Wireframe").tag(RenderMode.wireframe)
+                        Text("Solid+Wire").tag(RenderMode.solidWireframe)
+                        Text("Transparent").tag(RenderMode.transparent)
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityLabel("Render mode")
+                    .onChange(of: viewModel.renderMode) { _, newMode in
+                        viewModel.setRenderMode(newMode)
+                    }
+                }
 
-            Divider()
+                Divider()
 
-            Text("MMForge")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            LabeledContent("Version", value: RustBridge.shared.coreVersion())
+                // Clipping Plane
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Clipping Plane")
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+
+                    Toggle("Enable Clipping", isOn: Binding(
+                        get: { viewModel.clipEnabled },
+                        set: { viewModel.setClipEnabled($0) }
+                    ))
+                    .accessibilityHint("Enable or disable the clipping plane")
+
+                    if viewModel.clipEnabled {
+                        Picker("Axis", selection: Binding(
+                            get: { viewModel.clipAxis },
+                            set: { viewModel.setClipAxis($0) }
+                        )) {
+                            Text("X").tag(0)
+                            Text("Y").tag(1)
+                            Text("Z").tag(2)
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityLabel("Clipping axis")
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Distance: \(String(format: "%.1f", viewModel.clipDistance))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Slider(
+                                value: Binding(
+                                    get: { viewModel.clipDistance },
+                                    set: { viewModel.setClipDistance($0) }
+                                ),
+                                in: -100...100,
+                                step: 0.5
+                            )
+                            .accessibilityLabel("Clipping distance")
+                            .accessibilityValue("\(String(format: "%.1f", viewModel.clipDistance))")
+                        }
+                    }
+                }
+
+                Divider()
+
+                // Display
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Display")
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+
+                    Toggle("Show Grid", isOn: .constant(true))
+                        .accessibilityHint("Toggle grid display in viewport")
+                    Toggle("Show Axes", isOn: .constant(true))
+                        .accessibilityHint("Toggle axis indicator in viewport")
+                    Toggle("Anti-aliasing", isOn: .constant(true))
+                        .accessibilityHint("Toggle anti-aliasing")
+                }
+
+                Divider()
+
+                Text("MMForge")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                LabeledContent("Version", value: RustBridge.shared.coreVersion())
+            }
+            .padding(12)
         }
-        .padding(12)
     }
 
     // MARK: - State Helpers
