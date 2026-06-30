@@ -53,6 +53,87 @@ pub fn extract_shapes(data: &StepData) -> Result<&[OcctShapeHandle], OcctError> 
     Ok(&data.shapes)
 }
 
+/// Read a STEP file and tessellate all root shapes in one pass.
+///
+/// Returns both the parsed data and a [`TessellationRegistry`] mapping
+/// `GeometryId` → `TessellatedMeshData`.  The tessellation happens
+/// while the OCCT reader and shapes are still alive, so no shape
+/// pointers escape.
+///
+/// Uses [`TessellationQuality::Standard`] deflection.
+pub fn read_step_file_with_tessellation(
+    path: &Path,
+) -> Result<(StepData, crate::tessellation::TessellationRegistry), OcctError> {
+    #[cfg(occt_found)]
+    {
+        occt_read_step_with_tessellation(path)
+    }
+
+    #[cfg(not(occt_found))]
+    {
+        let _ = path;
+        Err(OcctError::NotAvailable(
+            "tessellation requires the occt feature and a linked shim".to_string(),
+        ))
+    }
+}
+
+/// Real OCCT read + tessellate.  Only when `occt_found`.
+#[cfg(occt_found)]
+fn occt_read_step_with_tessellation(
+    path: &Path,
+) -> Result<(StepData, crate::tessellation::TessellationRegistry), OcctError> {
+    use crate::occt::adapter::{StepReaderAdapter, TessellatedMesh};
+    use crate::tessellation::{TessellationQuality, TessellationRegistry};
+    use mmforge_core::ids::GeometryId;
+
+    let mut reader = StepReaderAdapter::new()?;
+    reader.read_file(path)?;
+    reader.transfer_roots()?;
+
+    let count = reader.root_count();
+    let mut shapes = Vec::with_capacity(count);
+    let mut registry = TessellationRegistry::new();
+
+    for i in 0..count {
+        let handle = reader.get_root(i)?;
+        let fallback = format!("Shape_{i}");
+        let shape_handle = handle.to_handle(&fallback)?;
+
+        // Tessellate while the reader and shape are still alive.
+        let quality = TessellationQuality::Standard;
+        let deflection = quality.linear_deflection(&shape_handle.bounds) as f64;
+        let mesh = TessellatedMesh::tessellate(&reader, &handle, deflection)?;
+
+        let geom_id = GeometryId::new(i as u32);
+        registry.insert(
+            geom_id,
+            crate::tessellation::TessellatedMeshData {
+                positions: mesh.positions().to_vec(),
+                normals: mesh.normals().to_vec(),
+                indices: mesh
+                    .indices()
+                    .iter()
+                    .flat_map(|t| [t[0] as u32, t[1] as u32, t[2] as u32])
+                    .collect(),
+                bounds: mesh.bounds(),
+            },
+        );
+
+        shapes.push(shape_handle);
+    }
+
+    let messages = reader.warnings();
+
+    Ok((
+        StepData {
+            shapes,
+            transfer_messages: messages,
+        },
+        registry,
+    ))
+}
+
 /// Real OCCT parsing.  Only compiled when `occt_found` is set (real shim linked).
 ///
 /// Uses `StepReaderAdapter` to read a STEP file via STEPCAFControl_Reader,

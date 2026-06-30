@@ -14,7 +14,10 @@ STEP B-Rep shapes are tessellated into triangle meshes (positions,
 normals, indices) and can be packed into a platform-neutral
 `RenderPacket` for GPU upload.
 
-E2E verified: `PQ-04909-A.STEP` → 3015 vertices, 4554 triangles.
+Full pipeline E2E verified: STEP → parse+tessellate → LsmModel +
+TessellationRegistry → RenderPacket → debug JSON.
+
+E2E output: `PQ-04909-A.STEP` → 1 mesh, 4554 triangles.
 
 ---
 
@@ -67,6 +70,28 @@ Platform-neutral mesh container: `positions: Vec<[f32; 3]>`,
 
 Debug JSON via `RenderPacket::to_debug_json()`.
 
+### TessellationRegistry — `parse_step_with_tessellation()`
+
+`mmforge_format_step::parse_step_with_tessellation(path)` reads a STEP
+file and tessellates all B-Rep shapes in one pass (reader alive during
+tessellation).  Returns `(ParseOutput, TessellationRegistry)` where the
+registry maps `GeometryId` → `TessellatedMeshData`.
+
+This solves the B-Rep lifecycle problem: tessellation must happen while
+the OCCT reader and shapes are still alive.  The registry captures the
+mesh data before the reader is dropped.
+
+### Full Pipeline API
+
+```
+STEP file
+  → parse_step_with_tessellation(path)
+  → (ParseOutput { model, warnings, stats }, TessellationRegistry)
+  → build_render_packet(&registry)
+  → RenderPacket { meshes, materials, instances, batches, scene_bounds, stats }
+  → to_debug_json()
+```
+
 ### Build.rs — 22 required symbols
 
 Both `mmforge-geometry` and `mmforge-format-step` build.rs now require
@@ -76,21 +101,26 @@ Both `mmforge-geometry` and `mmforge-format-step` build.rs now require
 
 ## E2E Test Output (real OCCT 7.9.3)
 
+**Tessellation adapter test** (`tessellate_step_fixture`):
 ```
 tessellate[0]: 3015 vertices, 4554 triangles,
-  bounds=BoundingBox {
-    min: Vec3(-22.403, -5.588, -22.403),
-    max: Vec3(22.403, 3.937, 22.403)
-  }
+  bounds=BoundingBox { min: Vec3(-22.403, -5.588, -22.403), max: Vec3(22.403, 3.937, 22.403) }
+```
+
+**Full pipeline test** (`e2e_step_tessellation_to_renderpacket`):
+```
+E2E pipeline: 2 nodes, 1 geometries, 1 meshes, 4554 triangles
+  scene_bounds=BoundingBox { min: Vec3(-22.403, -5.588, -22.403), max: Vec3(22.403, 3.937, 22.403) }
+  debug_json={"batch_count":1,"material_count":1,"mesh_count":1,"scene_bounds":{...},"stats":{...}}
 ```
 
 Validations:
-- ✅ vertex_count > 0
-- ✅ triangle_count > 0
-- ✅ bounds valid
-- ✅ all positions finite
-- ✅ all normals non-zero (length > 0.001)
-- ✅ all indices in range [0, vertex_count)
+- ✅ TessellationRegistry non-empty, matches geometry count
+- ✅ Every BRepHandleRef has corresponding mesh in registry
+- ✅ vertex_count > 0, triangle_count > 0, bounds valid
+- ✅ RenderPacket: meshes, instances, materials, batches correct
+- ✅ scene_bounds valid
+- ✅ debug JSON contains stats, mesh_count, triangle_count
 
 ---
 
@@ -110,11 +140,16 @@ Validations:
 |------|--------|
 | `shim/mmforge_occt_shim.h` | Added MmfMesh + 8 functions |
 | `shim/mmforge_occt_shim.cpp` | Implemented BRepMesh tessellation |
+| `shim/README.md` | Fixed symbol count 21→22 |
 | `src/occt/sys.rs` | Added MmfMesh + 8 extern declarations |
-| `src/occt/adapter.rs` | Added TessellatedMesh + e2e test; fixed cfg gates |
-| `src/tessellation.rs` | Added TessellatedMeshData |
+| `src/occt/adapter.rs` | Added TessellatedMesh + e2e test; fixed cfg gates and clippy |
+| `src/occt/step_reader.rs` | Added `read_step_file_with_tessellation` |
+| `src/tessellation.rs` | Added TessellatedMeshData + TessellationRegistry |
 | `build.rs` (geometry) | Updated REQUIRED_SHIM_SYMBOLS to 22 |
 | `build.rs` (format-step) | Updated REQUIRED_SHIM_SYMBOLS to 22 |
+| `mmforge-format-step/src/lib.rs` | Re-export `parse_step_with_tessellation` |
+| `mmforge-format-step/src/parser.rs` | Added `parse_step_with_tessellation` + full pipeline e2e test |
+| `mmforge-format-step/Cargo.toml` | Added mmforge-render dev-dependency |
 | `mmforge-render/src/builder.rs` | New — RenderPacketBuilder |
 | `mmforge-render/src/lib.rs` | Export builder module |
 
@@ -125,11 +160,10 @@ Validations:
 | Command | Result |
 |---------|--------|
 | `cargo test --workspace` | ✅ 79 tests pass |
-| `cargo test --workspace --features occt` | ✅ 81 tests pass |
-| `cargo test -p mmforge-geometry --features occt` (real OCCT) | ✅ 8 tests pass, tessellation verified |
+| `cargo test --workspace --features occt` (real OCCT) | ✅ 84 tests pass (55+13+8+8) |
 | `cargo fmt --check` | ✅ Clean |
 | `cargo clippy --workspace -- -D warnings` | ✅ No warnings |
-| `cargo clippy --workspace --features occt -- -D warnings` | ✅ No warnings |
+| `cargo clippy --workspace --features occt -- -D warnings` (real OCCT) | ✅ No warnings |
 
 ---
 

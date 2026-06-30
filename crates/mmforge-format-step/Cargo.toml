@@ -24,3 +24,4 @@ glam = { workspace = true }
 pkg-config = "0.3"
 
 [dev-dependencies]
+mmforge-render = { workspace = true }

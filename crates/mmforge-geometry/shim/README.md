@@ -1,6 +1,6 @@
 # mmforge_occt_shim — OpenCASCADE C++ Bridge
 
-Static library bridging the 21 `extern "C"` functions declared in
+Static library bridging the 22 `extern "C"` functions declared in
 `mmforge-geometry/src/occt/sys.rs` to real OpenCASCADE C++ API calls.
 Includes STEP reading, shape queries, and B-Rep tessellation.
 
@@ -75,7 +75,7 @@ Rust (sys.rs)           C (shim header)        C++ (shim impl)         OCCT
 ```bash
 # After building the shim:
 nm -g --defined-only build/lib/libmmforge_occt_shim.a | grep mmforge_
-# Should show all 21 symbols
+# Should show all 22 symbols
 
 # With real OCCT:
 OCCT_INCLUDE_DIR=/opt/occt/include \

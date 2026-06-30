@@ -288,7 +288,6 @@ pub fn status_to_result(status: super::sys::OcctStatus) -> Result<(), OcctError>
     }
 }
 
-#[cfg(occt_found)]
 // ---------------------------------------------------------------------------
 // Tessellation (real calls only when occt_found)
 // ---------------------------------------------------------------------------

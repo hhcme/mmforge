@@ -179,6 +179,114 @@ fn occt_parse(path: &Path) -> mmforge_core::error::Result<ParseOutput> {
     })
 }
 
+/// Parse a STEP file and tessellate all B-Rep shapes in one pass.
+///
+/// Returns both the [`ParseOutput`] (model + warnings + stats) and a
+/// [`TessellationRegistry`] mapping `GeometryId` → tessellated mesh data.
+///
+/// The tessellation happens while the OCCT reader is still alive, so
+/// the mesh data is fully populated and ready for `RenderPacket` building.
+///
+/// # Errors
+///
+/// Returns an error if OCCT is not available, the file cannot be read,
+/// or tessellation fails.
+pub fn parse_step_with_tessellation(
+    path: &Path,
+) -> mmforge_core::error::Result<(
+    ParseOutput,
+    mmforge_geometry::tessellation::TessellationRegistry,
+)> {
+    // Read STEP + tessellate in one pass (reader alive during tessellation).
+    let (step_data, registry) =
+        mmforge_geometry::occt::step_reader::read_step_file_with_tessellation(path)
+            .map_err(|e| Error::parse("STEP", format!("OCCT read/tessellate failed: {e}")))?;
+
+    // Convert transfer messages to warnings.
+    let mut warnings: Vec<mmforge_core::model::ParseWarning> = step_data
+        .transfer_messages
+        .iter()
+        .map(|msg| mmforge_core::model::ParseWarning::PrecisionLoss {
+            message: format!("OCCT: {msg}"),
+        })
+        .collect();
+
+    // Build the model (same logic as occt_parse).
+    let mut model = mmforge_core::model::LsmModel::empty("STEP");
+    model.header.source_path = Some(path.display().to_string());
+
+    let shapes = mmforge_geometry::occt::step_reader::extract_shapes(&step_data)
+        .map_err(|e| Error::parse("STEP", format!("shape extraction failed: {e}")))?;
+
+    let root_id = mmforge_core::ids::NodeId::new(0);
+    model.scene.add_node(mmforge_core::model::Node {
+        id: root_id,
+        name: "STEP_Assembly".to_string(),
+        parent: None,
+        children: Vec::new(),
+        geometry: None,
+        material: None,
+        visible: true,
+        local_transform: glam::Mat4::IDENTITY,
+        bounds: mmforge_core::math::BoundingBox::EMPTY,
+    });
+
+    for (i, shape) in shapes.iter().enumerate() {
+        let child_id = mmforge_core::ids::NodeId::new(i as u32 + 1);
+        let geom_id = mmforge_core::ids::GeometryId::new(i as u32);
+        let display_label = format!("{} [{:?}]", shape.label, shape.shape_type);
+
+        model.scene.add_node(mmforge_core::model::Node {
+            id: child_id,
+            name: display_label.clone(),
+            parent: Some(root_id),
+            children: Vec::new(),
+            geometry: Some(geom_id),
+            material: None,
+            visible: true,
+            local_transform: glam::Mat4::IDENTITY,
+            bounds: shape.bounds,
+        });
+        model
+            .geometries
+            .push(mmforge_core::model::Geometry::BRepHandleRef {
+                id: geom_id,
+                bounds: shape.bounds,
+                label: display_label,
+            });
+
+        if shape.label.starts_with("Shape_") {
+            warnings.push(mmforge_core::model::ParseWarning::PrecisionLoss {
+                message: format!("shape {i} has no STEP product name, using fallback"),
+            });
+        }
+    }
+
+    // Update root bounds.
+    if !shapes.is_empty() {
+        let mut root_bounds = mmforge_core::math::BoundingBox::EMPTY;
+        for node in &model.scene.nodes {
+            if node.id != root_id && node.bounds.is_valid() {
+                root_bounds.extend(node.bounds);
+            }
+        }
+        if let Some(root_node) = model.scene.find_node_mut(root_id) {
+            root_node.bounds = root_bounds;
+        }
+    }
+
+    let stats = model.stats();
+
+    Ok((
+        ParseOutput {
+            model,
+            warnings,
+            stats,
+        },
+        registry,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,5 +463,80 @@ mod tests {
         for w in &output.warnings {
             eprintln!("  warning: {w:?}");
         }
+    }
+
+    /// Full pipeline E2E: STEP → parse+tessellate → RenderPacket → debug JSON.
+    ///
+    /// Verifies the complete data flow from STEP file through tessellation
+    /// to platform-neutral RenderPacket output.
+    #[cfg(occt_found)]
+    #[test]
+    fn e2e_step_tessellation_to_renderpacket() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("mmforge-geometry")
+            .join("testdata")
+            .join("PQ-04909-A.STEP");
+
+        assert!(
+            fixture.exists(),
+            "STEP fixture missing at {}",
+            fixture.display()
+        );
+
+        // Parse + tessellate in one pass.
+        let (output, registry) = crate::parse_step_with_tessellation(&fixture)
+            .expect("parse_step_with_tessellation should succeed");
+
+        let model = &output.model;
+
+        // Registry must have mesh data for each geometry.
+        assert!(
+            !registry.is_empty(),
+            "tessellation registry should not be empty"
+        );
+        assert_eq!(
+            registry.len(),
+            model.geometries.len(),
+            "registry size should match geometry count"
+        );
+
+        // Every BRepHandleRef must have corresponding mesh data.
+        for geom in &model.geometries {
+            if let mmforge_core::model::Geometry::BRepHandleRef { id, .. } = geom {
+                let mesh = registry.get(id).expect("geometry should be in registry");
+                assert!(mesh.vertex_count() > 0, "mesh should have vertices");
+                assert!(mesh.triangle_count() > 0, "mesh should have triangles");
+                assert!(mesh.bounds.is_valid(), "mesh bounds should be valid");
+            }
+        }
+
+        // Build RenderPacket from registry.
+        let packet = mmforge_render::build_render_packet(&registry);
+
+        // Verify RenderPacket structure.
+        assert!(!packet.is_empty(), "RenderPacket should not be empty");
+        assert_eq!(packet.meshes.len(), registry.len());
+        assert_eq!(packet.instances.len(), registry.len());
+        assert_eq!(packet.materials.len(), 1); // default material
+        assert!(packet.stats.triangle_count > 0);
+        assert!(packet.scene_bounds.is_valid());
+
+        // Verify debug JSON is valid and contains expected fields.
+        let json = packet.to_debug_json();
+        assert!(json.contains("stats"));
+        assert!(json.contains("mesh_count"));
+        assert!(json.contains("triangle_count"));
+
+        // Print diagnostics.
+        eprintln!(
+            "E2E pipeline: {} nodes, {} geometries, {} meshes, {} triangles",
+            output.stats.node_count,
+            output.stats.geometry_count,
+            packet.meshes.len(),
+            packet.stats.triangle_count,
+        );
+        eprintln!("  scene_bounds={:?}", packet.scene_bounds);
+        eprintln!("  debug_json={}", json);
     }
 }

@@ -4,7 +4,16 @@
 //! The tessellated mesh contains positions, normals, and indices
 //! suitable for GPU upload.
 
+use std::collections::HashMap;
+
+use mmforge_core::ids::GeometryId;
 use mmforge_core::math::BoundingBox;
+
+/// Registry mapping geometry IDs to their tessellated mesh data.
+///
+/// Built during STEP parsing when the OCCT reader and shapes are still
+/// alive.  Consumed by `mmforge_render::builder::build_render_packet`.
+pub type TessellationRegistry = HashMap<GeometryId, TessellatedMeshData>;
 
 /// Quality presets for tessellation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
