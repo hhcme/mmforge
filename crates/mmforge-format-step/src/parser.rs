@@ -85,10 +85,19 @@ fn read_header(path: &Path) -> mmforge_core::error::Result<Vec<u8>> {
 #[cfg(feature = "occt")]
 fn occt_parse(path: &Path) -> mmforge_core::error::Result<ParseOutput> {
     use mmforge_core::ids::{GeometryId, NodeId};
-    use mmforge_core::model::{LsmModel, Node};
+    use mmforge_core::model::{LsmModel, Node, ParseWarning};
 
     let step_data = mmforge_geometry::occt::step_reader::read_step_file(path)
         .map_err(|e| Error::parse("STEP", format!("OCCT read failed: {e}")))?;
+
+    // Convert OCCT transfer messages to parse warnings.
+    let mut warnings: Vec<ParseWarning> = step_data
+        .transfer_messages
+        .iter()
+        .map(|msg| ParseWarning::PrecisionLoss {
+            message: format!("OCCT: {msg}"),
+        })
+        .collect();
 
     // Convert OCCT output to LSM model.
     let mut model = LsmModel::empty("STEP");
@@ -118,9 +127,12 @@ fn occt_parse(path: &Path) -> mmforge_core::error::Result<ParseOutput> {
         let geom_id = GeometryId::new(i as u32);
         let bounds = shape.bounds;
 
+        // Include shape type in the display label for richer metadata.
+        let display_label = format!("{} [{:?}]", shape.label, shape.shape_type);
+
         model.scene.add_node(Node {
             id: child_id,
-            name: shape.label.clone(),
+            name: display_label.clone(),
             parent: Some(root_id),
             children: Vec::new(),
             geometry: Some(geom_id),
@@ -134,8 +146,15 @@ fn occt_parse(path: &Path) -> mmforge_core::error::Result<ParseOutput> {
             .push(mmforge_core::model::Geometry::BRepHandleRef {
                 id: geom_id,
                 bounds,
-                label: shape.label.clone(),
+                label: display_label,
             });
+
+        // Warn about shapes with no product name (fallback label).
+        if shape.label.starts_with("Shape_") {
+            warnings.push(ParseWarning::PrecisionLoss {
+                message: format!("shape {i} has no STEP product name, using fallback"),
+            });
+        }
     }
 
     // Update root bounds from children.
@@ -151,7 +170,6 @@ fn occt_parse(path: &Path) -> mmforge_core::error::Result<ParseOutput> {
         }
     }
 
-    let warnings = Vec::new();
     let stats = model.stats();
 
     Ok(ParseOutput {
@@ -236,5 +254,106 @@ mod tests {
         assert!(err_msg.contains("OCCT feature not enabled"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// E2E test: STEP fixture → read_step_file → Model.
+    ///
+    /// Verifies the full pipeline: OCCT reads the STEP file, transfers
+    /// roots, extracts bbox/label/type, and the parser converts them
+    /// into LsmModel with BRepHandleRef geometry.
+    ///
+    /// Only runs when both `occt` feature and `occt_found` cfg are set.
+    #[cfg(occt_found)]
+    #[test]
+    fn e2e_step_fixture_to_model() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("mmforge-geometry")
+            .join("testdata")
+            .join("PQ-04909-A.STEP");
+
+        assert!(
+            fixture.exists(),
+            "STEP fixture missing at {}",
+            fixture.display(),
+        );
+
+        let parser = StepParser::new();
+        let output = parser
+            .parse(&fixture)
+            .expect("parse should succeed with real OCCT");
+
+        let model = &output.model;
+
+        // Header metadata.
+        assert_eq!(model.header.source_format, "STEP");
+        assert!(model.header.source_path.is_some());
+
+        // Root assembly node.
+        let root = model
+            .scene
+            .find_node(model.scene.root)
+            .expect("root node must exist");
+        assert_eq!(root.name, "STEP_Assembly");
+        assert!(root.bounds.is_valid(), "root bounds must be valid");
+
+        // Must have at least one child (shape).
+        assert!(
+            !root.children.is_empty(),
+            "expected at least one child node under STEP_Assembly"
+        );
+
+        // Every child must have geometry and valid bounds.
+        for &child_id in &root.children {
+            let child = model
+                .scene
+                .find_node(child_id)
+                .expect("child node must exist");
+            assert!(
+                child.geometry.is_some(),
+                "child '{}' must have geometry",
+                child.name
+            );
+            assert!(
+                child.bounds.is_valid(),
+                "child '{}' must have valid bounds",
+                child.name
+            );
+            // Label should include shape type annotation.
+            assert!(
+                child.name.contains('['),
+                "child label '{}' should contain shape type",
+                child.name
+            );
+        }
+
+        // Every geometry must be BRepHandleRef.
+        for geom in &model.geometries {
+            match geom {
+                mmforge_core::model::Geometry::BRepHandleRef { id, bounds, label } => {
+                    assert!(bounds.is_valid(), "BRepHandleRef {id:?} bounds invalid");
+                    assert!(!label.is_empty(), "BRepHandleRef {id:?} label empty");
+                }
+                other => panic!("expected BRepHandleRef, got {other:?}"),
+            }
+        }
+
+        // Stats must be consistent.
+        assert_eq!(output.stats.node_count, model.scene.nodes.len());
+        assert_eq!(output.stats.geometry_count, model.geometries.len());
+
+        // Print summary for diagnostics.
+        eprintln!(
+            "E2E: {} nodes, {} geometries, {} warnings",
+            output.stats.node_count,
+            output.stats.geometry_count,
+            output.warnings.len(),
+        );
+        for node in &model.scene.nodes {
+            eprintln!("  node '{}' bounds={:?}", node.name, node.bounds);
+        }
+        for w in &output.warnings {
+            eprintln!("  warning: {w:?}");
+        }
     }
 }
