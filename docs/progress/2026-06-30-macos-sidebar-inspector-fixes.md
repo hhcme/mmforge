@@ -1,37 +1,61 @@
-# Structure Sidebar/Inspector — Review Fixes
+# Sidebar/Inspector Fixes
 
 Date: 2026-06-30
 Agent: ZCode (mimo-v2.5-pro)
-Target: Fix C ABI return type contract, error state, and doc date
+Target: Fix sidebar selection sync, search matching, isolate logic
 
 ---
 
 ## Fixes
 
-### 1. C ABI return type contract unified
+### 1. Sidebar selection syncs to Metal renderer
 
-`mmf_node_has_geometry` and `mmf_node_bounds` now return `c_int`
-(1/0) instead of `bool`.  This matches the C header's `int`
-declaration and avoids Rust `bool` → C ABI portability issues.
+`List(selection:)` now uses a custom `selectionBinding` that calls
+`viewModel.selectNode(_:)` instead of directly setting `selectedIndex`.
+This ensures the renderer's `selectedNodeIndex` is updated when the
+user clicks a node in the sidebar.
 
-**Before**: Rust returned `bool`, C header declared `int`, Swift used
-`!= 0` to convert `Int32` to `Bool`.
+```swift
+private var selectionBinding: Binding<Int?> {
+    Binding(
+        get: { viewModel.selectedIndex },
+        set: { viewModel.selectNode($0) }
+    )
+}
+```
 
-**After**: Rust returns `c_int` (1 = true, 0 = false).  C header
-declares `int`.  Swift still uses `!= 0` for `Bool` conversion —
-now consistent across all three layers.
+### 2. `matchesSearch` fixed — no invalid `??`
 
-### 2. StructureSidebar error state
+The `??` operator was used on `Bool` (not `Bool?`), which is invalid.
+Replaced with explicit `if/else` checks:
 
-`.error` case now shows a real error view with warning icon and
-message, instead of falling through to `sidebarEmptyState` which
-displayed "No structure".
+```swift
+func matchesSearch(_ index: Int) -> Bool {
+    guard !searchText.isEmpty else { return true }
+    let node = nodes[index]
+    if node.name.localizedCaseInsensitiveContains(searchText) { return true }
+    if let label = node.geometryLabel,
+       label.localizedCaseInsensitiveContains(searchText) { return true }
+    return false
+}
+```
 
-### 3. Progress doc date corrected
+### 3. `isolateSelectedNode` preserves descendants
 
-Renamed `2026-07-01-macos-structure-sidebar-inspector.md` →
-`2026-06-30-macos-structure-sidebar-inspector.md` and updated the
-Date field inside.
+Now works with assembly nodes (not just geometry nodes):
+
+1. Collects the selected node and ALL its descendants via
+   `collectDescendants(_:into:)` recursive helper
+2. Hides all geometry nodes NOT in the keep-visible set
+3. Assembly selection → all descendant geometry stays visible
+4. Leaf selection → only that node stays visible
+
+### 4. Menu enabled states
+
+Existing states are correct:
+- Select Root: disabled when not loaded
+- Hide Selection: disabled when no selection
+- Show All: disabled when nothing hidden
 
 ---
 
@@ -42,7 +66,7 @@ Date field inside.
 | `cargo fmt --check` | ✅ Clean |
 | `cargo clippy --workspace -- -D warnings` | ✅ No warnings |
 | `cargo clippy --workspace --features occt -- -D warnings` | ✅ No warnings |
-| `cargo test --workspace --features occt` (real OCCT) | ✅ 84 tests pass |
+| `cargo test --workspace --features occt` (real OCCT) | ✅ 86 tests pass |
 | `xcodebuild -scheme MMForge build` | ✅ BUILD SUCCEEDED |
 
 ---
@@ -51,6 +75,5 @@ Date field inside.
 
 | File | Change |
 |------|--------|
-| `crates/mmforge-bridge/src/lib.rs` | `mmf_node_has_geometry`/`mmf_node_bounds` return `c_int` 1/0 |
-| `macos/MMForge/Views/StructureSidebar.swift` | Added `sidebarErrorState` for `.error` case |
-| `docs/progress/2026-06-30-macos-structure-sidebar-inspector.md` | Renamed from 2026-07-01, date fixed |
+| `macos/MMForge/Views/StructureSidebar.swift` | `selectionBinding` custom binding |
+| `macos/MMForge/Document/MMForgeDocument.swift` | Fixed `matchesSearch`, `isolateSelectedNode` with `collectDescendants` |

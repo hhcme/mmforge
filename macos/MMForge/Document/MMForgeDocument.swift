@@ -263,14 +263,37 @@ final class DocumentViewModel: ObservableObject {
         renderer?.setHiddenNodes(hiddenNodeIndices)
     }
 
-    /// Hide all nodes except the selected one.
+    /// Isolate the selected node: show it and all its descendants,
+    /// hide all other geometry nodes.
+    ///
+    /// Works with both assembly nodes (shows all descendant geometry)
+    /// and leaf geometry nodes (shows just that node).
     func isolateSelectedNode() {
-        guard let sel = selectedIndex, nodes[sel].hasGeometry else { return }
-        let geomIndices = nodes.enumerated()
-            .filter { $0.element.hasGeometry && $0.offset != sel }
-            .map { $0.offset }
-        hiddenNodeIndices = Set(geomIndices)
+        guard let sel = selectedIndex else { return }
+
+        // Collect the selected node and all its descendant indices.
+        var keepVisible = Set<Int>()
+        collectDescendants(sel, into: &keepVisible)
+
+        // Hide all geometry nodes NOT in the keep-visible set.
+        var hidden = Set<Int>()
+        for (i, node) in nodes.enumerated() {
+            if node.hasGeometry && !keepVisible.contains(i) {
+                hidden.insert(i)
+            }
+        }
+        hiddenNodeIndices = hidden
         renderer?.setHiddenNodes(hiddenNodeIndices)
+    }
+
+    /// Recursively collect a node and all its descendants.
+    private func collectDescendants(_ index: Int, into set: inout Set<Int>) {
+        set.insert(index)
+        for (i, node) in nodes.enumerated() {
+            if node.parentIndex == index {
+                collectDescendants(i, into: &set)
+            }
+        }
     }
 
     /// Hide all nodes except the selected one (alias for toolbar).
@@ -317,8 +340,14 @@ final class DocumentViewModel: ObservableObject {
     func matchesSearch(_ index: Int) -> Bool {
         guard !searchText.isEmpty else { return true }
         let node = nodes[index]
-        return node.name.localizedCaseInsensitiveContains(searchText)
-            ?? (node.geometryLabel?.localizedCaseInsensitiveContains(searchText) ?? false)
+        if node.name.localizedCaseInsensitiveContains(searchText) {
+            return true
+        }
+        if let label = node.geometryLabel,
+           label.localizedCaseInsensitiveContains(searchText) {
+            return true
+        }
+        return false
     }
 
     /// Indices of visible (expanded + matching search) nodes for the sidebar.

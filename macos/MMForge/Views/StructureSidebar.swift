@@ -146,8 +146,16 @@ struct StructureSidebar: View {
 
     // MARK: - Node list
 
+    /// Selection binding that syncs to Metal renderer via selectNode().
+    private var selectionBinding: Binding<Int?> {
+        Binding(
+            get: { viewModel.selectedIndex },
+            set: { viewModel.selectNode($0) }
+        )
+    }
+
     private var nodeList: some View {
-        List(selection: $viewModel.selectedIndex) {
+        List(selection: selectionBinding) {
             Section("Product Structure") {
                 ForEach(viewModel.visibleNodeIndices, id: \.self) { index in
                     nodeRow(index: index)
