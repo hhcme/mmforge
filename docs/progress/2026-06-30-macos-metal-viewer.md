@@ -20,27 +20,46 @@ renders the tessellated mesh in a Metal view with diffuse lighting.
 
 ## Fixes Applied (this round)
 
-### 1. Xcode Run Script builds with OCCT
+### 1. Xcode Run Script: fail-fast, no silent stub fallback
 
-The Run Script build phase now:
-- Detects `libmmforge_occt_shim.a` at `MMFORGE_SHIM_DIR`
-- If found: builds with `--features occt` and sets OCCT env vars
-- If not found: builds without OCCT (stub mode)
-- Default OCCT paths: `/opt/homebrew/include/opencascade`, `/opt/homebrew/lib`
+The Run Script now uses `set -euo pipefail` and validates three
+preconditions before building:
 
-### 2. Renderer race condition fixed
+1. `OCCT_INCLUDE_DIR` must exist → `exit 1` with error message
+2. `OCCT_LIB_DIR` must exist → `exit 1` with error message
+3. `libmmforge_occt_shim.a` must exist at `MMFORGE_SHIM_DIR` →
+   `exit 1` with build instructions
 
-`DocumentViewModel` now stores a `pendingDTO` when parsing completes
+**Removed** the silent fallback to stub mode.  If any check fails,
+the build fails immediately with a clear error message telling the
+developer what to do.
+
+Default OCCT paths: `/opt/homebrew/include/opencascade`, `/opt/homebrew/lib`.
+Override via environment variables.
+
+### 2. DocumentViewModel: free old document on re-open
+
+`parseFile()` now calls `freeCurrentDocument()` before starting a
+new parse.  This frees the old `MmfDocument` (meshes + CStrings)
+and clears the renderer.
+
+Added a `parseGeneration` counter to handle async race conditions:
+if a new parse starts while the previous one is in flight, the stale
+result is discarded and its document freed.
+
+### 3. Renderer race condition fixed
+
+`DocumentViewModel` stores a `pendingDTO` when parsing completes
 before the Metal renderer is created.  When `setRenderer()` is called,
 the pending DTO is uploaded immediately.
 
-### 3. CString leak fixed
+### 4. CString leak fixed
 
 `mmf_node_name` no longer leaks CString.  Node names are pre-computed
 as `Vec<CString>` in `MmfDocument` and returned as borrowed pointers.
 Freed when `mmf_document_free()` is called.
 
-### 4. C++ stdlib + OCCT libs linked
+### 5. C++ stdlib + OCCT libs linked
 
 Added `-lc++` and all 21 OCCT libraries to `OTHER_LDFLAGS` in the
 Xcode project.  Added `/opt/homebrew/lib` to `LIBRARY_SEARCH_PATHS`.

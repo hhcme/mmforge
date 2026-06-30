@@ -53,6 +53,8 @@ final class DocumentViewModel: ObservableObject {
     private var renderer: MetalRenderer?
     /// Stores DTO from async parse when renderer isn't ready yet.
     private var pendingDTO: RenderPacketDTO?
+    /// Increments on each parseFile call; stale async results are discarded.
+    private var parseGeneration: UInt64 = 0
 
     var isLoaded: Bool {
         if case .loaded = state { return true }
@@ -68,11 +70,25 @@ final class DocumentViewModel: ObservableObject {
         }
     }
 
+    /// Free the current MmfDocument and clear associated state.
+    private func freeCurrentDocument() {
+        if let doc = rustDoc {
+            RustBridge.shared.freeDocument(doc)
+            rustDoc = nil
+        }
+        pendingDTO = nil
+        renderer?.clearMeshes()
+        nodeNames = []
+    }
+
     func parseFile(data: Data) {
         guard !data.isEmpty else {
             state = .empty
             return
         }
+
+        // Free previous document (MmfDocument + meshes + CStrings).
+        freeCurrentDocument()
 
         state = .loading
 
@@ -88,6 +104,9 @@ final class DocumentViewModel: ObservableObject {
 
         // Parse on background thread.
         let path = tmpURL.path
+        parseGeneration += 1
+        let generation = parseGeneration
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Result { try RustBridge.shared.parseFile(at: path) }
 
@@ -96,8 +115,21 @@ final class DocumentViewModel: ObservableObject {
 
             DispatchQueue.main.async {
                 guard let self else { return }
+                // Discard stale result if a newer parse was started.
+                guard generation == self.parseGeneration else {
+                    // Free the document we just parsed — it's been superseded.
+                    if case .success(let (doc, _)) = result {
+                        RustBridge.shared.freeDocument(doc)
+                    }
+                    return
+                }
                 switch result {
                 case .success(let (doc, dto)):
+                    // Free any previous document (should already be nil,
+                    // but guard against edge cases).
+                    if let oldDoc = self.rustDoc {
+                        RustBridge.shared.freeDocument(oldDoc)
+                    }
                     self.rustDoc = doc
                     self.uploadToRenderer(dto: dto)
                     self.nodeNames = dto.nodeNames
@@ -136,6 +168,7 @@ final class DocumentViewModel: ObservableObject {
     }
 
     deinit {
+        // Nonisolated cleanup — safe because deinit runs on the owning thread.
         if let doc = rustDoc {
             RustBridge.shared.freeDocument(doc)
         }
