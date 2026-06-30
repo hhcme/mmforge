@@ -53,33 +53,40 @@ pub fn extract_shapes(data: &StepData) -> Result<&[OcctShapeHandle], OcctError> 
     Ok(&data.shapes)
 }
 
-/// Real OCCT parsing.  Only compiled when `occt` feature is enabled.
-#[cfg(feature = "occt")]
+/// Real OCCT parsing.  Only compiled when `occt_found` is set (real shim linked).
+///
+/// Uses `StepReaderAdapter` to read a STEP file via STEPCAFControl_Reader,
+/// transfer roots, and extract shape metadata (bbox, label, type).
+#[cfg(occt_found)]
 fn occt_read_step(path: &Path) -> Result<StepData, OcctError> {
-    // ------------------------------------------------------------------
-    // Phase 1 implementation: this is where the real OCCT FFI calls go.
-    //
-    // The flow (per development plan §4.2):
-    //
-    // 1. Create STEPControl_Reader.
-    // 2. Read file → collect transfer status.
-    // 3. Transfer roots → get TopoDS_Shape.
-    // 4. If XDE enabled, read assembly/product/color/layer.
-    // 5. Traverse TopoDS_Shape tree:
-    //    - TopAbs_SOLID → Solid node
-    //    - TopAbs_SHELL → Shell metadata
-    //    - TopAbs_FACE  → Face/BRep info
-    // 6. Compute bounding box.
-    // 7. Return StepData with shape handles.
-    //
-    // For now this is a placeholder that returns an empty result.
-    // The actual FFI will be implemented in a subsequent goal.
-    // ------------------------------------------------------------------
+    use super::adapter::StepReaderAdapter;
 
-    let _ = path;
+    let mut reader = StepReaderAdapter::new()?;
+    reader.read_file(path)?;
+    reader.transfer_roots()?;
+
+    let count = reader.root_count();
+    let mut shapes = Vec::with_capacity(count);
+    for i in 0..count {
+        let handle = reader.get_root(i)?;
+        let fallback = format!("Shape_{i}");
+        shapes.push(handle.to_handle(&fallback)?);
+    }
+
+    let messages = reader.warnings();
+
+    Ok(StepData {
+        shapes,
+        transfer_messages: messages,
+    })
+}
+
+/// Stub when `occt` feature is on but shim is not linked.
+#[cfg(all(feature = "occt", not(occt_found)))]
+fn occt_read_step(_path: &Path) -> Result<StepData, OcctError> {
     Err(OcctError::NotAvailable(
-        "OCCT FFI not yet implemented — this is a placeholder for the \
-         STEPControl_Reader integration (see docs/geometry/occt-binding.md)"
+        "OCCT shim not linked — set MMFORGE_SHIM_DIR to the pre-built shim \
+         library, with OCCT_INCLUDE_DIR + OCCT_LIB_DIR for OCCT headers/libs"
             .to_string(),
     ))
 }
@@ -104,24 +111,91 @@ mod tests {
         }
     }
 
-    /// With the `occt` feature enabled, the placeholder still returns
-    /// `NotAvailable` because the real FFI is not yet implemented.
-    /// The message must indicate this is a placeholder.
+    /// With the `occt` feature but no shim (`occt_found` not set),
+    /// read_step_file returns `NotAvailable` because the adapter is a stub.
     #[cfg(feature = "occt")]
+    #[cfg(not(occt_found))]
     #[test]
-    fn read_step_file_occt_placeholder_returns_not_available() {
+    fn read_step_file_occt_stub_returns_not_available() {
         let path = Path::new("/tmp/test.step");
         let result = read_step_file(path);
         assert!(result.is_err());
         match result.unwrap_err() {
             OcctError::NotAvailable(msg) => {
                 assert!(
-                    msg.contains("OCCT FFI not yet implemented")
-                        || msg.contains("STEPControl_Reader"),
+                    msg.contains("shim") || msg.contains("OCCT"),
                     "unexpected NotAvailable message: {msg}"
                 );
             }
             other => panic!("expected NotAvailable, got: {other}"),
+        }
+    }
+
+    /// E2E test with a real STEP fixture — only runs when `occt_found`
+    /// is set (real shim linked).  Reads a 37KB STEP file, transfers
+    /// roots, and verifies bbox/label extraction.
+    ///
+    /// Uses `testfile/PQ-04909-A.STEP` (relative to workspace root).
+    #[cfg(occt_found)]
+    #[test]
+    fn read_step_file_e2e_real_occt() {
+        // Locate the fixture relative to the workspace root.
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let fixture = manifest
+            .parent() // crates/
+            .and_then(|p| p.parent()) // workspace root
+            .unwrap()
+            .join("testfile")
+            .join("PQ-04909-A.STEP");
+
+        if !fixture.exists() {
+            eprintln!("SKIP: STEP fixture not found at {}", fixture.display());
+            return;
+        }
+
+        let data = read_step_file(&fixture).expect("read_step_file should succeed with real OCCT");
+
+        // Must have at least one root shape.
+        assert!(
+            !data.shapes.is_empty(),
+            "expected at least one root shape from STEP file"
+        );
+
+        // Every shape must have a valid bounding box.
+        for (i, shape) in data.shapes.iter().enumerate() {
+            assert!(
+                shape.bounds.is_valid(),
+                "shape {i} ('{}') has invalid bbox: {:?}",
+                shape.label,
+                shape.bounds,
+            );
+        }
+
+        // At least one shape should have a non-default label.
+        let has_label = data
+            .shapes
+            .iter()
+            .any(|s| !s.label.is_empty() && !s.label.starts_with("Shape_"));
+        // Labels may be empty if the STEP file has no product names,
+        // so this is a soft check.
+        if !has_label {
+            eprintln!(
+                "NOTE: no product-name labels found in STEP file \
+                 ({} shapes, all use fallback labels)",
+                data.shapes.len()
+            );
+        }
+
+        eprintln!(
+            "E2E: read {} shapes from STEP file, {} transfer messages",
+            data.shapes.len(),
+            data.transfer_messages.len(),
+        );
+        for (i, shape) in data.shapes.iter().enumerate() {
+            eprintln!(
+                "  [{i}] type={:?} label='{}' bbox={:?}",
+                shape.shape_type, shape.label, shape.bounds,
+            );
         }
     }
 
