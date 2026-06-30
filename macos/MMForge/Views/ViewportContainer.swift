@@ -96,7 +96,11 @@ struct MetalViewWrapper: NSViewRepresentable {
             viewModel.setRenderer(renderer)
         }
 
-        // Gesture recognizers for orbit/pan/zoom.
+        // Gesture recognizers for orbit/pan/zoom/pick.
+        let click = NSClickGestureRecognizer(target: context.coordinator,
+                                             action: #selector(Coordinator.handleClick(_:)))
+        mtkView.addGestureRecognizer(click)
+
         let pan = NSPanGestureRecognizer(target: context.coordinator,
                                          action: #selector(Coordinator.handlePan(_:)))
         mtkView.addGestureRecognizer(pan)
@@ -110,11 +114,26 @@ struct MetalViewWrapper: NSViewRepresentable {
 
     func updateNSView(_ nsView: MTKView, context: Context) {}
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator {
+        let c = Coordinator()
+        c.viewModel = viewModel
+        return c
+    }
 
     class Coordinator {
         var renderer: MetalRenderer?
+        var viewModel: DocumentViewModel?
         private var lastPanPoint: CGPoint = .zero
+
+        @objc func handleClick(_ gesture: NSClickGestureRecognizer) {
+            guard let renderer, let viewModel, let view = gesture.view else { return }
+            let point = gesture.location(in: view)
+            let viewSize = view.bounds.size
+            let picked = renderer.pickNode(at: viewSize, point: point)
+            DispatchQueue.main.async {
+                viewModel.selectNode(picked)
+            }
+        }
 
         @objc func handlePan(_ gesture: NSPanGestureRecognizer) {
             guard let renderer else { return }

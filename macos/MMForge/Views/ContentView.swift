@@ -63,6 +63,7 @@ struct ContentView: View {
                 .accessibilityLabel(inspectorVisible ? "Hide inspector" : "Show inspector")
             }
         }
+        .focusedObject(viewModel)
         .onAppear {
             if !document.fileData.isEmpty {
                 viewModel.parseFile(data: document.fileData)
@@ -87,5 +88,35 @@ struct ContentView: View {
             }
         }
         return true
+    }
+}
+
+// MARK: - Selection / Visibility menu commands
+
+struct SelectionCommands: View {
+    @ObservedObject var viewModel: DocumentViewModel
+
+    var body: some View {
+        Group {
+            Button("Select Root") {
+                viewModel.selectNode(0)
+            }
+            .keyboardShortcut("a", modifiers: [.command, .shift])
+            .disabled(!viewModel.isLoaded)
+
+            Divider()
+
+            Button("Hide Selection") {
+                viewModel.hideSelectedNode()
+            }
+            .keyboardShortcut("h", modifiers: .command)
+            .disabled(viewModel.selectedIndex == nil)
+
+            Button("Show All") {
+                viewModel.setAllNodesVisible()
+            }
+            .keyboardShortcut("h", modifiers: [.command, .shift])
+            .disabled(viewModel.hiddenNodeIndices.isEmpty)
+        }
     }
 }

@@ -15,6 +15,7 @@ struct Uniforms {
     float4x4 mvp;
     float4x4 model;
     float4 baseColor;
+    float4 highlightColor;  // rgb = tint, a = blend factor (0 = no highlight)
 };
 
 vertex VertexOut vertex_main(VertexIn in [[stage_in]],
@@ -31,5 +32,7 @@ fragment float4 fragment_main(VertexOut in [[stage_in]],
     float3 normal = normalize(in.worldNormal);
     float NdotL = max(dot(normal, lightDir), 0.15); // ambient floor
     float3 color = u.baseColor.rgb * NdotL;
-    return float4(color, u.baseColor.a);
+    // Blend highlight tint over diffuse result.
+    color = mix(color, u.highlightColor.rgb, u.highlightColor.a);
+    return float4(color, 1.0);
 }

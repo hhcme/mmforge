@@ -6,7 +6,6 @@ struct StructureSidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
             HStack {
                 Text("Structure")
                     .font(.headline)
@@ -91,7 +90,15 @@ struct StructureSidebar: View {
                 ForEach(Array(viewModel.nodes.enumerated()), id: \.offset) { index, node in
                     nodeRow(node: node, index: index)
                         .tag(index)
+                        .listRowBackground(
+                            viewModel.selectedIndex == index
+                                ? Color.accentColor.opacity(0.15)
+                                : Color.clear
+                        )
                         .accessibilityLabel(nodeAccessibilityLabel(node: node, index: index))
+                        .accessibilityValue(
+                            viewModel.hiddenNodeIndices.contains(index) ? "hidden" : "visible"
+                        )
                         .accessibilityHint("Select to view properties in inspector")
                 }
             }
@@ -101,7 +108,7 @@ struct StructureSidebar: View {
 
     private func nodeRow(node: RenderPacketDTO.NodeInfo, index: Int) -> some View {
         HStack(spacing: 4) {
-            // Indentation based on parent relationship
+            // Indentation
             if node.parentIndex >= 0 {
                 Spacer()
                     .frame(width: CGFloat(indentLevel(for: index)) * 12)
@@ -119,23 +126,39 @@ struct StructureSidebar: View {
 
             Spacer()
 
-            // Geometry indicator
+            // Visibility toggle (only for nodes with geometry)
             if node.hasGeometry {
-                Image(systemName: "cube")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                Button(action: { viewModel.toggleNodeVisibility(index) }) {
+                    Image(systemName: viewModel.hiddenNodeIndices.contains(index)
+                          ? "eye.slash" : "eye")
+                        .font(.caption)
+                        .foregroundStyle(viewModel.hiddenNodeIndices.contains(index)
+                                         ? .secondary : .tertiary)
+                }
+                .buttonStyle(.plain)
+                .help(viewModel.hiddenNodeIndices.contains(index)
+                      ? "Show this part" : "Hide this part")
+                .accessibilityLabel(viewModel.hiddenNodeIndices.contains(index)
+                                    ? "Show \(node.name)" : "Hide \(node.name)")
             }
         }
         .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            // Double-click to toggle visibility.
+            if node.hasGeometry {
+                viewModel.toggleNodeVisibility(index)
+            }
+        }
     }
 
     private func nodeIcon(node: RenderPacketDTO.NodeInfo) -> String {
         if node.parentIndex < 0 {
-            return "folder.fill"  // Root assembly
+            return "folder.fill"
         } else if node.hasGeometry {
-            return "cube"  // Part with geometry
+            return "cube"
         } else {
-            return "folder"  // Sub-assembly
+            return "folder"
         }
     }
 
@@ -147,7 +170,7 @@ struct StructureSidebar: View {
             if parent < 0 { break }
             level += 1
             current = parent
-            if level > 10 { break }  // Safety limit
+            if level > 10 { break }
         }
         return level
     }

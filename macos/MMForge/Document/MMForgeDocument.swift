@@ -51,6 +51,7 @@ final class DocumentViewModel: ObservableObject {
     @Published var nodes: [RenderPacketDTO.NodeInfo] = []
     @Published var stats: RenderPacketDTO.ModelStats?
     @Published var selectedIndex: Int?
+    @Published var hiddenNodeIndices: Set<Int> = []
 
     private var rustDoc: OpaquePointer?
     private var renderer: MetalRenderer?
@@ -159,13 +160,26 @@ final class DocumentViewModel: ObservableObject {
             return
         }
         renderer.clearMeshes()
-        for mesh in dto.meshes {
+        // Each mesh in dto.meshes corresponds to a node with geometry.
+        // Map mesh index → node index by matching geometry nodes in order.
+        var meshNodeIndices: [Int] = []
+        for (i, node) in dto.nodes.enumerated() {
+            if node.hasGeometry {
+                meshNodeIndices.append(i)
+            }
+        }
+        for (i, mesh) in dto.meshes.enumerated() {
+            let nodeIdx = i < meshNodeIndices.count ? meshNodeIndices[i] : i
+            let node = nodeIdx < dto.nodes.count ? dto.nodes[nodeIdx] : nil
             renderer.upload(
                 positions: mesh.positions,
                 normals: mesh.normals,
                 vertexCount: mesh.vertexCount,
                 indices: mesh.indices,
-                indexCount: mesh.indexCount
+                indexCount: mesh.indexCount,
+                nodeIndex: nodeIdx,
+                boundsMin: node?.boundsMin ?? .zero,
+                boundsMax: node?.boundsMax ?? .zero
             )
         }
         renderer.setSceneBounds(min: dto.sceneBoundsMin, max: dto.sceneBoundsMax)
@@ -173,6 +187,36 @@ final class DocumentViewModel: ObservableObject {
 
     func fitToView() {
         renderer?.fitToView()
+    }
+
+    // MARK: - Selection
+
+    func selectNode(_ index: Int?) {
+        selectedIndex = index
+        renderer?.setSelectedNode(index)
+    }
+
+    // MARK: - Visibility
+
+    func toggleNodeVisibility(_ index: Int) {
+        if hiddenNodeIndices.contains(index) {
+            hiddenNodeIndices.remove(index)
+            renderer?.setNodeVisible(index, visible: true)
+        } else {
+            hiddenNodeIndices.insert(index)
+            renderer?.setNodeVisible(index, visible: false)
+        }
+    }
+
+    func setAllNodesVisible() {
+        hiddenNodeIndices.removeAll()
+        renderer?.setHiddenNodes([])
+    }
+
+    func hideSelectedNode() {
+        if let idx = selectedIndex {
+            toggleNodeVisibility(idx)
+        }
     }
 
     deinit {
