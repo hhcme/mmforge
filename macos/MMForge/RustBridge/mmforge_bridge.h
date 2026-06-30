@@ -89,6 +89,25 @@ uint32_t mmf_node_count(const MmfDocument* doc);
 /** Name of node at index.  Returns NULL if out of range. */
 const char* mmf_node_name(const MmfDocument* doc, uint32_t index);
 
+/** Parent node index.  Returns -1 for root nodes or if index is invalid. */
+int32_t mmf_node_parent(const MmfDocument* doc, uint32_t index);
+
+/** Whether the node at index has associated geometry. */
+int mmf_node_has_geometry(const MmfDocument* doc, uint32_t index);
+
+/**
+ * Get the bounding box of a node.
+ * @return 1 on success, 0 if index invalid or bounds empty.
+ */
+int mmf_node_bounds(const MmfDocument* doc, uint32_t index,
+                    float* out_min, float* out_max);
+
+/**
+ * Get the geometry label for a node (e.g. "PQ-04909-A [Solid]").
+ * Returns NULL if the node has no geometry.
+ */
+const char* mmf_node_geometry_label(const MmfDocument* doc, uint32_t index);
+
 /* ------------------------------------------------------------------ */
 /*  Render stats                                                       */
 /* ------------------------------------------------------------------ */
@@ -98,6 +117,9 @@ uint32_t mmf_triangle_count(const MmfDocument* doc);
 
 /** Number of materials. */
 uint32_t mmf_material_count(const MmfDocument* doc);
+
+/** Number of geometries in the model. */
+uint32_t mmf_geometry_count(const MmfDocument* doc);
 
 #ifdef __cplusplus
 }

@@ -11,7 +11,7 @@ struct ContentView: View {
     var body: some View {
         HSplitView {
             if sidebarVisible {
-                StructureSidebar(nodeNames: viewModel.nodeNames)
+                StructureSidebar(viewModel: viewModel)
                     .frame(minWidth: 180, idealWidth: 220, maxWidth: 300)
             }
 
@@ -22,7 +22,7 @@ struct ContentView: View {
                 }
 
             if inspectorVisible {
-                InspectorPanel()
+                InspectorPanel(viewModel: viewModel)
                     .frame(minWidth: 200, idealWidth: 240, maxWidth: 320)
             }
         }
@@ -33,6 +33,7 @@ struct ContentView: View {
                 }
                 .help("Show or hide the structure sidebar")
                 .keyboardShortcut("s", modifiers: .command)
+                .accessibilityLabel(sidebarVisible ? "Hide sidebar" : "Show sidebar")
             }
 
             ToolbarItemGroup(placement: .principal) {
@@ -41,6 +42,7 @@ struct ContentView: View {
                 }
                 .help("Fit the model to the viewport")
                 .keyboardShortcut("f", modifiers: .command)
+                .accessibilityLabel("Fit model to viewport")
 
                 Picker("", selection: .constant(0)) {
                     Image(systemName: "cube").tag(0)
@@ -49,6 +51,7 @@ struct ContentView: View {
                 }
                 .pickerStyle(.segmented)
                 .help("Render mode: Solid / Wireframe / Transparent")
+                .accessibilityLabel("Render mode")
             }
 
             ToolbarItemGroup(placement: .primaryAction) {
@@ -57,6 +60,7 @@ struct ContentView: View {
                 }
                 .help("Show or hide the inspector panel")
                 .keyboardShortcut("i", modifiers: .command)
+                .accessibilityLabel(inspectorVisible ? "Hide inspector" : "Show inspector")
             }
         }
         .onAppear {

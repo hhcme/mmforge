@@ -22,6 +22,8 @@ pub struct MmfDocument {
     model: mmforge_core::model::LsmModel,
     /// Pre-computed CStrings for node names (borrowed by mmf_node_name).
     node_names: Vec<CString>,
+    /// Pre-computed CStrings for geometry labels (borrowed by mmf_node_geometry_label).
+    geometry_labels: Vec<CString>,
 }
 
 // --- Lifecycle ---
@@ -51,10 +53,26 @@ pub extern "C" fn mmf_parse_step(path: *const c_char) -> *mut MmfDocument {
                 .iter()
                 .map(|n| CString::new(n.name.as_str()).unwrap_or_default())
                 .collect();
+            let geometry_labels: Vec<CString> = output
+                .model
+                .geometries
+                .iter()
+                .map(|g| {
+                    let label = match g {
+                        mmforge_core::model::Geometry::BRepHandleRef { label, .. } => {
+                            label.as_str()
+                        }
+                        mmforge_core::model::Geometry::Mesh(_) => "Mesh",
+                        mmforge_core::model::Geometry::Drawing2D { .. } => "Drawing2D",
+                    };
+                    CString::new(label).unwrap_or_default()
+                })
+                .collect();
             let doc = MmfDocument {
                 packet,
                 model: output.model,
                 node_names,
+                geometry_labels,
             };
             Box::into_raw(Box::new(doc))
         }
@@ -202,8 +220,107 @@ pub extern "C" fn mmf_node_name(doc: *const MmfDocument, index: u32) -> *const c
     }
 }
 
+// --- Node details ---
+
+/// Parent node index.  Returns -1 for root nodes or if index is invalid.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_node_parent(doc: *const MmfDocument, index: u32) -> i32 {
+    if doc.is_null() {
+        return -1;
+    }
+    let doc = unsafe { &*doc };
+    match doc.model.scene.nodes.get(index as usize) {
+        Some(node) => match node.parent {
+            Some(parent_id) => {
+                // Find the index of the parent node by ID.
+                doc.model
+                    .scene
+                    .nodes
+                    .iter()
+                    .position(|n| n.id == parent_id)
+                    .map(|i| i as i32)
+                    .unwrap_or(-1)
+            }
+            None => -1,
+        },
+        None => -1,
+    }
+}
+
+/// Whether the node at index has associated geometry.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_node_has_geometry(doc: *const MmfDocument, index: u32) -> bool {
+    if doc.is_null() {
+        return false;
+    }
+    let doc = unsafe { &*doc };
+    doc.model
+        .scene
+        .nodes
+        .get(index as usize)
+        .is_some_and(|n| n.geometry.is_some())
+}
+
+/// Get the bounding box of a node.  Returns false if index is invalid.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_node_bounds(
+    doc: *const MmfDocument,
+    index: u32,
+    out_min: *mut f32,
+    out_max: *mut f32,
+) -> bool {
+    if doc.is_null() || out_min.is_null() || out_max.is_null() {
+        return false;
+    }
+    let doc = unsafe { &*doc };
+    match doc.model.scene.nodes.get(index as usize) {
+        Some(node) if node.bounds.is_valid() => {
+            let b = node.bounds;
+            unsafe {
+                *out_min.add(0) = b.min.x;
+                *out_min.add(1) = b.min.y;
+                *out_min.add(2) = b.min.z;
+                *out_max.add(0) = b.max.x;
+                *out_max.add(1) = b.max.y;
+                *out_max.add(2) = b.max.z;
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+// Pre-computed CStrings for geometry labels.
+// Stored alongside node_names in MmfDocument.
+
+/// Get the geometry label for a node.  Returns NULL if no geometry.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_node_geometry_label(doc: *const MmfDocument, index: u32) -> *const c_char {
+    if doc.is_null() {
+        return ptr::null();
+    }
+    let doc = unsafe { &*doc };
+    let node = match doc.model.scene.nodes.get(index as usize) {
+        Some(n) => n,
+        None => return ptr::null(),
+    };
+    let geom_id = match node.geometry {
+        Some(id) => id,
+        None => return ptr::null(),
+    };
+    // Find the geometry index by ID, then return the pre-computed CString.
+    doc.model
+        .geometries
+        .iter()
+        .position(|g| g.id() == geom_id)
+        .and_then(|pos| doc.geometry_labels.get(pos))
+        .map(|s| s.as_ptr())
+        .unwrap_or(ptr::null())
+}
+
 // --- Render stats ---
 
+/// Total triangle count across all meshes.
 #[unsafe(no_mangle)]
 pub extern "C" fn mmf_triangle_count(doc: *const MmfDocument) -> u32 {
     if doc.is_null() {
@@ -212,10 +329,20 @@ pub extern "C" fn mmf_triangle_count(doc: *const MmfDocument) -> u32 {
     unsafe { &*doc }.packet.stats.triangle_count as u32
 }
 
+/// Number of materials.
 #[unsafe(no_mangle)]
 pub extern "C" fn mmf_material_count(doc: *const MmfDocument) -> u32 {
     if doc.is_null() {
         return 0;
     }
     unsafe { &*doc }.packet.materials.len() as u32
+}
+
+/// Number of geometries in the model (distinct from mesh count).
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_geometry_count(doc: *const MmfDocument) -> u32 {
+    if doc.is_null() {
+        return 0;
+    }
+    unsafe { &*doc }.model.geometries.len() as u32
 }

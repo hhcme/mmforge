@@ -48,6 +48,9 @@ enum DocumentState: Equatable {
 final class DocumentViewModel: ObservableObject {
     @Published var state: DocumentState = .empty
     @Published var nodeNames: [String] = []
+    @Published var nodes: [RenderPacketDTO.NodeInfo] = []
+    @Published var stats: RenderPacketDTO.ModelStats?
+    @Published var selectedIndex: Int?
 
     private var rustDoc: OpaquePointer?
     private var renderer: MetalRenderer?
@@ -79,6 +82,9 @@ final class DocumentViewModel: ObservableObject {
         pendingDTO = nil
         renderer?.clearMeshes()
         nodeNames = []
+        nodes = []
+        stats = nil
+        selectedIndex = nil
     }
 
     func parseFile(data: Data) {
@@ -133,6 +139,8 @@ final class DocumentViewModel: ObservableObject {
                     self.rustDoc = doc
                     self.uploadToRenderer(dto: dto)
                     self.nodeNames = dto.nodeNames
+                    self.nodes = dto.nodes
+                    self.stats = dto.stats
                     self.state = .loaded(
                         triangleCount: dto.triangleCount,
                         meshCount: dto.meshes.count,

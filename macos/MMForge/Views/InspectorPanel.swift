@@ -1,67 +1,214 @@
 import SwiftUI
+import simd
 
-/// Right inspector panel for properties, measurements, and tools.
+/// Right inspector panel for model properties and settings.
 struct InspectorPanel: View {
+    @ObservedObject var viewModel: DocumentViewModel
     @State private var selectedTab = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Tab bar
             Picker("", selection: $selectedTab) {
                 Text("Properties").tag(0)
-                Text("Measure").tag(1)
-                Text("Settings").tag(2)
+                Text("Settings").tag(1)
             }
             .pickerStyle(.segmented)
             .padding(8)
 
             Divider()
 
-            // Content
             Group {
                 switch selectedTab {
                 case 0:
                     propertiesView
-                case 1:
-                    measureView
                 default:
                     settingsView
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .accessibilityLabel("Inspector panel")
     }
 
+    // MARK: - Properties
+
+    @ViewBuilder
     private var propertiesView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Properties")
-                .font(.headline)
-            Text("No selection")
-                .foregroundStyle(.secondary)
-                .padding(.top, 20)
+        switch viewModel.state {
+        case .empty:
+            inspectorEmptyState("No model loaded")
+        case .loading:
+            inspectorLoadingState
+        case .error(let message):
+            inspectorErrorState(message)
+        case .loaded:
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    modelStatsSection
+                    Divider()
+                    if let index = viewModel.selectedIndex,
+                       index < viewModel.nodes.count {
+                        selectedNodeSection(node: viewModel.nodes[index])
+                    } else {
+                        noSelectionSection
+                    }
+                }
+                .padding(12)
+            }
         }
-        .padding(12)
     }
 
-    private var measureView: some View {
+    // MARK: - Model Stats
+
+    private var modelStatsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Measurement")
+            Text("Model")
                 .font(.headline)
-            Text("No measurement active")
-                .foregroundStyle(.secondary)
-                .padding(.top, 20)
+                .accessibilityAddTraits(.isHeader)
+
+            if let stats = viewModel.stats {
+                LabeledContent("Nodes", value: "\(stats.nodeCount)")
+                LabeledContent("Geometries", value: "\(stats.geometryCount)")
+                LabeledContent("Meshes", value: "\(stats.meshCount)")
+                LabeledContent("Triangles", value: formatNumber(stats.triangleCount))
+                LabeledContent("Materials", value: "\(stats.materialCount)")
+            }
         }
-        .padding(12)
     }
+
+    // MARK: - Selected Node
+
+    private func selectedNodeSection(node: RenderPacketDTO.NodeInfo) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Selection")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+
+            LabeledContent("Name", value: node.name)
+
+            if node.parentIndex >= 0 && node.parentIndex < viewModel.nodes.count {
+                LabeledContent("Parent", value: viewModel.nodes[node.parentIndex].name)
+            } else if node.parentIndex < 0 {
+                LabeledContent("Parent", value: "Root")
+            }
+
+            LabeledContent("Has Geometry", value: node.hasGeometry ? "Yes" : "No")
+
+            if let geomLabel = node.geometryLabel {
+                LabeledContent("Geometry", value: geomLabel)
+            }
+
+            if let bmin = node.boundsMin, let bmax = node.boundsMax {
+                Divider()
+                Text("Bounding Box")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
+                let size = bmax - bmin
+                LabeledContent("Min", value: formatVec3(bmin))
+                LabeledContent("Max", value: formatVec3(bmax))
+                LabeledContent("Size", value: formatVec3(size))
+            }
+        }
+    }
+
+    private var noSelectionSection: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "cursorarrow.click.2")
+                .font(.title)
+                .foregroundStyle(.tertiary)
+            Text("Select a node")
+                .foregroundStyle(.secondary)
+            Text("Click a node in the sidebar to view its properties.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 20)
+        .accessibilityLabel("No node selected")
+    }
+
+    // MARK: - Settings
 
     private var settingsView: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Settings")
                 .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+
             Toggle("Show Grid", isOn: .constant(true))
+                .accessibilityHint("Toggle grid display in viewport")
             Toggle("Show Axes", isOn: .constant(true))
+                .accessibilityHint("Toggle axis indicator in viewport")
             Toggle("Anti-aliasing", isOn: .constant(true))
+                .accessibilityHint("Toggle anti-aliasing")
+
+            Divider()
+
+            Text("MMForge")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            LabeledContent("Version", value: RustBridge.shared.coreVersion())
         }
         .padding(12)
+    }
+
+    // MARK: - State Helpers
+
+    private func inspectorEmptyState(_ message: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: "info.circle")
+                .font(.title)
+                .foregroundStyle(.tertiary)
+            Text(message)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityLabel(message)
+    }
+
+    private var inspectorLoadingState: some View {
+        VStack(spacing: 8) {
+            ProgressView()
+                .scaleEffect(0.8)
+            Text("Loading…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityLabel("Loading properties")
+    }
+
+    private func inspectorErrorState(_ message: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.title)
+                .foregroundStyle(.orange)
+            Text("Error")
+                .font(.headline)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+        .accessibilityLabel("Error: \(message)")
+    }
+
+    // MARK: - Formatters
+
+    private func formatVec3(_ v: simd_float3) -> String {
+        String(format: "(%.2f, %.2f, %.2f)", v.x, v.y, v.z)
+    }
+
+    private func formatNumber(_ n: Int) -> String {
+        if n >= 1_000_000 {
+            return String(format: "%.1fM", Double(n) / 1_000_000)
+        } else if n >= 1_000 {
+            return String(format: "%.1fK", Double(n) / 1_000)
+        }
+        return "\(n)"
     }
 }
