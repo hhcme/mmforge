@@ -97,14 +97,10 @@ struct ContentView: View {
         }
         .focusedObject(viewModel)
         .onAppear {
-            if !document.fileData.isEmpty {
-                viewModel.parseFile(data: document.fileData)
-            }
+        viewModel.parseFile(data: document.fileData)
         }
         .onChange(of: document.fileData) { _, newData in
-            if !newData.isEmpty {
-                viewModel.parseFile(data: newData)
-            }
+            viewModel.parseFile(data: newData)
         }
     }
 

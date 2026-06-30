@@ -133,13 +133,13 @@ final class DocumentViewModel: ObservableObject {
     }
 
     func parseFile(data: Data) {
+        // Always clean up previous state first.
+        freeCurrentDocument()
+
         guard !data.isEmpty else {
             state = .empty
             return
         }
-
-        // Free previous document (MmfDocument + meshes + CStrings).
-        freeCurrentDocument()
 
         state = .loading
 
