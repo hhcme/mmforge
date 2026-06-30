@@ -143,6 +143,20 @@ pub extern "C" fn mmf_mesh_index_count(doc: *const MmfDocument, index: u32) -> u
     }
 }
 
+/// Get the GeometryId for a mesh at the given index.
+/// Returns -1 if index is out of range.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_mesh_geometry_id(doc: *const MmfDocument, index: u32) -> i32 {
+    if doc.is_null() {
+        return -1;
+    }
+    let doc = unsafe { &*doc };
+    match doc.packet.meshes.get(index as usize) {
+        Some(m) => m.geometry_id as i32,
+        None => -1,
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn mmf_mesh_positions(doc: *const MmfDocument, index: u32) -> *const f32 {
     if doc.is_null() {

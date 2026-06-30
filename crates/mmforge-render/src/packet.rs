@@ -18,6 +18,7 @@ pub struct RenderPacket {
 #[derive(Debug, Clone)]
 pub struct RenderMesh {
     pub mesh_id: u32,
+    pub geometry_id: u32,
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,

@@ -50,6 +50,9 @@ uint32_t mmf_mesh_vertex_count(const MmfDocument* doc, uint32_t index);
 /** Number of indices in mesh at index. */
 uint32_t mmf_mesh_index_count(const MmfDocument* doc, uint32_t index);
 
+/** GeometryId for a mesh at the given index.  Returns -1 if out of range. */
+int32_t mmf_mesh_geometry_id(const MmfDocument* doc, uint32_t index);
+
 /**
  * Vertex positions as flat float array [x0,y0,z0, x1,y1,z1, ...].
  * Returns NULL if index is out of range.  Length = vertex_count * 3.

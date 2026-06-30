@@ -162,17 +162,21 @@ final class DocumentViewModel: ObservableObject {
         }
         renderer.clearMeshes()
 
-        // Build node→mesh mapping from the authoritative meshIndex field.
-        // meshToNode[meshIdx] = nodeIdx
-        var meshToNode = [Int](repeating: -1, count: dto.meshes.count)
+        // Build geometryId → nodeIndex mapping from NodeInfo.
+        // Each node with hasGeometry has a meshIndex that equals the
+        // geometry's position in the sorted-by-GeometryId mesh list.
+        // We use geometryId as the authoritative key.
+        var geomIdToNodeIdx = [Int: Int]()
         for (nodeIdx, node) in dto.nodes.enumerated() {
-            if node.meshIndex >= 0 && node.meshIndex < dto.meshes.count {
-                meshToNode[node.meshIndex] = nodeIdx
+            if node.hasGeometry && node.meshIndex >= 0 {
+                // meshIndex == geometry rank == mesh index in sorted order
+                geomIdToNodeIdx[node.meshIndex] = nodeIdx
             }
         }
 
         for (meshIdx, mesh) in dto.meshes.enumerated() {
-            let nodeIdx = meshToNode[meshIdx]
+            // Use geometryId from the mesh to find the owning node.
+            let nodeIdx = geomIdToNodeIdx[meshIdx] ?? -1
             let node = nodeIdx >= 0 && nodeIdx < dto.nodes.count ? dto.nodes[nodeIdx] : nil
             renderer.upload(
                 positions: mesh.positions,

@@ -36,10 +36,9 @@ pub fn build_render_packet(mesh_data: &HashMap<GeometryId, TessellatedMeshData>)
     let mut sorted: Vec<_> = mesh_data.iter().collect();
     sorted.sort_by_key(|(id, _)| id.get());
 
-    for (i, (_geom_id, mesh)) in sorted.iter().enumerate() {
+    for (i, (geom_id, mesh)) in sorted.iter().enumerate() {
         let mesh_id = i as u32;
 
-        // Convert f32 arrays to the format RenderMesh expects.
         let positions: Vec<[f32; 3]> = mesh.positions.clone();
         let normals: Vec<[f32; 3]> = mesh.normals.clone();
         let indices: Vec<u32> = mesh.indices.clone();
@@ -52,6 +51,7 @@ pub fn build_render_packet(mesh_data: &HashMap<GeometryId, TessellatedMeshData>)
 
         meshes.push(RenderMesh {
             mesh_id,
+            geometry_id: geom_id.get(),
             positions,
             normals,
             uvs: Vec::new(),
@@ -182,6 +182,39 @@ mod tests {
                 i,
                 expected_x,
                 mesh.positions[0][0]
+            );
+        }
+    }
+
+    /// Regression: geometry_id in RenderMesh must match the original
+    /// GeometryId from the TessellationRegistry, regardless of
+    /// HashMap iteration order or model.geometries array order.
+    #[test]
+    fn geometry_id_preserved_through_sort() {
+        let mut data = HashMap::new();
+        // Insert with non-sequential IDs to stress the sort.
+        for id_val in [7u32, 2, 99, 1] {
+            data.insert(
+                GeometryId::new(id_val),
+                TessellatedMeshData {
+                    positions: vec![[id_val as f32, 0.0, 0.0]; 3],
+                    normals: vec![[0.0, 0.0, 1.0]; 3],
+                    indices: vec![0, 1, 2],
+                    bounds: BoundingBox::new(Vec3::ZERO, Vec3::ONE),
+                },
+            );
+        }
+
+        let pkt = build_render_packet(&data);
+        assert_eq!(pkt.meshes.len(), 4);
+
+        // After sorting by GeometryId, the order must be: 1, 2, 7, 99.
+        let expected_ids: Vec<u32> = vec![1, 2, 7, 99];
+        for (i, mesh) in pkt.meshes.iter().enumerate() {
+            assert_eq!(
+                mesh.geometry_id, expected_ids[i],
+                "mesh[{}].geometry_id should be {}, got {}",
+                i, expected_ids[i], mesh.geometry_id
             );
         }
     }

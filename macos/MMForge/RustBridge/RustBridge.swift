@@ -4,6 +4,7 @@ import simd
 /// Parsed document data ready for Metal upload and UI display.
 struct RenderPacketDTO {
     struct Mesh {
+        let geometryId: Int
         let positions: UnsafePointer<Float>
         let normals: UnsafePointer<Float>
         let vertexCount: Int
@@ -64,14 +65,15 @@ final class RustBridge {
         for i in 0..<meshCount {
             let vc = Int(mmf_mesh_vertex_count(doc, UInt32(i)))
             let ic = Int(mmf_mesh_index_count(doc, UInt32(i)))
+            let gid = Int(mmf_mesh_geometry_id(doc, UInt32(i)))
             guard let pos = mmf_mesh_positions(doc, UInt32(i)),
                   let nrm = mmf_mesh_normals(doc, UInt32(i)),
                   let idx = mmf_mesh_indices(doc, UInt32(i)) else {
                 continue
             }
             meshes.append(RenderPacketDTO.Mesh(
-                positions: pos, normals: nrm, vertexCount: vc,
-                indices: idx, indexCount: ic
+                geometryId: gid, positions: pos, normals: nrm,
+                vertexCount: vc, indices: idx, indexCount: ic
             ))
         }
 
