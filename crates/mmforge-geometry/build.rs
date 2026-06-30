@@ -9,9 +9,12 @@
 //! 3. The mmforge OCCT shim library (`libmmforge_occt_shim.a`) is found
 //!    **and** passes `nm`-based symbol verification:
 //!    - File exists, is non-empty, and has ar magic (`!<arch>\n`).
-//!    - `nm` (or `llvm-nm`) confirms **all** 13 required symbols are
+//!    - `nm` (or `llvm-nm`) confirms **all** 14 required symbols are
 //!      defined (T/t/D/d sections).  A partial shim that is missing even
 //!      one symbol is rejected.
+//!    - `mmforge_abi_version` is included so the Rust side can do a
+//!      runtime ABI-compatibility check (catches stale shims that pass
+//!      nm symbol-name validation but have incompatible signatures).
 //!
 //! Only then does `build.rs` emit **any** `rustc-link-search` or
 //! `rustc-link-lib` directives — for both the shim **and** the OCCT
@@ -75,17 +78,19 @@ fn detect_occt() {
         }
     };
 
-    // --- Step 2: Verify the shim library is linkable ---
-    let shim_dir = match std::env::var_os("MMFORGE_SHIM_DIR") {
-        Some(dir) => std::path::PathBuf::from(dir),
-        None => {
-            println!(
-                "cargo:warning=OCCT dirs found but MMFORGE_SHIM_DIR not set. \
-                 Build the mmforge_occt_shim library first, then set MMFORGE_SHIM_DIR \
-                 to enable real FFI. Using stubs for now."
-            );
-            return;
-        }
+    // --- Step 2: Locate the shim library ---
+    // Priority: MMFORGE_SHIM_DIR env var → auto-detect common paths.
+    let shim_dir = if let Some(dir) = std::env::var_os("MMFORGE_SHIM_DIR") {
+        std::path::PathBuf::from(dir)
+    } else if let Some(dir) = find_shim_library() {
+        dir
+    } else {
+        println!(
+            "cargo:warning=OCCT dirs found but libmmforge_occt_shim.a not found. \
+             Build crates/mmforge-geometry/shim/ with CMake, or set MMFORGE_SHIM_DIR. \
+             Using stubs for now."
+        );
+        return;
     };
 
     let shim_lib = shim_dir.join("libmmforge_occt_shim.a");
@@ -137,9 +142,14 @@ fn detect_occt() {
         println!("cargo:rustc-link-lib={lib}");
     }
 
-    // Shim library.
+    // Shim library (C++ static library — link C++ runtime).
     println!("cargo:rustc-link-search=native={}", shim_dir.display());
     println!("cargo:rustc-link-lib=static=mmforge_occt_shim");
+    if cfg!(target_os = "macos") {
+        println!("cargo:rustc-link-lib=c++");
+    } else {
+        println!("cargo:rustc-link-lib=stdc++");
+    }
 
     // Enable real FFI.
     println!("cargo:rustc-cfg=occt_found");
@@ -211,7 +221,7 @@ fn locate_occt() -> Option<OcctInfo> {
 #[cfg(feature = "occt")]
 fn parse_occt_libs() -> Vec<String> {
     let raw = std::env::var("OCCT_LIBS").unwrap_or_else(|_| {
-        "TKernel;TKMath;TKG3d;TKBRep;TKTopAlgo;TKGeomAlgo;TKGeomBase;TKShHealing;TKMesh;TKBO;TKBool;TKXSBase;TKSTEPBase;TKSTEP;TKSTEP209;TKSTEPAttr;TKXDESTEP;TKXCAF;TKCAF;TKCDF;TKService".to_string()
+        "TKernel;TKMath;TKG3d;TKBRep;TKTopAlgo;TKGeomAlgo;TKGeomBase;TKShHealing;TKMesh;TKBO;TKBool;TKXSBase;TKDESTEP;TKXCAF;TKCAF;TKCDF;TKLCAF;TKStd;TKStdL;TKXmlXCAF;TKService".to_string()
     });
     raw.split(';')
         .map(|s| s.trim().to_string())
@@ -253,6 +263,38 @@ fn try_pkg_config() -> Option<OcctInfo> {
 }
 
 // ---------------------------------------------------------------------------
+// Shim auto-detection
+// ---------------------------------------------------------------------------
+
+/// Search common paths for `libmmforge_occt_shim.a`.
+/// Returns the parent directory if found, `None` otherwise.
+#[cfg(feature = "occt")]
+fn find_shim_library() -> Option<std::path::PathBuf> {
+    let manifest_dir =
+        std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
+
+    let candidates: Vec<std::path::PathBuf> = vec![
+        // CMake default build output (with install prefix)
+        manifest_dir.join("shim/build/lib"),
+        // CMake build directory (no install)
+        manifest_dir.join("shim/build"),
+        // Cargo workspace target directory
+        manifest_dir.join("../target/shim/lib"),
+        // System-wide installs
+        std::path::PathBuf::from("/usr/local/lib"),
+        std::path::PathBuf::from("/opt/homebrew/lib"),
+    ];
+
+    for dir in &candidates {
+        let lib = dir.join("libmmforge_occt_shim.a");
+        if lib.is_file() {
+            return Some(dir.clone());
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Shim archive validation
 // ---------------------------------------------------------------------------
 
@@ -268,7 +310,9 @@ fn try_pkg_config() -> Option<OcctInfo> {
 /// time.
 #[cfg(feature = "occt")]
 const REQUIRED_SHIM_SYMBOLS: &[&str] = &[
-    // STEPControl_Reader (sys.rs block 1)
+    // C ABI version (runtime check against stale shim)
+    "mmforge_abi_version",
+    // STEPControl_Reader
     "mmforge_step_reader_new",
     "mmforge_step_reader_read_file",
     "mmforge_step_reader_transfer_roots",
@@ -277,12 +321,12 @@ const REQUIRED_SHIM_SYMBOLS: &[&str] = &[
     "mmforge_step_reader_warning_count",
     "mmforge_step_reader_get_warning",
     "mmforge_step_reader_free",
-    // TopoDS_Shape (sys.rs block 2)
+    // TopoDS_Shape
     "mmforge_shape_type",
     "mmforge_shape_bbox",
     "mmforge_shape_label",
     "mmforge_shape_free",
-    // Version (sys.rs block 3)
+    // Version
     "mmforge_occt_version",
 ];
 

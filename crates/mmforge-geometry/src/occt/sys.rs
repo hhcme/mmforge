@@ -93,6 +93,18 @@ pub enum OcctShapeType {
 }
 
 // ---------------------------------------------------------------------------
+// C ABI version
+// ---------------------------------------------------------------------------
+
+// Return the C ABI version of the linked shim library.
+// Checked at runtime to catch stale shims that passed nm validation
+// but have incompatible function signatures.
+#[cfg(occt_found)]
+unsafe extern "C" {
+    pub fn mmforge_abi_version() -> std::ffi::c_int;
+}
+
+// ---------------------------------------------------------------------------
 // STEPControl_Reader functions
 // ---------------------------------------------------------------------------
 
@@ -149,15 +161,29 @@ unsafe extern "C" {
 #[cfg(occt_found)]
 unsafe extern "C" {
     /// Get the shape type (solid, shell, face, etc.).
-    pub fn mmforge_shape_type(shape: *const TopoDsShape) -> OcctShapeType;
+    /// Requires the owning reader for context (future use).
+    pub fn mmforge_shape_type(
+        reader: *const StepControlReader,
+        shape: *const TopoDsShape,
+    ) -> OcctShapeType;
 
     /// Compute the axis-aligned bounding box.
+    /// Requires the owning reader for context (future use).
     /// Returns a status code.  On success, fills `out_bbox`.
-    pub fn mmforge_shape_bbox(shape: *const TopoDsShape, out_bbox: *mut OcctBBox) -> OcctStatus;
+    pub fn mmforge_shape_bbox(
+        reader: *const StepControlReader,
+        shape: *const TopoDsShape,
+        out_bbox: *mut OcctBBox,
+    ) -> OcctStatus;
 
     /// Get a human-readable label for the shape (from STEP product name).
+    /// Requires the owning reader — labels are stored in the XDE document.
     /// Returns a borrowed null-terminated string, or null if unavailable.
-    pub fn mmforge_shape_label(shape: *const TopoDsShape) -> *const std::ffi::c_char;
+    /// The string is valid until `mmforge_step_reader_free()` is called.
+    pub fn mmforge_shape_label(
+        reader: *const StepControlReader,
+        shape: *const TopoDsShape,
+    ) -> *const std::ffi::c_char;
 
     /// Free a `TopoDS_Shape` that was allocated by the shim.
     /// Most shapes are owned by the reader and should NOT be freed.
