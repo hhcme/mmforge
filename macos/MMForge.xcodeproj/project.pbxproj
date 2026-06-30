@@ -19,6 +19,7 @@
 		A10010 /* Colors.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10010; };
 		A10011 /* MetalRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10013; };
 		A10012 /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = B10014; };
+		A10013 /* Picking.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10016; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +37,7 @@
 		B10012 /* MMForge-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "MMForge-Bridging-Header.h"; sourceTree = "<group>"; };
 		B10013 /* MetalRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalRenderer.swift; sourceTree = "<group>"; };
 		B10014 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
+		B10016 /* Picking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Picking.swift; sourceTree = "<group>"; };
 		B10015 /* mmforge_bridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = mmforge_bridge.h; sourceTree = "<group>"; };
 		C10001 /* MMForge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MMForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -107,6 +109,7 @@
 				B10008 /* MetalViewPlaceholder.swift */,
 				B10013 /* MetalRenderer.swift */,
 				B10014 /* Shaders.metal */,
+				B10016 /* Picking.swift */,
 			);
 			path = Metal;
 			sourceTree = "<group>";
@@ -210,6 +213,7 @@
 				A10010 /* Colors.swift in Sources */,
 				A10011 /* MetalRenderer.swift in Sources */,
 				A10012 /* Shaders.metal in Sources */,
+				A10013 /* Picking.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

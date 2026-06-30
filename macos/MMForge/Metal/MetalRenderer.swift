@@ -123,6 +123,8 @@ struct GPUMesh {
     let nodeIndex: Int
     let boundsMin: simd_float3
     let boundsMax: simd_float3
+    /// BVH for CPU-side ray–triangle picking.
+    let bvh: MeshBVH
 }
 
 // MARK: - MetalRenderer
@@ -347,10 +349,17 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
         let ibSize = indexCount * MemoryLayout<UInt32>.size
         guard let ib = device.makeBuffer(bytes: indices, length: ibSize, options: .storageModeShared) else { return }
+
+        // Copy positions/indices to CPU arrays for BVH picking.
+        let cpuPositions = Array(UnsafeBufferPointer(start: positions, count: vertexCount * 3))
+        let cpuIndices = Array(UnsafeBufferPointer(start: indices, count: indexCount))
+        let bvh = buildMeshBVH(positions: cpuPositions, indices: cpuIndices)
+
         gpuMeshes.append(GPUMesh(
             vertexBuffer: vb, indexBuffer: ib, indexCount: indexCount,
             visible: !hiddenNodeIndices.contains(nodeIndex),
-            nodeIndex: nodeIndex, boundsMin: boundsMin, boundsMax: boundsMax
+            nodeIndex: nodeIndex, boundsMin: boundsMin, boundsMax: boundsMax,
+            bvh: bvh
         ))
     }
 
@@ -443,164 +452,80 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     // MARK: - Picking
 
+    /// Unproject a screen point to a world-space ray.
+    private func screenToRay(at viewSize: CGSize, point: CGPoint) -> Ray {
+        let aspect = Float(viewSize.width / max(viewSize.height, 1))
+        let invVP = (camera.projectionMatrix(aspect: aspect) * camera.viewMatrix).inverse
+        let ndcX = Float(point.x / viewSize.width) * 2 - 1
+        let ndcY = Float(1 - point.y / viewSize.height) * 2 - 1
+        let near4 = invVP * simd_float4(ndcX, ndcY, -1, 1)
+        let far4 = invVP * simd_float4(ndcX, ndcY, 1, 1)
+        let origin = simd_float3(near4.x, near4.y, near4.z) / near4.w
+        let dir = normalize(simd_float3(far4.x, far4.y, far4.z) / far4.w - origin)
+        return Ray(origin: origin, dir: dir)
+    }
+
+    /// Compute the visible ray interval after clipping.
+    /// Returns (clipTMin, clipTMax) or nil if entire ray is clipped.
+    private func clipInterval(ray: Ray) -> (Float, Float)? {
+        guard clipPlane.w > -999990 else { return (0, .infinity) }
+        let normal = simd_float3(clipPlane.x, clipPlane.y, clipPlane.z)
+        let originDist = dot(normal, ray.origin) + clipPlane.w
+        let denom = dot(normal, ray.dir)
+        if abs(denom) < 1e-12 {
+            return originDist < 0 ? nil : (0, .infinity)
+        }
+        let tClip = -originDist / denom
+        if denom > 0 {
+            return (max(tClip, 0), .infinity)
+        } else {
+            guard tClip >= 0 else { return nil }
+            return (0, tClip)
+        }
+    }
+
+    /// Pick the node index of the closest triangle hit.
+    /// Uses BVH for fast ray–triangle intersection.
     func pickNode(at viewSize: CGSize, point: CGPoint) -> Int? {
-        let aspect = Float(viewSize.width / max(viewSize.height, 1))
-        let invVP = (camera.projectionMatrix(aspect: aspect) * camera.viewMatrix).inverse
-        let ndcX = Float(point.x / viewSize.width) * 2 - 1
-        let ndcY = Float(1 - point.y / viewSize.height) * 2 - 1
-        let near4 = invVP * simd_float4(ndcX, ndcY, -1, 1)
-        let far4 = invVP * simd_float4(ndcX, ndcY, 1, 1)
-        let rayOrigin = simd_float3(near4.x, near4.y, near4.z) / near4.w
-        let rayDir = normalize(simd_float3(far4.x, far4.y, far4.z) / far4.w - rayOrigin)
+        let ray = screenToRay(at: viewSize, point: point)
+        guard let (clipMin, clipMax) = clipInterval(ray: ray) else { return nil }
 
-        // Compute the visible ray interval [clipTMin, clipTMax] after
-        // clipping.  The clip plane defines a half-space:
-        //   visible when dot(n, P) + d >= 0
-        // For a ray P = O + t*D, the signed distance is:
-        //   dist(t) = dot(n, O+tD) + d = (dot(n,O)+d) + t*dot(n,D)
-        //
-        // denom = dot(n, D):
-        //   denom > 0: ray goes from clipped → visible at tClip.
-        //              Visible interval: [tClip, +∞)
-        //   denom < 0: ray goes from visible → clipped at tClip.
-        //              Visible interval: [0, tClip]
-        //   denom ≈ 0: ray parallel to plane.
-        //              If origin is clipped → entire ray invisible.
-        //              If origin is visible → entire ray visible.
-        let clipping = clipPlane.w > -999990
-        var clipTMin: Float = 0
-        var clipTMax: Float = .infinity
-
-        if clipping {
-            let normal = simd_float3(clipPlane.x, clipPlane.y, clipPlane.z)
-            let originDist = dot(normal, rayOrigin) + clipPlane.w
-            let denom = dot(normal, rayDir)
-
-            if abs(denom) < 1e-12 {
-                // Ray parallel to plane — check which side origin is on.
-                if originDist < 0 {
-                    return nil // entire ray is in clipped half-space
-                }
-                // originDist >= 0 → entire ray visible, clipTMin=0, clipTMax=∞
-            } else {
-                let tClip = -originDist / denom
-                if denom > 0 {
-                    // Ray crosses from clipped → visible at tClip.
-                    // Visible interval: [max(tClip, 0), ∞)
-                    clipTMin = max(tClip, 0)
-                    // If origin is already visible (originDist >= 0),
-                    // tClip < 0 and clipTMin stays 0.
-                } else {
-                    // denom < 0: ray crosses from visible → clipped at tClip.
-                    // Visible interval: [0, tClip]
-                    clipTMax = tClip
-                    // If origin is already clipped (originDist < 0),
-                    // tClip < 0 and clipTMax < 0 → no visible interval.
-                    if clipTMax < 0 {
-                        return nil
-                    }
-                }
-            }
-        }
-
-        var closestDist: Float = .infinity
-        var closestNode: Int?
+        var bestT = clipMax
+        var bestNode: Int?
 
         for mesh in gpuMeshes where mesh.visible {
-            // Ray–AABB intersection: returns [tmin, tmax] interval.
-            guard let (tmin, tmax) = rayAABBIntersectRange(
-                origin: rayOrigin, dir: rayDir,
-                bmin: mesh.boundsMin, bmax: mesh.boundsMax
-            ) else { continue }
+            // Quick AABB reject.
+            guard rayAABB(ray: ray, bmin: mesh.boundsMin, bmax: mesh.boundsMax,
+                          tMin: clipMin, tMax: bestT) else { continue }
 
-            // Intersect AABB interval with clip visible interval:
-            //   visible = [max(tmin, clipTMin), min(tmax, clipTMax)]
-            let visibleMin = max(tmin, clipTMin)
-            let visibleMax = min(tmax, clipTMax)
-            if visibleMin > visibleMax { continue } // fully clipped
-
-            // The first visible hit is at visibleMin (clamped to ≥ 0).
-            let t = max(visibleMin, 0)
-            if t < closestDist {
-                closestDist = t
-                closestNode = mesh.nodeIndex
+            // BVH triangle hit.
+            if let hit = mesh.bvh.intersect(ray: ray, tMin: clipMin, tMax: bestT) {
+                bestT = hit.t
+                bestNode = mesh.nodeIndex
             }
         }
-
-        return closestNode
+        return bestNode
     }
 
-    /// Pick a world-space point on the closest visible mesh AABB.
-    /// Used for measurement point picking.  Returns the ray–AABB
-    /// intersection point (first visible hit).
+    /// Pick the closest triangle hit point on any visible mesh.
+    /// Used for measurement point picking.
     func pickWorldPoint(at viewSize: CGSize, point: CGPoint) -> simd_float3? {
-        let aspect = Float(viewSize.width / max(viewSize.height, 1))
-        let invVP = (camera.projectionMatrix(aspect: aspect) * camera.viewMatrix).inverse
-        let ndcX = Float(point.x / viewSize.width) * 2 - 1
-        let ndcY = Float(1 - point.y / viewSize.height) * 2 - 1
-        let near4 = invVP * simd_float4(ndcX, ndcY, -1, 1)
-        let far4 = invVP * simd_float4(ndcX, ndcY, 1, 1)
-        let rayOrigin = simd_float3(near4.x, near4.y, near4.z) / near4.w
-        let rayDir = normalize(simd_float3(far4.x, far4.y, far4.z) / far4.w - rayOrigin)
+        let ray = screenToRay(at: viewSize, point: point)
+        guard let (clipMin, clipMax) = clipInterval(ray: ray) else { return nil }
 
-        // Compute clip interval (same logic as pickNode).
-        let clipping = clipPlane.w > -999990
-        var clipTMin: Float = 0
-        var clipTMax: Float = .infinity
-        if clipping {
-            let normal = simd_float3(clipPlane.x, clipPlane.y, clipPlane.z)
-            let originDist = dot(normal, rayOrigin) + clipPlane.w
-            let denom = dot(normal, rayDir)
-            if abs(denom) < 1e-12 {
-                if originDist < 0 { return nil }
-            } else {
-                let tClip = -originDist / denom
-                if denom > 0 { clipTMin = max(tClip, 0) }
-                else { clipTMax = tClip; if clipTMax < 0 { return nil } }
-            }
-        }
-
-        var closestDist: Float = .infinity
-        var closestPoint: simd_float3?
+        var bestT = clipMax
+        var bestPoint: simd_float3?
 
         for mesh in gpuMeshes where mesh.visible {
-            guard let (tmin, tmax) = rayAABBIntersectRange(
-                origin: rayOrigin, dir: rayDir,
-                bmin: mesh.boundsMin, bmax: mesh.boundsMax
-            ) else { continue }
-            let visibleMin = max(tmin, clipTMin)
-            let visibleMax = min(tmax, clipTMax)
-            if visibleMin > visibleMax { continue }
-            let t = max(visibleMin, 0)
-            if t < closestDist {
-                closestDist = t
-                closestPoint = rayOrigin + rayDir * t
-            }
-        }
-        return closestPoint
-    }
+            guard rayAABB(ray: ray, bmin: mesh.boundsMin, bmax: mesh.boundsMax,
+                          tMin: clipMin, tMax: bestT) else { continue }
 
-    /// Slab-method ray–AABB intersection.
-    /// Returns the (tmin, tmax) interval of the intersection, or nil.
-    private func rayAABBIntersectRange(
-        origin: simd_float3, dir: simd_float3,
-        bmin: simd_float3, bmax: simd_float3
-    ) -> (Float, Float)? {
-        var tmin: Float = -.infinity, tmax: Float = .infinity
-        for axis in 0..<3 {
-            let o = origin[axis], d = dir[axis], lo = bmin[axis], hi = bmax[axis]
-            if abs(d) < 1e-12 {
-                if o < lo || o > hi { return nil }
-            } else {
-                var t1 = (lo - o) / d, t2 = (hi - o) / d
-                if t1 > t2 { swap(&t1, &t2) }
-                tmin = max(tmin, t1)
-                tmax = min(tmax, t2)
-                if tmin > tmax { return nil }
+            if let hit = mesh.bvh.intersect(ray: ray, tMin: clipMin, tMax: bestT) {
+                bestT = hit.t
+                bestPoint = hit.point
             }
         }
-        guard tmax >= 0 else { return nil }
-        return (max(tmin, 0), tmax)
+        return bestPoint
     }
 
     // MARK: - MTKViewDelegate
