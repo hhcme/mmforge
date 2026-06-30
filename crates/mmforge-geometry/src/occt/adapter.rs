@@ -289,6 +289,181 @@ pub fn status_to_result(status: super::sys::OcctStatus) -> Result<(), OcctError>
 }
 
 #[cfg(occt_found)]
+// ---------------------------------------------------------------------------
+// Tessellation (real calls only when occt_found)
+// ---------------------------------------------------------------------------
+
+/// Result of tessellating a B-Rep shape into a triangle mesh.
+///
+/// Owns the mesh data (positions, normals, indices).  The underlying
+/// OCCT `MmfMesh` is freed on drop.
+#[cfg(occt_found)]
+pub struct TessellatedMesh {
+    positions: Vec<f32>,
+    normals: Vec<f32>,
+    indices: Vec<i32>,
+    bounds: mmforge_core::math::BoundingBox,
+    mesh_ptr: *mut super::sys::MmfMesh,
+}
+
+#[cfg(occt_found)]
+impl std::fmt::Debug for TessellatedMesh {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TessellatedMesh")
+            .field("vertices", &(self.positions.len() / 3))
+            .field("triangles", &(self.indices.len() / 3))
+            .field("bounds", &self.bounds)
+            .finish()
+    }
+}
+
+#[cfg(occt_found)]
+impl TessellatedMesh {
+    /// Tessellate a shape with the given linear deflection.
+    ///
+    /// The shape must have been obtained from the same reader.
+    pub fn tessellate(
+        reader: &StepReaderAdapter,
+        shape: &ShapeHandle<'_>,
+        linear_deflection: f64,
+    ) -> Result<Self, OcctError> {
+        let mut mesh_ptr: *mut super::sys::MmfMesh = std::ptr::null_mut();
+        let status = unsafe {
+            super::sys::mmforge_tessellate_shape(
+                reader.ptr,
+                shape.ptr,
+                linear_deflection,
+                &mut mesh_ptr,
+            )
+        };
+        status_to_result(status)?;
+
+        if mesh_ptr.is_null() {
+            return Err(OcctError::ShapeError(
+                "tessellation returned null mesh".to_string(),
+            ));
+        }
+
+        let vertex_count = unsafe { super::sys::mmforge_mesh_vertex_count(mesh_ptr) } as usize;
+        let triangle_count = unsafe { super::sys::mmforge_mesh_triangle_count(mesh_ptr) } as usize;
+
+        // Copy positions.
+        let positions = {
+            let src = unsafe { super::sys::mmforge_mesh_positions(mesh_ptr) };
+            if src.is_null() || vertex_count == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(src, vertex_count * 3).to_vec() }
+            }
+        };
+
+        // Copy normals.
+        let normals = {
+            let src = unsafe { super::sys::mmforge_mesh_normals(mesh_ptr) };
+            if src.is_null() || vertex_count == 0 {
+                vec![0.0f32; vertex_count * 3]
+            } else {
+                unsafe { std::slice::from_raw_parts(src, vertex_count * 3).to_vec() }
+            }
+        };
+
+        // Copy indices.
+        let indices = {
+            let src = unsafe { super::sys::mmforge_mesh_indices(mesh_ptr) };
+            if src.is_null() || triangle_count == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(src, triangle_count * 3).to_vec() }
+            }
+        };
+
+        // Copy bounding box.
+        let mut raw_bbox = super::sys::OcctBBox {
+            min_x: 0.0,
+            min_y: 0.0,
+            min_z: 0.0,
+            max_x: 0.0,
+            max_y: 0.0,
+            max_z: 0.0,
+        };
+        let bbox_status = unsafe { super::sys::mmforge_mesh_bbox(mesh_ptr, &mut raw_bbox) };
+        let bounds = if bbox_status == super::sys::OcctStatus::Ok {
+            mmforge_core::math::BoundingBox::new(
+                glam::Vec3::new(
+                    raw_bbox.min_x as f32,
+                    raw_bbox.min_y as f32,
+                    raw_bbox.min_z as f32,
+                ),
+                glam::Vec3::new(
+                    raw_bbox.max_x as f32,
+                    raw_bbox.max_y as f32,
+                    raw_bbox.max_z as f32,
+                ),
+            )
+        } else {
+            mmforge_core::math::BoundingBox::EMPTY
+        };
+
+        Ok(Self {
+            positions,
+            normals,
+            indices,
+            bounds,
+            mesh_ptr,
+        })
+    }
+
+    pub fn positions(&self) -> &[[f32; 3]] {
+        // SAFETY: positions is always a multiple of 3.
+        unsafe {
+            std::slice::from_raw_parts(
+                self.positions.as_ptr() as *const [f32; 3],
+                self.positions.len() / 3,
+            )
+        }
+    }
+
+    pub fn normals(&self) -> &[[f32; 3]] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self.normals.as_ptr() as *const [f32; 3],
+                self.normals.len() / 3,
+            )
+        }
+    }
+
+    pub fn indices(&self) -> &[[i32; 3]] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self.indices.as_ptr() as *const [i32; 3],
+                self.indices.len() / 3,
+            )
+        }
+    }
+
+    pub fn vertex_count(&self) -> usize {
+        self.positions.len() / 3
+    }
+
+    pub fn triangle_count(&self) -> usize {
+        self.indices.len() / 3
+    }
+
+    pub fn bounds(&self) -> mmforge_core::math::BoundingBox {
+        self.bounds
+    }
+}
+
+#[cfg(occt_found)]
+impl Drop for TessellatedMesh {
+    fn drop(&mut self) {
+        if !self.mesh_ptr.is_null() {
+            unsafe { super::sys::mmforge_mesh_free(self.mesh_ptr) };
+        }
+    }
+}
+
+#[cfg(occt_found)]
 fn occt_to_shape_type(raw: super::sys::OcctShapeType) -> ShapeType {
     match raw {
         super::sys::OcctShapeType::Compound => ShapeType::Compound,
@@ -396,6 +571,15 @@ mod tests {
             crate::occt::sys::mmforge_shape_bbox as *const () as usize,
             crate::occt::sys::mmforge_shape_label as *const () as usize,
             crate::occt::sys::mmforge_shape_free as *const () as usize,
+            // Tessellation
+            crate::occt::sys::mmforge_tessellate_shape as *const () as usize,
+            crate::occt::sys::mmforge_mesh_vertex_count as *const () as usize,
+            crate::occt::sys::mmforge_mesh_triangle_count as *const () as usize,
+            crate::occt::sys::mmforge_mesh_positions as *const () as usize,
+            crate::occt::sys::mmforge_mesh_normals as *const () as usize,
+            crate::occt::sys::mmforge_mesh_indices as *const () as usize,
+            crate::occt::sys::mmforge_mesh_bbox as *const () as usize,
+            crate::occt::sys::mmforge_mesh_free as *const () as usize,
             // Version
             crate::occt::sys::mmforge_occt_version as *const () as usize,
         ];
@@ -417,5 +601,76 @@ mod tests {
             !version.is_empty(),
             "OCCT version string is empty — shim may be misconfigured"
         );
+    }
+
+    /// E2E tessellation test: STEP fixture → read → tessellate → verify mesh.
+    #[cfg(occt_found)]
+    #[test]
+    fn tessellate_step_fixture() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("PQ-04909-A.STEP");
+
+        assert!(
+            fixture.exists(),
+            "STEP fixture missing at {}",
+            fixture.display()
+        );
+
+        let mut reader = StepReaderAdapter::new().expect("new reader");
+        reader.read_file(&fixture).expect("read_file");
+        reader.transfer_roots().expect("transfer_roots");
+
+        let count = reader.root_count();
+        assert!(count > 0, "expected at least one root shape");
+
+        for i in 0..count {
+            let shape = reader.get_root(i).expect("get_root");
+            let shape_bounds = shape.bbox().expect("bbox");
+
+            // Tessellate with standard quality.
+            let quality = crate::tessellation::TessellationQuality::Standard;
+            let deflection = quality.linear_deflection(&shape_bounds) as f64;
+
+            let mesh =
+                TessellatedMesh::tessellate(&reader, &shape, deflection).expect("tessellate");
+
+            // Verify mesh has vertices and triangles.
+            assert!(mesh.vertex_count() > 0, "mesh has no vertices");
+            assert!(mesh.triangle_count() > 0, "mesh has no triangles");
+
+            // Verify bounds are valid.
+            let mesh_bounds = mesh.bounds();
+            assert!(mesh_bounds.is_valid(), "mesh bounds invalid");
+
+            // Verify positions are finite.
+            for pos in mesh.positions() {
+                assert!(
+                    pos[0].is_finite() && pos[1].is_finite() && pos[2].is_finite(),
+                    "non-finite position: {pos:?}"
+                );
+            }
+
+            // Verify normals are non-zero.
+            for norm in mesh.normals() {
+                let len = (norm[0] * norm[0] + norm[1] * norm[1] + norm[2] * norm[2]).sqrt();
+                assert!(len > 0.001, "zero-length normal: {norm:?}");
+            }
+
+            // Verify indices are in range.
+            let vc = mesh.vertex_count() as i32;
+            for tri in mesh.indices() {
+                assert!(tri[0] >= 0 && tri[0] < vc, "index out of range: {:?}", tri);
+                assert!(tri[1] >= 0 && tri[1] < vc, "index out of range: {:?}", tri);
+                assert!(tri[2] >= 0 && tri[2] < vc, "index out of range: {:?}", tri);
+            }
+
+            eprintln!(
+                "tessellate[{i}]: {} vertices, {} triangles, bounds={:?}",
+                mesh.vertex_count(),
+                mesh.triangle_count(),
+                mesh_bounds,
+            );
+        }
     }
 }

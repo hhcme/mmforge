@@ -23,8 +23,14 @@
 // --- OCCT headers ---
 #include <Bnd_Box.hxx>
 #include <BRepBndLib.hxx>
+#include <BRep_Tool.hxx>
+#include <BRepMesh_IncrementalMesh.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <Interface_Check.hxx>
+#include <Poly_Triangulation.hxx>
 #include <Standard_Version.hxx>
 #include <STEPCAFControl_Reader.hxx>
 #include <TCollection_AsciiString.hxx>
@@ -34,6 +40,10 @@
 #include <TDataStd_Name.hxx>
 #include <TDocStd_Document.hxx>
 #include <TopAbs_ShapeEnum.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopLoc_Location.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 #include <Transfer_Binder.hxx>
 #include <Transfer_TransientProcess.hxx>
@@ -87,6 +97,19 @@ struct ReaderWrapper {
     std::vector<TopoDS_Shape> roots;
     std::vector<std::string>  warnings;
     LabelMap                  labels;
+};
+
+/**
+ * Tessellated mesh data.
+ *
+ * Owned by the opaque MmfMesh handle.  positions/normals/indices
+ * are flat arrays; bbox is computed from the vertex positions.
+ */
+struct MeshData {
+    std::vector<float> positions;  // [vertex_count * 3]
+    std::vector<float> normals;    // [vertex_count * 3]
+    std::vector<int>   indices;    // [triangle_count * 3]
+    MmfOcctBBox        bbox;
 };
 
 MmfOcctShapeType mapShapeType(TopAbs_ShapeEnum t) noexcept {
@@ -348,6 +371,195 @@ const char* mmforge_shape_label(const MmfStepReader* reader,
 
 void mmforge_shape_free(MmfShape* /*shape*/) {
     // No-op: shapes are owned by the reader's roots vector.
+}
+
+// ======================================================================
+// Tessellation
+// ======================================================================
+
+MmfOcctError mmforge_tessellate_shape(
+    const MmfStepReader* /*reader*/,
+    const MmfShape* shape,
+    double linear_deflection,
+    MmfMesh** out_mesh)
+{
+    if (!shape || !out_mesh)
+        return MMF_NULL_ARGUMENT;
+
+    auto* s = const_cast<TopoDS_Shape*>(
+        reinterpret_cast<const TopoDS_Shape*>(shape));
+
+    try {
+        // 1. Generate triangulation.
+        BRepMesh_IncrementalMesh mesher(*s, linear_deflection);
+        if (!mesher.IsDone())
+            return MMF_INTERNAL_ERROR;
+
+        auto* mesh = new (std::nothrow) MeshData();
+        if (!mesh)
+            return MMF_INTERNAL_ERROR;
+
+        // 2. Iterate over all faces.
+        for (TopExp_Explorer exp(*s, TopAbs_FACE); exp.More(); exp.Next()) {
+            TopoDS_Face face = TopoDS::Face(exp.Current());
+            TopLoc_Location loc;
+            Handle(Poly_Triangulation) tri = BRep_Tool::Triangulation(face, loc);
+            if (tri.IsNull())
+                continue;  // Skip faces with no triangulation.
+
+            const int vertexOffset =
+                static_cast<int>(mesh->positions.size() / 3);
+
+            // Compute the transform for this face's location.
+            gp_Trsf trsf;
+            if (!loc.IsIdentity())
+                trsf = loc.Transformation();
+
+            // 3. Extract vertices.
+            const int nbNodes = tri->NbNodes();
+            for (int i = 1; i <= nbNodes; ++i) {
+                gp_Pnt p = tri->Node(i);
+                if (!loc.IsIdentity())
+                    p.Transform(trsf);
+                mesh->positions.push_back(static_cast<float>(p.X()));
+                mesh->positions.push_back(static_cast<float>(p.Y()));
+                mesh->positions.push_back(static_cast<float>(p.Z()));
+            }
+
+            // 4. Extract normals (or compute face normal as fallback).
+            if (tri->HasNormals()) {
+                for (int i = 1; i <= nbNodes; ++i) {
+                    gp_Dir n = tri->Normal(i);
+                    mesh->normals.push_back(static_cast<float>(n.X()));
+                    mesh->normals.push_back(static_cast<float>(n.Y()));
+                    mesh->normals.push_back(static_cast<float>(n.Z()));
+                }
+            } else {
+                // Fallback: compute a face-level normal via cross product
+                // of first triangle, or (0,0,1) if degenerate.
+                float nx = 0.f, ny = 0.f, nz = 1.f;
+                if (tri->NbTriangles() >= 1 && nbNodes >= 3) {
+                    gp_Pnt p0 = tri->Node(1);
+                    gp_Pnt p1 = tri->Node(2);
+                    gp_Pnt p2 = tri->Node(3);
+                    if (!loc.IsIdentity()) {
+                        p0.Transform(trsf);
+                        p1.Transform(trsf);
+                        p2.Transform(trsf);
+                    }
+                    float ax = static_cast<float>(p1.X() - p0.X());
+                    float ay = static_cast<float>(p1.Y() - p0.Y());
+                    float az = static_cast<float>(p1.Z() - p0.Z());
+                    float bx = static_cast<float>(p2.X() - p0.X());
+                    float by = static_cast<float>(p2.Y() - p0.Y());
+                    float bz = static_cast<float>(p2.Z() - p0.Z());
+                    nx = ay * bz - az * by;
+                    ny = az * bx - ax * bz;
+                    nz = ax * by - ay * bx;
+                    float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+                    if (len > 1e-12f) {
+                        nx /= len;  ny /= len;  nz /= len;
+                    } else {
+                        nx = 0.f;  ny = 0.f;  nz = 1.f;
+                    }
+                }
+                for (int i = 0; i < nbNodes; ++i) {
+                    mesh->normals.push_back(nx);
+                    mesh->normals.push_back(ny);
+                    mesh->normals.push_back(nz);
+                }
+            }
+
+            // 5. Extract triangle indices (OCCT is 1-based → 0-based).
+            const int nbTris = tri->NbTriangles();
+            for (int i = 1; i <= nbTris; ++i) {
+                Standard_Integer n1, n2, n3;
+                tri->Triangle(i).Get(n1, n2, n3);
+
+                // Orient faces correctly: reverse winding if face is reversed.
+                if (face.Orientation() == TopAbs_REVERSED) {
+                    mesh->indices.push_back(vertexOffset + n1 - 1);
+                    mesh->indices.push_back(vertexOffset + n3 - 1);
+                    mesh->indices.push_back(vertexOffset + n2 - 1);
+                } else {
+                    mesh->indices.push_back(vertexOffset + n1 - 1);
+                    mesh->indices.push_back(vertexOffset + n2 - 1);
+                    mesh->indices.push_back(vertexOffset + n3 - 1);
+                }
+            }
+        }
+
+        // 6. Compute bounding box from positions.
+        if (!mesh->positions.empty()) {
+            float minX = mesh->positions[0], maxX = mesh->positions[0];
+            float minY = mesh->positions[1], maxY = mesh->positions[1];
+            float minZ = mesh->positions[2], maxZ = mesh->positions[2];
+            for (size_t i = 3; i < mesh->positions.size(); i += 3) {
+                float x = mesh->positions[i];
+                float y = mesh->positions[i + 1];
+                float z = mesh->positions[i + 2];
+                if (x < minX) minX = x;  if (x > maxX) maxX = x;
+                if (y < minY) minY = y;  if (y > maxY) maxY = y;
+                if (z < minZ) minZ = z;  if (z > maxZ) maxZ = z;
+            }
+            mesh->bbox.min_x = static_cast<double>(minX);
+            mesh->bbox.min_y = static_cast<double>(minY);
+            mesh->bbox.min_z = static_cast<double>(minZ);
+            mesh->bbox.max_x = static_cast<double>(maxX);
+            mesh->bbox.max_y = static_cast<double>(maxY);
+            mesh->bbox.max_z = static_cast<double>(maxZ);
+        }
+
+        *out_mesh = reinterpret_cast<MmfMesh*>(mesh);
+        return MMF_OK;
+    } catch (...) {
+        return MMF_INTERNAL_ERROR;
+    }
+}
+
+int mmforge_mesh_vertex_count(const MmfMesh* mesh) {
+    if (!mesh) return 0;
+    auto* m = reinterpret_cast<const MeshData*>(mesh);
+    return static_cast<int>(m->positions.size() / 3);
+}
+
+int mmforge_mesh_triangle_count(const MmfMesh* mesh) {
+    if (!mesh) return 0;
+    auto* m = reinterpret_cast<const MeshData*>(mesh);
+    return static_cast<int>(m->indices.size() / 3);
+}
+
+const float* mmforge_mesh_positions(const MmfMesh* mesh) {
+    if (!mesh) return nullptr;
+    auto* m = reinterpret_cast<const MeshData*>(mesh);
+    return m->positions.data();
+}
+
+const float* mmforge_mesh_normals(const MmfMesh* mesh) {
+    if (!mesh) return nullptr;
+    auto* m = reinterpret_cast<const MeshData*>(mesh);
+    return m->normals.data();
+}
+
+const int* mmforge_mesh_indices(const MmfMesh* mesh) {
+    if (!mesh) return nullptr;
+    auto* m = reinterpret_cast<const MeshData*>(mesh);
+    return m->indices.data();
+}
+
+MmfOcctError mmforge_mesh_bbox(const MmfMesh* mesh, MmfOcctBBox* out_bbox) {
+    if (!mesh || !out_bbox)
+        return MMF_NULL_ARGUMENT;
+    auto* m = reinterpret_cast<const MeshData*>(mesh);
+    if (m->positions.empty())
+        return MMF_INTERNAL_ERROR;
+    *out_bbox = m->bbox;
+    return MMF_OK;
+}
+
+void mmforge_mesh_free(MmfMesh* mesh) {
+    if (!mesh) return;
+    delete reinterpret_cast<MeshData*>(mesh);
 }
 
 // ======================================================================

@@ -188,6 +188,61 @@ const char* mmforge_shape_label(const MmfStepReader* reader,
 void mmforge_shape_free(MmfShape* shape);
 
 /* ------------------------------------------------------------------ */
+/*  Tessellation                                                       */
+/* ------------------------------------------------------------------ */
+
+/** Opaque handle to a tessellated mesh. */
+typedef struct MmfMesh MmfMesh;
+
+/**
+ * Tessellate a shape using BRepMesh_IncrementalMesh.
+ * @param reader       Owning reader (for context).
+ * @param shape        Borrowed shape pointer.
+ * @param linear_deflection  Linear deflection for tessellation quality.
+ * @param out_mesh     Set to the resulting mesh on success.
+ * @return MMF_OK on success.
+ */
+MmfOcctError mmforge_tessellate_shape(
+    const MmfStepReader* reader,
+    const MmfShape* shape,
+    double linear_deflection,
+    MmfMesh** out_mesh);
+
+/** Number of vertices in the mesh. */
+int mmforge_mesh_vertex_count(const MmfMesh* mesh);
+
+/** Number of triangles in the mesh. */
+int mmforge_mesh_triangle_count(const MmfMesh* mesh);
+
+/**
+ * Vertex positions as flat float array [x0,y0,z0, x1,y1,z1, ...].
+ * Returns pointer to internal buffer (valid until mesh is freed).
+ * Returns NULL if mesh is NULL.
+ */
+const float* mmforge_mesh_positions(const MmfMesh* mesh);
+
+/**
+ * Vertex normals as flat float array [nx0,ny0,nz0, ...].
+ * Returns pointer to internal buffer.  Returns NULL if mesh is NULL.
+ */
+const float* mmforge_mesh_normals(const MmfMesh* mesh);
+
+/**
+ * Triangle indices as flat int array [i0,i1,i2, ...].
+ * Returns pointer to internal buffer.  Returns NULL if mesh is NULL.
+ */
+const int* mmforge_mesh_indices(const MmfMesh* mesh);
+
+/**
+ * Axis-aligned bounding box of the tessellated mesh.
+ * @return MMF_OK on success.
+ */
+MmfOcctError mmforge_mesh_bbox(const MmfMesh* mesh, MmfOcctBBox* out_bbox);
+
+/** Free a mesh.  Passing NULL is a no-op. */
+void mmforge_mesh_free(MmfMesh* mesh);
+
+/* ------------------------------------------------------------------ */
 /*  Version / build info                                               */
 /* ------------------------------------------------------------------ */
 

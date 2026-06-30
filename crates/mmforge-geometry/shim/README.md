@@ -1,7 +1,8 @@
 # mmforge_occt_shim — OpenCASCADE C++ Bridge
 
-Static library bridging the 13 `extern "C"` functions declared in
+Static library bridging the 21 `extern "C"` functions declared in
 `mmforge-geometry/src/occt/sys.rs` to real OpenCASCADE C++ API calls.
+Includes STEP reading, shape queries, and B-Rep tessellation.
 
 ## Prerequisites
 
@@ -58,13 +59,15 @@ If auto-detect finds `libmmforge_occt_shim.a`, it validates the archive
 
 ```
 Rust (sys.rs)           C (shim header)        C++ (shim impl)         OCCT
-┌──────────────┐       ┌──────────────┐       ┌──────────────┐       ┌─────────┐
-│ extern "C"   │──────>│ MmfStepReader│──────>│ ReaderWrapper│──────>│ STEP    │
-│ declarations │       │ MmfShape     │       │ cafReader    │       │ Control │
-│              │       │ MmfOcctError │       │ shapeTool    │       │ XCAF    │
-│              │       │ MmfOcctBBox  │       │ roots/warns  │       │ BRep    │
-│              │       │ MmfOcctShape │       │ labels       │       │ Bnd     │
-└──────────────┘       └──────────────┘       └──────────────┘       └─────────┘
+┌──────────────┐       ┌──────────────┐       ┌──────────────┐       ┌──────────────┐
+│ extern "C"   │──────>│ MmfStepReader│──────>│ ReaderWrapper│──────>│ STEP Control │
+│ declarations │       │ MmfShape     │       │ cafReader    │       │ XCAF         │
+│              │       │ MmfOcctError │       │ shapeTool    │       │ BRep / Bnd   │
+│              │       │ MmfOcctBBox  │       │ roots/warns  │       │ BRepMesh     │
+│              │       │ MmfMesh      │──────>│ MeshData     │──────>│ Poly_Tri     │
+│              │       │ MmfOcctShape │       │ positions    │       │ TopExp       │
+│              │       │              │       │ normals/idx  │       │ TopLoc       │
+└──────────────┘       └──────────────┘       └──────────────┘       └──────────────┘
 ```
 
 ## Verification
@@ -72,7 +75,7 @@ Rust (sys.rs)           C (shim header)        C++ (shim impl)         OCCT
 ```bash
 # After building the shim:
 nm -g --defined-only build/lib/libmmforge_occt_shim.a | grep mmforge_
-# Should show all 13 symbols
+# Should show all 21 symbols
 
 # With real OCCT:
 OCCT_INCLUDE_DIR=/opt/occt/include \

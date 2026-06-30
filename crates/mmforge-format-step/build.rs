@@ -47,6 +47,14 @@ const REQUIRED_SHIM_SYMBOLS: &[&str] = &[
     "mmforge_shape_bbox",
     "mmforge_shape_label",
     "mmforge_shape_free",
+    "mmforge_tessellate_shape",
+    "mmforge_mesh_vertex_count",
+    "mmforge_mesh_triangle_count",
+    "mmforge_mesh_positions",
+    "mmforge_mesh_normals",
+    "mmforge_mesh_indices",
+    "mmforge_mesh_bbox",
+    "mmforge_mesh_free",
     "mmforge_occt_version",
 ];
 

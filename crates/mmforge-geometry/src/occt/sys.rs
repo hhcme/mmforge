@@ -193,6 +193,50 @@ unsafe extern "C" {
 }
 
 // ---------------------------------------------------------------------------
+// Tessellation functions
+// ---------------------------------------------------------------------------
+
+/// Opaque handle to a tessellated mesh (owned by the shim).
+#[repr(C)]
+pub struct MmfMesh {
+    _private: [u8; 0],
+}
+
+#[cfg(occt_found)]
+unsafe extern "C" {
+    /// Tessellate a shape using BRepMesh_IncrementalMesh.
+    /// Returns a mesh handle on success.  The mesh owns its buffers.
+    pub fn mmforge_tessellate_shape(
+        reader: *const StepControlReader,
+        shape: *const TopoDsShape,
+        linear_deflection: std::ffi::c_double,
+        out_mesh: *mut *mut MmfMesh,
+    ) -> OcctStatus;
+
+    /// Number of vertices in the mesh.
+    pub fn mmforge_mesh_vertex_count(mesh: *const MmfMesh) -> std::ffi::c_int;
+
+    /// Number of triangles in the mesh.
+    pub fn mmforge_mesh_triangle_count(mesh: *const MmfMesh) -> std::ffi::c_int;
+
+    /// Vertex positions as flat float array [x0,y0,z0, ...].
+    /// Returns pointer to internal buffer (valid until mesh is freed).
+    pub fn mmforge_mesh_positions(mesh: *const MmfMesh) -> *const std::ffi::c_float;
+
+    /// Vertex normals as flat float array [nx0,ny0,nz0, ...].
+    pub fn mmforge_mesh_normals(mesh: *const MmfMesh) -> *const std::ffi::c_float;
+
+    /// Triangle indices as flat int array [i0,i1,i2, ...].
+    pub fn mmforge_mesh_indices(mesh: *const MmfMesh) -> *const std::ffi::c_int;
+
+    /// Axis-aligned bounding box of the tessellated mesh.
+    pub fn mmforge_mesh_bbox(mesh: *const MmfMesh, out_bbox: *mut OcctBBox) -> OcctStatus;
+
+    /// Free a mesh.  Passing null is a no-op.
+    pub fn mmforge_mesh_free(mesh: *mut MmfMesh);
+}
+
+// ---------------------------------------------------------------------------
 // Version / build info
 // ---------------------------------------------------------------------------
 
