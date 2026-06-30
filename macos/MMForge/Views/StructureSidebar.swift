@@ -63,7 +63,7 @@ struct StructureSidebar: View {
                     Menu {
                         Button("Show All") { viewModel.setAllNodesVisible() }
                         Button("Hide All") { viewModel.hideAllNodes() }
-                        if viewModel.selectedIndex != nil {
+                        if viewModel.selectedHasHideableGeometry {
                             Divider()
                             Button("Isolate Selection") { viewModel.isolateSelectedNode() }
                             Button("Hide Selection") { viewModel.hideSelectedNode() }

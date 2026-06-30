@@ -284,8 +284,9 @@ final class DocumentViewModel: ObservableObject {
     ///
     /// Works with both assembly nodes (shows all descendant geometry)
     /// and leaf geometry nodes (shows just that node).
+    /// No-op if the selected node has no geometry descendants.
     func isolateSelectedNode() {
-        guard let sel = selectedIndex else { return }
+        guard let sel = selectedIndex, selectedHasHideableGeometry else { return }
 
         // Collect the selected node and all its descendant indices.
         var keepVisible = Set<Int>()
