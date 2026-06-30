@@ -97,7 +97,7 @@ struct ContentView: View {
         }
         .focusedObject(viewModel)
         .onAppear {
-        viewModel.parseFile(data: document.fileData)
+            viewModel.parseFile(data: document.fileData)
         }
         .onChange(of: document.fileData) { _, newData in
             viewModel.parseFile(data: newData)

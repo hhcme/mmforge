@@ -133,7 +133,12 @@ final class DocumentViewModel: ObservableObject {
     }
 
     func parseFile(data: Data) {
-        // Always clean up previous state first.
+        // Increment generation FIRST — any in-flight async parse from a
+        // previous call will see a mismatch and discard its result.
+        parseGeneration += 1
+        let generation = parseGeneration
+
+        // Clean up previous state (Rust doc, meshes, overlay, etc.).
         freeCurrentDocument()
 
         guard !data.isEmpty else {
@@ -155,8 +160,6 @@ final class DocumentViewModel: ObservableObject {
 
         // Parse on background thread.
         let path = tmpURL.path
-        parseGeneration += 1
-        let generation = parseGeneration
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Result { try RustBridge.shared.parseFile(at: path) }
