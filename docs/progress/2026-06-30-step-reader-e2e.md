@@ -52,10 +52,14 @@ stub returns `NotAvailable`.
 
 ### E2E test — `read_step_file_e2e_real_occt`
 
-Gated on `#[cfg(occt_found)]`.  Reads `testfile/PQ-04909-A.STEP`
-(relative to workspace root via `CARGO_MANIFEST_DIR`).
+Gated on `#[cfg(occt_found)]`.  Reads `testdata/PQ-04909-A.STEP`
+(committed to the repo under `crates/mmforge-geometry/testdata/`).
+
+**Fails** if the fixture is missing — no silent skip.  Path resolved
+via `CARGO_MANIFEST_DIR` so it works regardless of working directory.
 
 Assertions:
+- Fixture file exists (hard assert — no skip)
 - `read_step_file()` succeeds
 - At least one root shape returned
 - Every shape has a valid bounding box
@@ -124,9 +128,11 @@ read_step_file(path)
 
 | File | Size | Content |
 |------|------|---------|
-| `testfile/PQ-04909-A.STEP` | 37 KB | 1 solid body, product name "PQ-04909-A" |
+| `crates/mmforge-geometry/testdata/PQ-04909-A.STEP` | 37 KB | 1 solid body, product name "PQ-04909-A" |
 
-Other fixtures available for future testing:
+Committed to the repo — no external dependency for CI.
+
+Other fixtures in `testfile/` (not committed to crate testdata):
 - `方盒子.step` (21 MB)
 - `JY-LT-260401-OP10.stp` (39 MB)
 - `赛车.step` (235 MB)

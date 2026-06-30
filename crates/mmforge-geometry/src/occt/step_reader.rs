@@ -135,23 +135,21 @@ mod tests {
     /// is set (real shim linked).  Reads a 37KB STEP file, transfers
     /// roots, and verifies bbox/label extraction.
     ///
-    /// Uses `testfile/PQ-04909-A.STEP` (relative to workspace root).
+    /// Uses `testdata/PQ-04909-A.STEP` (committed to the repo).
+    /// Fails if the fixture is missing — this is not a skip.
     #[cfg(occt_found)]
     #[test]
     fn read_step_file_e2e_real_occt() {
-        // Locate the fixture relative to the workspace root.
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let fixture = manifest
-            .parent() // crates/
-            .and_then(|p| p.parent()) // workspace root
-            .unwrap()
-            .join("testfile")
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
             .join("PQ-04909-A.STEP");
 
-        if !fixture.exists() {
-            eprintln!("SKIP: STEP fixture not found at {}", fixture.display());
-            return;
-        }
+        assert!(
+            fixture.exists(),
+            "STEP fixture missing at {}. Run: cp testfile/PQ-04909-A.STEP \
+             crates/mmforge-geometry/testdata/",
+            fixture.display(),
+        );
 
         let data = read_step_file(&fixture).expect("read_step_file should succeed with real OCCT");
 
