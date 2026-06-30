@@ -292,21 +292,6 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     // MARK: - Picking
 
-    /// Compute the ray–clip-plane intersection parameter.
-    ///
-    /// The clip plane is `dot(n, P) + d = 0`.  For a ray `P = O + t*D`:
-    ///   t_clip = -(dot(n, O) + d) / dot(n, D)
-    ///
-    /// Returns the t parameter where the ray crosses the plane, or nil
-    /// if the ray is parallel to the plane.
-    private func rayClipPlaneIntersect(origin: simd_float3, dir: simd_float3) -> Float? {
-        let normal = simd_float3(clipPlane.x, clipPlane.y, clipPlane.z)
-        let denom = dot(normal, dir)
-        guard abs(denom) > 1e-12 else { return nil } // ray parallel to plane
-        let t = -(dot(normal, origin) + clipPlane.w) / denom
-        return t
-    }
-
     func pickNode(at viewSize: CGSize, point: CGPoint) -> Int? {
         let aspect = Float(viewSize.width / max(viewSize.height, 1))
         let invVP = (camera.projectionMatrix(aspect: aspect) * camera.viewMatrix).inverse
@@ -317,31 +302,52 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let rayOrigin = simd_float3(near4.x, near4.y, near4.z) / near4.w
         let rayDir = normalize(simd_float3(far4.x, far4.y, far4.z) / far4.w - rayOrigin)
 
-        // Pre-compute the clip-plane intersection for the ray.
-        // The visible half-space is dot(n, P) + d >= 0.
-        // After crossing the plane at t_clip, the ray is in the visible
-        // half-space for t >= t_clip (if dot(n, dir) > 0) or t <= t_clip
-        // (if dot(n, dir) < 0).  We compute the minimum t that is visible.
+        // Compute the visible ray interval [clipTMin, clipTMax] after
+        // clipping.  The clip plane defines a half-space:
+        //   visible when dot(n, P) + d >= 0
+        // For a ray P = O + t*D, the signed distance is:
+        //   dist(t) = dot(n, O+tD) + d = (dot(n,O)+d) + t*dot(n,D)
+        //
+        // denom = dot(n, D):
+        //   denom > 0: ray goes from clipped → visible at tClip.
+        //              Visible interval: [tClip, +∞)
+        //   denom < 0: ray goes from visible → clipped at tClip.
+        //              Visible interval: [0, tClip]
+        //   denom ≈ 0: ray parallel to plane.
+        //              If origin is clipped → entire ray invisible.
+        //              If origin is visible → entire ray visible.
         let clipping = clipPlane.w > -999990
-        var clipTMin: Float = 0 // minimum t that is on the visible side
+        var clipTMin: Float = 0
+        var clipTMax: Float = .infinity
+
         if clipping {
             let normal = simd_float3(clipPlane.x, clipPlane.y, clipPlane.z)
+            let originDist = dot(normal, rayOrigin) + clipPlane.w
             let denom = dot(normal, rayDir)
-            if abs(denom) > 1e-12 {
-                let tClip = -(dot(normal, rayOrigin) + clipPlane.w) / denom
-                // If denom > 0, visible side is t >= tClip.
-                // If denom < 0, visible side is t <= tClip (ray starts visible).
-                if denom > 0 {
-                    clipTMin = max(tClip, 0)
-                }
-                // If denom < 0, the ray origin is on the visible side and
-                // crosses to the clipped side at tClip — the visible interval
-                // is [0, tClip], so clipTMin stays 0.
-            } else {
-                // Ray parallel to plane — check if origin is on visible side.
-                let originDist = dot(normal, rayOrigin) + clipPlane.w
+
+            if abs(denom) < 1e-12 {
+                // Ray parallel to plane — check which side origin is on.
                 if originDist < 0 {
-                    return nil // entire ray is clipped
+                    return nil // entire ray is in clipped half-space
+                }
+                // originDist >= 0 → entire ray visible, clipTMin=0, clipTMax=∞
+            } else {
+                let tClip = -originDist / denom
+                if denom > 0 {
+                    // Ray crosses from clipped → visible at tClip.
+                    // Visible interval: [max(tClip, 0), ∞)
+                    clipTMin = max(tClip, 0)
+                    // If origin is already visible (originDist >= 0),
+                    // tClip < 0 and clipTMin stays 0.
+                } else {
+                    // denom < 0: ray crosses from visible → clipped at tClip.
+                    // Visible interval: [0, tClip]
+                    clipTMax = tClip
+                    // If origin is already clipped (originDist < 0),
+                    // tClip < 0 and clipTMax < 0 → no visible interval.
+                    if clipTMax < 0 {
+                        return nil
+                    }
                 }
             }
         }
@@ -356,12 +362,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 bmin: mesh.boundsMin, bmax: mesh.boundsMax
             ) else { continue }
 
-            // Intersect with clip half-space: visible interval is
-            // [max(tmin, clipTMin), tmax].
+            // Intersect AABB interval with clip visible interval:
+            //   visible = [max(tmin, clipTMin), min(tmax, clipTMax)]
             let visibleMin = max(tmin, clipTMin)
-            if visibleMin > tmax { continue } // fully clipped
+            let visibleMax = min(tmax, clipTMax)
+            if visibleMin > visibleMax { continue } // fully clipped
 
-            // The first visible hit is at visibleMin.
+            // The first visible hit is at visibleMin (clamped to ≥ 0).
             let t = max(visibleMin, 0)
             if t < closestDist {
                 closestDist = t
