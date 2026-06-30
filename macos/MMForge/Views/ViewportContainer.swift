@@ -117,6 +117,7 @@ struct MetalViewWrapper: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         let c = Coordinator()
         c.viewModel = viewModel
+        c.setupMonitors()
         return c
     }
 
@@ -124,6 +125,12 @@ struct MetalViewWrapper: NSViewRepresentable {
         var renderer: MetalRenderer?
         var viewModel: DocumentViewModel?
         private var lastPanPoint: CGPoint = .zero
+        private var scrollMonitor: Any?
+        private var keyMonitor: Any?
+
+        deinit {
+            teardownMonitors()
+        }
 
         @objc func handleClick(_ gesture: NSClickGestureRecognizer) {
             guard let renderer, let viewModel, let view = gesture.view else { return }
@@ -166,6 +173,50 @@ struct MetalViewWrapper: NSViewRepresentable {
                 renderer.zoom(delta: Float(gesture.magnification) * 10)
                 gesture.magnification = 0
             }
+        }
+
+        func setupMonitors() {
+            // Scroll wheel zoom (when pointer is over the viewport).
+            scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) {
+                [weak self] event in
+                guard let self, let renderer = self.renderer,
+                      let view = event.window?.contentView?.hitTest(event.locationInWindow),
+                      view is MTKView || view.superview is MTKView else {
+                    return event
+                }
+                let delta = Float(event.scrollingDeltaY)
+                if abs(delta) > 0.1 {
+                    renderer.zoom(delta: delta * 0.3)
+                }
+                return event
+            }
+
+            // Keyboard shortcuts for camera views.
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
+                [weak self] event in
+                guard let self, let viewModel = self.viewModel else { return event }
+                switch event.keyCode {
+                case 3:  // F — Fit to view
+                    viewModel.fitToView()
+                    return nil
+                case 4:  // H — Home/Reset
+                    viewModel.resetCamera()
+                    return nil
+                case 34: // I — Isometric
+                    viewModel.setNamedView(.isometric)
+                    return nil
+                case 35: // P — Toggle projection
+                    viewModel.toggleProjection()
+                    return nil
+                default:
+                    return event
+                }
+            }
+        }
+
+        func teardownMonitors() {
+            if let m = scrollMonitor { NSEvent.removeMonitor(m) }
+            if let m = keyMonitor { NSEvent.removeMonitor(m) }
         }
     }
 }

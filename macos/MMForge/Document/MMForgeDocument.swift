@@ -202,6 +202,20 @@ final class DocumentViewModel: ObservableObject {
         renderer?.fitToView()
     }
 
+    // MARK: - Camera / View
+
+    func setNamedView(_ view: MetalRenderer.NamedView) {
+        renderer?.setNamedView(view)
+    }
+
+    func toggleProjection() {
+        renderer?.toggleProjection()
+    }
+
+    func resetCamera() {
+        renderer?.resetCamera()
+    }
+
     // MARK: - Selection
 
     func selectNode(_ index: Int?) {

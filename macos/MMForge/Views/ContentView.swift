@@ -38,11 +38,32 @@ struct ContentView: View {
 
             ToolbarItemGroup(placement: .principal) {
                 Button(action: { viewModel.fitToView() }) {
-                    Label("Fit View", systemImage: "arrow.up.left.and.arrow.down.right")
+                    Label("Fit", systemImage: "arrow.up.left.and.arrow.down.right")
                 }
-                .help("Fit the model to the viewport")
+                .help("Fit the model to the viewport (F)")
                 .keyboardShortcut("f", modifiers: .command)
                 .accessibilityLabel("Fit model to viewport")
+
+                Button(action: { viewModel.resetCamera() }) {
+                    Label("Home", systemImage: "house")
+                }
+                .help("Reset camera to default view (H)")
+                .accessibilityLabel("Reset camera")
+
+                Menu {
+                    Button("Front") { viewModel.setNamedView(.front) }
+                    Button("Back") { viewModel.setNamedView(.back) }
+                    Button("Left") { viewModel.setNamedView(.left) }
+                    Button("Right") { viewModel.setNamedView(.right) }
+                    Button("Top") { viewModel.setNamedView(.top) }
+                    Button("Bottom") { viewModel.setNamedView(.bottom) }
+                    Divider()
+                    Button("Isometric") { viewModel.setNamedView(.isometric) }
+                } label: {
+                    Label("View", systemImage: "cube")
+                }
+                .help("Standard view directions")
+                .accessibilityLabel("Standard view directions")
 
                 Picker("", selection: $viewModel.renderMode) {
                     Image(systemName: "cube").tag(RenderMode.solid)

@@ -31,6 +31,17 @@ extension simd_float4x4 {
         ))
     }
 
+    init(orthoLeft left: Float, right: Float,
+         bottom: Float, top: Float, near: Float, far: Float) {
+        let rl = right - left, tb = top - bottom, fn = far - near
+        self.init(columns: (
+            simd_float4(2 / rl, 0, 0, 0),
+            simd_float4(0, 2 / tb, 0, 0),
+            simd_float4(0, 0, -1 / fn, 0),
+            simd_float4(-(right + left) / rl, -(top + bottom) / tb, -near / fn, 1)
+        ))
+    }
+
     var inverse: simd_float4x4 {
         let m = self
         var inv = simd_float4x4()
@@ -127,12 +138,18 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     private var gpuMeshes: [GPUMesh] = []
     private var sceneBounds: (min: simd_float3, max: simd_float3) = (.zero, .zero)
-    private var camera = CameraState()
+    private(set) var camera = CameraState()
 
     var selectedNodeIndex: Int?
     var hiddenNodeIndices: Set<Int> = []
     var renderMode: RenderMode = .solid
     var clipPlane: simd_float4 = simd_float4(0, 0, 0, -999999)
+
+    // MARK: - Named views
+
+    enum NamedView {
+        case front, back, left, right, top, bottom, isometric
+    }
 
     // MARK: - Camera
 
@@ -144,6 +161,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         var fovY: Float = Float.pi / 4
         var near: Float = 0.01
         var far: Float = 1000.0
+        var isOrthographic: Bool = false
+        var orthoScale: Float = 5.0
 
         var eye: simd_float3 {
             let sy = sin(yaw), cy = cos(yaw)
@@ -156,14 +175,37 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
 
         func projectionMatrix(aspect: Float) -> simd_float4x4 {
-            simd_float4x4(perspectiveFovY: fovY, aspect: aspect, near: near, far: far)
+            if isOrthographic {
+                let halfW = orthoScale * aspect
+                let halfH = orthoScale
+                return simd_float4x4(orthoLeft: -halfW, right: halfW,
+                                     bottom: -halfH, top: halfH,
+                                     near: near, far: far)
+            }
+            return simd_float4x4(perspectiveFovY: fovY, aspect: aspect,
+                                 near: near, far: far)
         }
 
         mutating func fit(center: simd_float3, radius: Float) {
             target = center
             distance = max(radius / tan(fovY * 0.5) * 1.5, 0.1)
+            orthoScale = radius * 1.5
             near = max(radius * 0.001, 0.001)
             far = max(radius * 100, 100)
+        }
+
+        mutating func setView(_ view: NamedView) {
+            // Standard CAD view angles (yaw, pitch) in radians.
+            // Convention: +X right, +Y up, +Z toward viewer.
+            switch view {
+            case .front:    yaw = 0;              pitch = 0
+            case .back:     yaw = Float.pi;       pitch = 0
+            case .left:     yaw = Float.pi / 2;   pitch = 0
+            case .right:    yaw = -Float.pi / 2;  pitch = 0
+            case .top:      yaw = 0;              pitch = Float.pi / 2 - 0.01
+            case .bottom:   yaw = 0;              pitch = -(Float.pi / 2 - 0.01)
+            case .isometric: yaw = Float.pi / 4;  pitch = Float.pi / 4
+            }
         }
     }
 
@@ -507,19 +549,44 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     }
 
     func zoom(delta: Float) {
-        camera.distance *= exp(-delta * 0.1)
-        camera.distance = max(0.01, min(10000, camera.distance))
+        if camera.isOrthographic {
+            camera.orthoScale *= exp(-delta * 0.1)
+            camera.orthoScale = max(0.001, min(100000, camera.orthoScale))
+        } else {
+            camera.distance *= exp(-delta * 0.1)
+            camera.distance = max(0.01, min(10000, camera.distance))
+        }
     }
 
     func pan(dx: Float, dy: Float) {
         let v = camera.viewMatrix
         let right = simd_float3(v.columns.0.x, v.columns.1.x, v.columns.2.x)
         let up = simd_float3(v.columns.0.y, v.columns.1.y, v.columns.2.y)
-        camera.target += (-dx * right + dy * up) * camera.distance * 0.001
+        let scale = camera.isOrthographic ? camera.orthoScale * 0.002 : camera.distance * 0.001
+        camera.target += (-dx * right + dy * up) * scale
     }
 
     func fitToView() {
         camera.fit(center: (sceneBounds.min + sceneBounds.max) * 0.5,
                    radius: length(sceneBounds.max - sceneBounds.min) * 0.5)
+    }
+
+    func setNamedView(_ view: NamedView) {
+        camera.setView(view)
+    }
+
+    func toggleProjection() {
+        camera.isOrthographic.toggle()
+    }
+
+    var isOrthographic: Bool {
+        camera.isOrthographic
+    }
+
+    func resetCamera() {
+        fitToView()
+        camera.yaw = 0
+        camera.pitch = Float.pi / 9
+        camera.isOrthographic = false
     }
 }

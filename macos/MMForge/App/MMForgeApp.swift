@@ -11,6 +11,9 @@ struct MMForgeApp: App {
         .commands {
             SidebarCommands()
             InspectorCommands()
+            CommandMenu("Camera") {
+                CameraCommandsView()
+            }
             CommandGroup(after: .textEditing) {
                 SelectionCommandsView()
             }
@@ -57,6 +60,42 @@ struct SelectionCommandsView: View {
                 viewModel?.toggleClipping()
             }
             .keyboardShortcut("k", modifiers: .command)
+        }
+    }
+}
+
+/// Camera and view menu commands.
+struct CameraCommandsView: View {
+    @FocusedObject private var viewModel: DocumentViewModel?
+
+    var body: some View {
+        Group {
+            Button("Fit to View") {
+                viewModel?.fitToView()
+            }
+            .keyboardShortcut("f", modifiers: .command)
+
+            Button("Home (Reset Camera)") {
+                viewModel?.resetCamera()
+            }
+            .keyboardShortcut("h", modifiers: .command)
+
+            Divider()
+
+            Button("Front View") { viewModel?.setNamedView(.front) }
+            Button("Back View") { viewModel?.setNamedView(.back) }
+            Button("Left View") { viewModel?.setNamedView(.left) }
+            Button("Right View") { viewModel?.setNamedView(.right) }
+            Button("Top View") { viewModel?.setNamedView(.top) }
+            Button("Bottom View") { viewModel?.setNamedView(.bottom) }
+            Button("Isometric View") { viewModel?.setNamedView(.isometric) }
+
+            Divider()
+
+            Button("Toggle Perspective/Orthographic") {
+                viewModel?.toggleProjection()
+            }
+            .keyboardShortcut("p", modifiers: .command)
         }
     }
 }
