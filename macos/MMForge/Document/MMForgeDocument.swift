@@ -58,6 +58,10 @@ final class DocumentViewModel: ObservableObject {
     @Published var clipAxis: Int = 2  // 0=X, 1=Y, 2=Z
     @Published var clipDistance: Float = 0.0
 
+    // Sidebar tree state
+    @Published var expandedIndices: Set<Int> = []
+    @Published var searchText: String = ""
+
     private var rustDoc: OpaquePointer?
     private var renderer: MetalRenderer?
     /// Stores DTO from async parse when renderer isn't ready yet.
@@ -95,6 +99,8 @@ final class DocumentViewModel: ObservableObject {
         stats = nil
         selectedIndex = nil
         hiddenNodeIndices = []
+        expandedIndices = []
+        searchText = ""
     }
 
     func parseFile(data: Data) {
@@ -151,6 +157,8 @@ final class DocumentViewModel: ObservableObject {
                     self.nodeNames = dto.nodeNames
                     self.nodes = dto.nodes
                     self.stats = dto.stats
+                    // Expand root by default.
+                    self.expandedIndices = [0]
                     self.state = .loaded(
                         triangleCount: dto.triangleCount,
                         meshCount: dto.meshes.count,
@@ -244,6 +252,105 @@ final class DocumentViewModel: ObservableObject {
         if let idx = selectedIndex {
             toggleNodeVisibility(idx)
         }
+    }
+
+    /// Hide all geometry nodes.
+    func hideAllNodes() {
+        let geomIndices = nodes.enumerated()
+            .filter { $0.element.hasGeometry }
+            .map { $0.offset }
+        hiddenNodeIndices = Set(geomIndices)
+        renderer?.setHiddenNodes(hiddenNodeIndices)
+    }
+
+    /// Hide all nodes except the selected one.
+    func isolateSelectedNode() {
+        guard let sel = selectedIndex, nodes[sel].hasGeometry else { return }
+        let geomIndices = nodes.enumerated()
+            .filter { $0.element.hasGeometry && $0.offset != sel }
+            .map { $0.offset }
+        hiddenNodeIndices = Set(geomIndices)
+        renderer?.setHiddenNodes(hiddenNodeIndices)
+    }
+
+    /// Hide all nodes except the selected one (alias for toolbar).
+    func hideOtherNodes() {
+        isolateSelectedNode()
+    }
+
+    // MARK: - Tree expand/collapse
+
+    /// Toggle expand/collapse for a node.
+    func toggleExpanded(_ index: Int) {
+        if expandedIndices.contains(index) {
+            expandedIndices.remove(index)
+        } else {
+            expandedIndices.insert(index)
+        }
+    }
+
+    /// Expand all nodes.
+    func expandAll() {
+        expandedIndices = Set(nodes.indices)
+    }
+
+    /// Collapse all nodes.
+    func collapseAll() {
+        expandedIndices = []
+    }
+
+    /// Whether a node's children should be visible in the tree.
+    func isNodeVisibleInTree(_ index: Int) -> Bool {
+        // Root is always visible.
+        let node = nodes[index]
+        guard node.parentIndex >= 0 else { return true }
+        // Check if all ancestors are expanded.
+        var current = node.parentIndex
+        while current >= 0 && current < nodes.count {
+            if !expandedIndices.contains(current) { return false }
+            current = nodes[current].parentIndex
+        }
+        return true
+    }
+
+    /// Whether a node passes the search filter.
+    func matchesSearch(_ index: Int) -> Bool {
+        guard !searchText.isEmpty else { return true }
+        let node = nodes[index]
+        return node.name.localizedCaseInsensitiveContains(searchText)
+            ?? (node.geometryLabel?.localizedCaseInsensitiveContains(searchText) ?? false)
+    }
+
+    /// Indices of visible (expanded + matching search) nodes for the sidebar.
+    var visibleNodeIndices: [Int] {
+        guard !nodes.isEmpty else { return [] }
+        if searchText.isEmpty {
+            // No search filter — show expanded/collapsed tree.
+            return nodes.indices.filter { isNodeVisibleInTree($0) }
+        } else {
+            // Search mode — show matching nodes and their ancestors.
+            var visible = Set<Int>()
+            for i in nodes.indices where matchesSearch(i) {
+                visible.insert(i)
+                // Also show all ancestors.
+                var parent = nodes[i].parentIndex
+                while parent >= 0 && parent < nodes.count {
+                    visible.insert(parent)
+                    parent = nodes[parent].parentIndex
+                }
+            }
+            return nodes.indices.filter { visible.contains($0) }
+        }
+    }
+
+    /// Children indices of a given node.
+    func childrenOf(_ index: Int) -> [Int] {
+        nodes.indices.filter { nodes[$0].parentIndex == index }
+    }
+
+    /// Whether a node has any children.
+    func hasChildren(_ index: Int) -> Bool {
+        nodes.contains { $0.parentIndex == index }
     }
 
     // MARK: - Render Mode

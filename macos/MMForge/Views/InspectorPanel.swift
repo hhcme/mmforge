@@ -48,7 +48,7 @@ struct InspectorPanel: View {
                     Divider()
                     if let index = viewModel.selectedIndex,
                        index < viewModel.nodes.count {
-                        selectedNodeSection(node: viewModel.nodes[index])
+                        selectedNodeSection(node: viewModel.nodes[index], index: index)
                     } else {
                         noSelectionSection
                     }
@@ -78,7 +78,7 @@ struct InspectorPanel: View {
 
     // MARK: - Selected Node
 
-    private func selectedNodeSection(node: RenderPacketDTO.NodeInfo) -> some View {
+    private func selectedNodeSection(node: RenderPacketDTO.NodeInfo, index: Int) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Selection")
                 .font(.headline)
@@ -92,12 +92,43 @@ struct InspectorPanel: View {
                 LabeledContent("Parent", value: "Root")
             }
 
+            // Hierarchy info
+            let children = viewModel.childrenOf(index)
+            if !children.isEmpty {
+                LabeledContent("Children", value: "\(children.count)")
+            }
+
+            // Depth
+            let depth = nodeDepth(index)
+            LabeledContent("Depth", value: "\(depth)")
+
+            // Visibility
+            let isHidden = viewModel.hiddenNodeIndices.contains(index)
+            LabeledContent("Visible", value: isHidden ? "No" : "Yes")
+
+            Divider()
+
+            // Geometry info
+            Text("Geometry")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
+
             LabeledContent("Has Geometry", value: node.hasGeometry ? "Yes" : "No")
 
             if let geomLabel = node.geometryLabel {
-                LabeledContent("Geometry", value: geomLabel)
+                LabeledContent("Label", value: geomLabel)
             }
 
+            if node.geometryId >= 0 {
+                LabeledContent("Geometry ID", value: "\(node.geometryId)")
+            }
+
+            if node.meshIndex >= 0 {
+                LabeledContent("Mesh Index", value: "\(node.meshIndex)")
+            }
+
+            // Bounding box
             if let bmin = node.boundsMin, let bmax = node.boundsMax {
                 Divider()
                 Text("Bounding Box")
@@ -108,8 +139,24 @@ struct InspectorPanel: View {
                 LabeledContent("Min", value: formatVec3(bmin))
                 LabeledContent("Max", value: formatVec3(bmax))
                 LabeledContent("Size", value: formatVec3(size))
+                // Diagonal
+                let diag = sqrt(size.x * size.x + size.y * size.y + size.z * size.z)
+                LabeledContent("Diagonal", value: String(format: "%.2f", diag))
             }
         }
+    }
+
+    private func nodeDepth(_ index: Int) -> Int {
+        var depth = 0
+        var current = index
+        while current >= 0 && current < viewModel.nodes.count {
+            let parent = viewModel.nodes[current].parentIndex
+            if parent < 0 { break }
+            depth += 1
+            current = parent
+            if depth > 50 { break }
+        }
+        return depth
     }
 
     private var noSelectionSection: some View {
