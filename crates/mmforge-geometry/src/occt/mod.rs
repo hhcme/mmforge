@@ -24,6 +24,12 @@
 
 pub mod shape;
 pub mod step_reader;
+pub mod sys;
+
+// The adapter calls into sys extern functions which are only available
+// when the occt feature is enabled.
+#[cfg(feature = "occt")]
+pub mod adapter;
 
 /// Error type for OCCT operations.
 #[derive(Debug, thiserror::Error)]

@@ -11,9 +11,13 @@ description = "Geometry types, B-Rep handles, tessellation adapter, and OCCT FFI
 default = []
 # Enable OCCT FFI bindings.  When disabled, the occt module compiles
 # as stubs that return errors.  CI runs without this feature.
+# Build detection: OCCT_INCLUDE_DIR/OCCT_LIB_DIR env vars, or pkg-config.
 occt = []
 
 [dependencies]
 mmforge-core = { workspace = true }
 glam = { workspace = true }
 thiserror = { workspace = true }
+
+[build-dependencies]
+pkg-config = "0.3"
