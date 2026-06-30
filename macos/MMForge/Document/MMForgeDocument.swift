@@ -248,10 +248,26 @@ final class DocumentViewModel: ObservableObject {
         renderer?.setHiddenNodes([])
     }
 
+    /// Hide the selected node and all its descendant geometry.
+    /// Works for both leaf geometry nodes and assembly nodes.
     func hideSelectedNode() {
-        if let idx = selectedIndex {
-            toggleNodeVisibility(idx)
+        guard let sel = selectedIndex else { return }
+        var descendants = Set<Int>()
+        collectDescendants(sel, into: &descendants)
+        // Hide all geometry nodes in the subtree.
+        for idx in descendants where nodes[idx].hasGeometry {
+            hiddenNodeIndices.insert(idx)
         }
+        renderer?.setHiddenNodes(hiddenNodeIndices)
+    }
+
+    /// Whether the selected node (or its descendants) has any geometry
+    /// that can be hidden.
+    var selectedHasHideableGeometry: Bool {
+        guard let sel = selectedIndex else { return false }
+        var descendants = Set<Int>()
+        collectDescendants(sel, into: &descendants)
+        return descendants.contains { nodes[$0].hasGeometry }
     }
 
     /// Hide all geometry nodes.

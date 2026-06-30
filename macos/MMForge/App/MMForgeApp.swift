@@ -46,7 +46,7 @@ struct SelectionCommandsView: View {
             Button("Hide Selection") {
                 viewModel?.hideSelectedNode()
             }
-            .disabled(viewModel?.selectedIndex == nil)
+            .disabled(!(viewModel?.selectedHasHideableGeometry ?? false))
 
             Button("Show All") {
                 viewModel?.setAllNodesVisible()

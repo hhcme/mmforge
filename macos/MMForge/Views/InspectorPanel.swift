@@ -102,9 +102,15 @@ struct InspectorPanel: View {
             let depth = nodeDepth(index)
             LabeledContent("Depth", value: "\(depth)")
 
-            // Visibility
-            let isHidden = viewModel.hiddenNodeIndices.contains(index)
-            LabeledContent("Visible", value: isHidden ? "No" : "Yes")
+            // Visibility (only meaningful for geometry nodes)
+            if node.hasGeometry {
+                let isHidden = viewModel.hiddenNodeIndices.contains(index)
+                LabeledContent("Visible", value: isHidden ? "No" : "Yes")
+            } else {
+                // Assembly node: check if any descendant geometry is visible.
+                let hasVisibleDescendants = nodeHasVisibleDescendants(index)
+                LabeledContent("Descendants Visible", value: hasVisibleDescendants ? "Yes" : "No")
+            }
 
             Divider()
 
@@ -157,6 +163,25 @@ struct InspectorPanel: View {
             if depth > 50 { break }
         }
         return depth
+    }
+
+    /// Whether any descendant geometry of a node is visible (not hidden).
+    private func nodeHasVisibleDescendants(_ index: Int) -> Bool {
+        var descendants = Set<Int>()
+        collectDescendants(index, into: &descendants)
+        return descendants.contains {
+            viewModel.nodes[$0].hasGeometry
+                && !viewModel.hiddenNodeIndices.contains($0)
+        }
+    }
+
+    private func collectDescendants(_ index: Int, into set: inout Set<Int>) {
+        set.insert(index)
+        for (i, node) in viewModel.nodes.enumerated() {
+            if node.parentIndex == index {
+                collectDescendants(i, into: &set)
+            }
+        }
     }
 
     private var noSelectionSection: some View {
