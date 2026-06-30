@@ -30,7 +30,13 @@ pub fn build_render_packet(mesh_data: &HashMap<GeometryId, TessellatedMeshData>)
         roughness: 0.5,
     }];
 
-    for (i, (_geom_id, mesh)) in mesh_data.iter().enumerate() {
+    // Sort by GeometryId for deterministic mesh ordering.
+    // This ensures mesh_index == geometry_index in the model,
+    // which is critical for the node→mesh mapping.
+    let mut sorted: Vec<_> = mesh_data.iter().collect();
+    sorted.sort_by_key(|(id, _)| id.get());
+
+    for (i, (_geom_id, mesh)) in sorted.iter().enumerate() {
         let mesh_id = i as u32;
 
         // Convert f32 arrays to the format RenderMesh expects.
@@ -138,5 +144,45 @@ mod tests {
         let json = pkt.to_debug_json();
         assert!(json.contains("mesh_count"));
         assert!(json.contains("triangle_count"));
+    }
+
+    /// Regression: mesh order must be deterministic and match GeometryId
+    /// order regardless of HashMap iteration order.
+    #[test]
+    fn multi_geometry_deterministic_order() {
+        let mut data = HashMap::new();
+        // Insert in reverse order to stress HashMap non-determinism.
+        for id_val in [3u32, 1, 0, 2] {
+            data.insert(
+                GeometryId::new(id_val),
+                TessellatedMeshData {
+                    positions: vec![[id_val as f32, 0.0, 0.0]; 3],
+                    normals: vec![[0.0, 0.0, 1.0]; 3],
+                    indices: vec![0, 1, 2],
+                    bounds: BoundingBox::new(Vec3::ZERO, Vec3::ONE),
+                },
+            );
+        }
+
+        let pkt = build_render_packet(&data);
+        assert_eq!(pkt.meshes.len(), 4);
+
+        // Meshes must be sorted by GeometryId: 0, 1, 2, 3.
+        for (i, mesh) in pkt.meshes.iter().enumerate() {
+            assert_eq!(
+                mesh.mesh_id, i as u32,
+                "mesh[{}] should have mesh_id={}, got {}",
+                i, i, mesh.mesh_id
+            );
+            // The x-coordinate of the first vertex encodes the original GeometryId.
+            let expected_x = i as f32;
+            assert!(
+                (mesh.positions[0][0] - expected_x).abs() < 1e-6,
+                "mesh[{}] positions[0].x should be {}, got {}",
+                i,
+                expected_x,
+                mesh.positions[0][0]
+            );
+        }
     }
 }

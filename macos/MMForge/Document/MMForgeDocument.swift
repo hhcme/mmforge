@@ -86,6 +86,7 @@ final class DocumentViewModel: ObservableObject {
         nodes = []
         stats = nil
         selectedIndex = nil
+        hiddenNodeIndices = []
     }
 
     func parseFile(data: Data) {
@@ -160,17 +161,19 @@ final class DocumentViewModel: ObservableObject {
             return
         }
         renderer.clearMeshes()
-        // Each mesh in dto.meshes corresponds to a node with geometry.
-        // Map mesh index → node index by matching geometry nodes in order.
-        var meshNodeIndices: [Int] = []
-        for (i, node) in dto.nodes.enumerated() {
-            if node.hasGeometry {
-                meshNodeIndices.append(i)
+
+        // Build node→mesh mapping from the authoritative meshIndex field.
+        // meshToNode[meshIdx] = nodeIdx
+        var meshToNode = [Int](repeating: -1, count: dto.meshes.count)
+        for (nodeIdx, node) in dto.nodes.enumerated() {
+            if node.meshIndex >= 0 && node.meshIndex < dto.meshes.count {
+                meshToNode[node.meshIndex] = nodeIdx
             }
         }
-        for (i, mesh) in dto.meshes.enumerated() {
-            let nodeIdx = i < meshNodeIndices.count ? meshNodeIndices[i] : i
-            let node = nodeIdx < dto.nodes.count ? dto.nodes[nodeIdx] : nil
+
+        for (meshIdx, mesh) in dto.meshes.enumerated() {
+            let nodeIdx = meshToNode[meshIdx]
+            let node = nodeIdx >= 0 && nodeIdx < dto.nodes.count ? dto.nodes[nodeIdx] : nil
             renderer.upload(
                 positions: mesh.positions,
                 normals: mesh.normals,

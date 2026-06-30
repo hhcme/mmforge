@@ -96,6 +96,13 @@ int32_t mmf_node_parent(const MmfDocument* doc, uint32_t index);
 int mmf_node_has_geometry(const MmfDocument* doc, uint32_t index);
 
 /**
+ * Get the mesh index in the RenderPacket for a given node.
+ * Returns -1 if the node has no geometry or index is invalid.
+ * The mapping is: node → geometry_id → mesh index (sorted by GeometryId).
+ */
+int32_t mmf_node_mesh_index(const MmfDocument* doc, uint32_t index);
+
+/**
  * Get the bounding box of a node.
  * @return 1 on success, 0 if index invalid or bounds empty.
  */

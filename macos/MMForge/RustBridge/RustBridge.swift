@@ -15,6 +15,7 @@ struct RenderPacketDTO {
         let name: String
         let parentIndex: Int      // -1 for root
         let hasGeometry: Bool
+        let meshIndex: Int        // index into RenderPacket meshes, -1 if none
         let geometryLabel: String?
         let boundsMin: simd_float3?
         let boundsMax: simd_float3?
@@ -100,6 +101,7 @@ final class RustBridge {
 
             let parentIdx = Int(mmf_node_parent(doc, UInt32(i)))
             let hasGeom = mmf_node_has_geometry(doc, UInt32(i)) != 0
+            let meshIdx = Int(mmf_node_mesh_index(doc, UInt32(i)))
 
             let geomLabel: String?
             if let ptr = mmf_node_geometry_label(doc, UInt32(i)) {
@@ -126,6 +128,7 @@ final class RustBridge {
                 name: name,
                 parentIndex: parentIdx,
                 hasGeometry: hasGeom,
+                meshIndex: meshIdx,
                 geometryLabel: geomLabel,
                 boundsMin: boundsMin,
                 boundsMax: boundsMax

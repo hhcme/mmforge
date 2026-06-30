@@ -271,6 +271,36 @@ pub extern "C" fn mmf_node_has_geometry(
     }
 }
 
+/// Get the mesh index in the RenderPacket for a given node.
+/// Returns -1 if the node has no geometry or index is invalid.
+///
+/// The mapping is: node → geometry_id → position in model.geometries
+/// → mesh index in RenderPacket (which is sorted by GeometryId).
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_node_mesh_index(doc: *const MmfDocument, index: u32) -> i32 {
+    if doc.is_null() {
+        return -1;
+    }
+    let doc = unsafe { &*doc };
+    let node = match doc.model.scene.nodes.get(index as usize) {
+        Some(n) => n,
+        None => return -1,
+    };
+    let geom_id = match node.geometry {
+        Some(id) => id,
+        None => return -1,
+    };
+    // Find the geometry's position in model.geometries.
+    // Since build_render_packet sorts by GeometryId, and model.geometries
+    // is created in the same order, the index equals the mesh index.
+    doc.model
+        .geometries
+        .iter()
+        .position(|g| g.id() == geom_id)
+        .map(|i| i as i32)
+        .unwrap_or(-1)
+}
+
 /// Get the bounding box of a node.
 /// Returns 1 on success, 0 if index invalid or bounds empty.
 #[unsafe(no_mangle)]

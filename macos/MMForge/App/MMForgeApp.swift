@@ -43,7 +43,6 @@ struct SelectionCommandsView: View {
             Button("Hide Selection") {
                 viewModel?.hideSelectedNode()
             }
-            .keyboardShortcut("h", modifiers: .command)
             .disabled(viewModel?.selectedIndex == nil)
 
             Button("Show All") {
