@@ -248,29 +248,40 @@ pub extern "C" fn mmf_node_parent(doc: *const MmfDocument, index: u32) -> i32 {
 }
 
 /// Whether the node at index has associated geometry.
+/// Returns 1 if true, 0 if false or invalid.
 #[unsafe(no_mangle)]
-pub extern "C" fn mmf_node_has_geometry(doc: *const MmfDocument, index: u32) -> bool {
+pub extern "C" fn mmf_node_has_geometry(
+    doc: *const MmfDocument,
+    index: u32,
+) -> std::os::raw::c_int {
     if doc.is_null() {
-        return false;
+        return 0;
     }
     let doc = unsafe { &*doc };
-    doc.model
+    if doc
+        .model
         .scene
         .nodes
         .get(index as usize)
         .is_some_and(|n| n.geometry.is_some())
+    {
+        1
+    } else {
+        0
+    }
 }
 
-/// Get the bounding box of a node.  Returns false if index is invalid.
+/// Get the bounding box of a node.
+/// Returns 1 on success, 0 if index invalid or bounds empty.
 #[unsafe(no_mangle)]
 pub extern "C" fn mmf_node_bounds(
     doc: *const MmfDocument,
     index: u32,
     out_min: *mut f32,
     out_max: *mut f32,
-) -> bool {
+) -> std::os::raw::c_int {
     if doc.is_null() || out_min.is_null() || out_max.is_null() {
-        return false;
+        return 0;
     }
     let doc = unsafe { &*doc };
     match doc.model.scene.nodes.get(index as usize) {
@@ -284,9 +295,9 @@ pub extern "C" fn mmf_node_bounds(
                 *out_max.add(1) = b.max.y;
                 *out_max.add(2) = b.max.z;
             }
-            true
+            1
         }
-        _ => false,
+        _ => 0,
     }
 }
 

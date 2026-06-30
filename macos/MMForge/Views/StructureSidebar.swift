@@ -25,8 +25,8 @@ struct StructureSidebar: View {
                 sidebarEmptyState
             case .loading:
                 sidebarLoadingState
-            case .error:
-                sidebarEmptyState
+            case .error(let message):
+                sidebarErrorState(message)
             case .loaded:
                 if viewModel.nodes.isEmpty {
                     sidebarEmptyState
@@ -62,6 +62,25 @@ struct StructureSidebar: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityLabel("Loading structure")
+    }
+
+    private func sidebarErrorState(_ message: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.title)
+                .foregroundStyle(.orange)
+            Text("Error")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(message)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+        .accessibilityLabel("Error: \(message)")
     }
 
     // MARK: - Node list

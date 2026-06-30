@@ -1,6 +1,6 @@
 # macOS Structure Sidebar & Inspector — Apple HIG
 
-Date: 2026-07-01
+Date: 2026-06-30
 Agent: ZCode (mimo-v2.5-pro)
 Target: Apple HIG-compliant structure sidebar and inspector with
         real model data, selection, states, and VoiceOver
