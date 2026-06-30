@@ -20,4 +20,7 @@ mmforge-geometry = { workspace = true }
 thiserror = { workspace = true }
 glam = { workspace = true }
 
+[build-dependencies]
+pkg-config = "0.3"
+
 [dev-dependencies]

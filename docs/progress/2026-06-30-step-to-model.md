@@ -70,9 +70,23 @@ if shape.label.starts_with("Shape_") {
 
 ### `mmforge-format-step/build.rs` — new
 
-Declares `occt_found` as valid check-cfg and detects the shim library
-(same logic as mmforge-geometry build.rs).  This is needed because
-`cargo:rustc-cfg` flags don't propagate across crate boundaries.
+Declares `occt_found` as valid check-cfg and performs the same
+three-stage validation as mmforge-geometry's build.rs:
+
+1. **OCCT dirs exist** — checks `OCCT_INCLUDE_DIR` + `OCCT_LIB_DIR`
+   env vars (both must point to existing dirs), or falls back to
+   pkg-config (`OpenCASCADE` ≥ 7.5).
+2. **Shim found** — `MMFORGE_SHIM_DIR` env var or auto-detect in
+   common paths.
+3. **Shim validated** — ar magic + nm symbol check for all 14 required
+   symbols.
+
+Only sets `occt_found` if ALL three stages pass.  This prevents stale
+`shim/build/` artifacts from enabling `occt_found` when OCCT is not
+actually installed — which would cause linker failures.
+
+Link directives (`rustc-link-lib`, etc.) are NOT emitted by this
+build.rs — only `mmforge-geometry`'s build.rs handles linking.
 
 ### `mmforge-format-step/src/parser.rs` — e2e test added
 
