@@ -250,6 +250,11 @@ final class DocumentViewModel: ObservableObject {
             )
         }
         renderer.setSceneBounds(min: dto.sceneBoundsMin, max: dto.sceneBoundsMax)
+
+        // If clip plane is active, compute section fill now that meshes are uploaded.
+        if clipEnabled {
+            renderer.updateSectionFill()
+        }
     }
 
     func fitToView() {

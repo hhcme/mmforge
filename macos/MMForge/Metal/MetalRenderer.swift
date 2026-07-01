@@ -470,7 +470,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             sectionFillBuffer = device.makeBuffer(length: byteCount, options: .storageModeShared)
         }
         sectionFillBuffer?.contents().copyMemory(from: verts, byteCount: byteCount)
-        sectionFillVertexCount = floatCount / 7
+        // 8 floats per vertex: float4 position (16 bytes) + float4 color (16 bytes)
+        sectionFillVertexCount = floatCount / 8
     }
 
     /// Clear the section fill buffer.
