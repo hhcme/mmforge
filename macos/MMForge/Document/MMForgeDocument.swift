@@ -12,8 +12,6 @@ extension UTType {
 
 /// Global viewer preferences, persisted across sessions.
 struct AppPreferences {
-    @AppStorage("showGrid") static var showGrid: Bool = true
-    @AppStorage("showAxes") static var showAxes: Bool = true
     @AppStorage("exportFormat") static var exportFormat: String = "png"
     @AppStorage("exportScale") static var exportScale: Double = 1.0
 }
@@ -96,16 +94,6 @@ final class DocumentViewModel: ObservableObject {
     @Published var measurementMode: Bool = false
     @Published var measurements: [Measurement] = []
     @Published var pendingPoint: simd_float3?
-
-    // Display preferences (persisted via AppPreferences)
-    var showGrid: Bool {
-        get { AppPreferences.showGrid }
-        set { AppPreferences.showGrid = newValue }
-    }
-    var showAxes: Bool {
-        get { AppPreferences.showAxes }
-        set { AppPreferences.showAxes = newValue }
-    }
 
     private var rustDoc: OpaquePointer?
     private var renderer: MetalRenderer?
@@ -458,12 +446,16 @@ final class DocumentViewModel: ObservableObject {
         }
 
         let isPNG = url.pathExtension.lowercased() == "png"
-        let imageData = isPNG
+        guard let imageData = isPNG
             ? bitmapRep.representation(using: .png, properties: [:])
             : bitmapRep.representation(using: .jpeg, properties: [.compressionFactor: 0.9])
+        else {
+            exportError = "Failed to encode image as \(isPNG ? "PNG" : "JPEG")."
+            return
+        }
 
         do {
-            try imageData?.write(to: url)
+            try imageData.write(to: url)
         } catch {
             exportError = "Failed to write image: \(error.localizedDescription)"
         }

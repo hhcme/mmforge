@@ -374,20 +374,6 @@ struct InspectorPanel: View {
 
                 Divider()
 
-                // Display preferences
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Display")
-                        .font(.headline)
-                        .accessibilityAddTraits(.isHeader)
-
-                    Toggle("Show Grid", isOn: $viewModel.showGrid)
-                        .accessibilityHint("Toggle grid display in viewport")
-                    Toggle("Show Axes", isOn: $viewModel.showAxes)
-                        .accessibilityHint("Toggle axis indicator in viewport")
-                }
-
-                Divider()
-
                 Text("MMForge")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
