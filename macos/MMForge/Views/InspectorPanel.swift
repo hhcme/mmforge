@@ -160,22 +160,18 @@ struct InspectorPanel: View {
                     .foregroundStyle(.secondary)
                     .accessibilityAddTraits(.isHeader)
 
+                ColorPicker("Color", selection: nodeColorBinding(index: index))
+                    .accessibilityHint("Override the node color in the viewport")
+
                 let hasOverride = viewModel.nodeColorOverrides[index] != nil
                 if hasOverride {
-                    HStack {
-                        Text("Color")
-                            .font(.subheadline)
-                        Spacer()
-                        Button("Reset") {
-                            viewModel.setNodeColor(index, color: nil)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(.accentColor)
-                        .font(.caption)
-                        .accessibilityLabel("Reset color to default")
+                    Button("Reset Color") {
+                        viewModel.setNodeColor(index, color: nil)
                     }
-                } else {
-                    LabeledContent("Color", value: "Default (grey)")
+                    .buttonStyle(.plain)
+                    .foregroundColor(.accentColor)
+                    .font(.caption)
+                    .accessibilityLabel("Reset color to default")
                 }
             }
         }
@@ -456,6 +452,25 @@ struct InspectorPanel: View {
 
     private func formatVec3(_ v: simd_float3) -> String {
         String(format: "(%.2f, %.2f, %.2f)", v.x, v.y, v.z)
+    }
+
+    /// Binding for ColorPicker that converts between SwiftUI Color and simd_float4.
+    private func nodeColorBinding(index: Int) -> Binding<Color> {
+        Binding(
+            get: {
+                if let c = self.viewModel.nodeColorOverrides[index] {
+                    return Color(red: Double(c.x), green: Double(c.y), blue: Double(c.z))
+                }
+                return Color(red: 0.7, green: 0.7, blue: 0.72) // default grey
+            },
+            set: { newColor in
+                let nsColor = NSColor(newColor)
+                var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                nsColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+                let color = simd_float4(Float(r), Float(g), Float(b), Float(a))
+                self.viewModel.setNodeColor(index, color: color)
+            }
+        )
     }
 
     private func computeDiagonal(_ size: simd_float3) -> Float {

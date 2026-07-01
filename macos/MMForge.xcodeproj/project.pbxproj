@@ -20,6 +20,7 @@
 		A10011 /* MetalRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10013; };
 		A10012 /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = B10014; };
 		A10013 /* Picking.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10016; };
+		A10014 /* PickingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10017; };
 		A10015 /* SectionFill.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10018; };
 /* End PBXBuildFile section */
 
@@ -39,9 +40,11 @@
 		B10013 /* MetalRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalRenderer.swift; sourceTree = "<group>"; };
 		B10014 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
 		B10016 /* Picking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Picking.swift; sourceTree = "<group>"; };
+		B10017 /* PickingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickingTests.swift; sourceTree = "<group>"; };
 		B10018 /* SectionFill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionFill.swift; sourceTree = "<group>"; };
 		B10015 /* mmforge_bridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = mmforge_bridge.h; sourceTree = "<group>"; };
 		C10001 /* MMForge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MMForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C10002 /* MMForgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MMForgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -156,6 +159,7 @@
 		E10011 /* MMForgeTests */ = {
 			isa = PBXGroup;
 			children = (
+				B10017 /* PickingTests.swift */,
 			);
 			path = MMForgeTests;
 			sourceTree = "<group>";
@@ -179,6 +183,22 @@
 			productName = MMForge;
 			productReference = C10001 /* MMForge.app */;
 			productType = "com.apple.product-type.application";
+		};
+		F10006 /* MMForgeTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F10008 /* Build configuration list for PBXNativeTarget "MMForgeTests" */;
+			buildPhases = (
+				F10007 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F10009 /* PBXTargetDependency */,
+			);
+			name = MMForgeTests;
+			productName = MMForgeTests;
+			productReference = C10002 /* MMForgeTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -204,6 +224,7 @@
 			projectRoot = "";
 			targets = (
 				F10001 /* MMForge */,
+				F10006 /* MMForgeTests */,
 			);
 		};
 /* End PBXProject section */
@@ -232,6 +253,35 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		F10007 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10014 /* PickingTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		F10009 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F10001 /* MMForge */;
+			targetProxy = F1000A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXContainerItemProxy section */
+		F1000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F10002 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F10001;
+			remoteInfo = MMForge;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		H10001 /* Build Rust Bridge */ = {
@@ -416,6 +466,43 @@
 		};
 /* End XCBuildConfiguration section */
 
+/* Begin XCBuildConfiguration section */
+		G10005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mmforge.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MMForge.app/Contents/MacOS/MMForge";
+			};
+			name = Debug;
+		};
+		G10006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mmforge.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MMForge.app/Contents/MacOS/MMForge";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
 /* Begin XCConfigurationList section */
 		F10003 /* Build configuration list for PBXNativeTarget "MMForge" */ = {
 			isa = XCConfigurationList;
@@ -431,6 +518,15 @@
 			buildConfigurations = (
 				G10001 /* Debug */,
 				G10002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F10008 /* Build configuration list for PBXNativeTarget "MMForgeTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				G10005 /* Debug */,
+				G10006 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

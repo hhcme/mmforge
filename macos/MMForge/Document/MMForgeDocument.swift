@@ -287,11 +287,13 @@ final class DocumentViewModel: ObservableObject {
             hiddenNodeIndices.insert(index)
             renderer?.setNodeVisible(index, visible: false)
         }
+        refreshSectionFill()
     }
 
     func setAllNodesVisible() {
         hiddenNodeIndices.removeAll()
         renderer?.setHiddenNodes([])
+        refreshSectionFill()
     }
 
     /// Hide the selected node and all its descendant geometry.
@@ -300,20 +302,11 @@ final class DocumentViewModel: ObservableObject {
         guard let sel = selectedIndex else { return }
         var descendants = Set<Int>()
         collectDescendants(sel, into: &descendants)
-        // Hide all geometry nodes in the subtree.
         for idx in descendants where nodes[idx].hasGeometry {
             hiddenNodeIndices.insert(idx)
         }
         renderer?.setHiddenNodes(hiddenNodeIndices)
-    }
-
-    /// Whether the selected node (or its descendants) has any geometry
-    /// that can be hidden.
-    var selectedHasHideableGeometry: Bool {
-        guard let sel = selectedIndex else { return false }
-        var descendants = Set<Int>()
-        collectDescendants(sel, into: &descendants)
-        return descendants.contains { nodes[$0].hasGeometry }
+        refreshSectionFill()
     }
 
     /// Hide all geometry nodes.
@@ -323,22 +316,15 @@ final class DocumentViewModel: ObservableObject {
             .map { $0.offset }
         hiddenNodeIndices = Set(geomIndices)
         renderer?.setHiddenNodes(hiddenNodeIndices)
+        refreshSectionFill()
     }
 
     /// Isolate the selected node: show it and all its descendants,
     /// hide all other geometry nodes.
-    ///
-    /// Works with both assembly nodes (shows all descendant geometry)
-    /// and leaf geometry nodes (shows just that node).
-    /// No-op if the selected node has no geometry descendants.
     func isolateSelectedNode() {
         guard let sel = selectedIndex, selectedHasHideableGeometry else { return }
-
-        // Collect the selected node and all its descendant indices.
         var keepVisible = Set<Int>()
         collectDescendants(sel, into: &keepVisible)
-
-        // Hide all geometry nodes NOT in the keep-visible set.
         var hidden = Set<Int>()
         for (i, node) in nodes.enumerated() {
             if node.hasGeometry && !keepVisible.contains(i) {
@@ -347,6 +333,12 @@ final class DocumentViewModel: ObservableObject {
         }
         hiddenNodeIndices = hidden
         renderer?.setHiddenNodes(hiddenNodeIndices)
+        refreshSectionFill()
+    }
+
+    /// Hide all nodes except the selected one (alias for toolbar).
+    func hideOtherNodes() {
+        isolateSelectedNode()
     }
 
     /// Recursively collect a node and all its descendants.
@@ -359,9 +351,20 @@ final class DocumentViewModel: ObservableObject {
         }
     }
 
-    /// Hide all nodes except the selected one (alias for toolbar).
-    func hideOtherNodes() {
-        isolateSelectedNode()
+    /// Recalculate section fill if clip plane is active.
+    private func refreshSectionFill() {
+        if clipEnabled {
+            renderer?.updateSectionFill()
+        }
+    }
+
+    /// Whether the selected node (or its descendants) has any geometry
+    /// that can be hidden.
+    var selectedHasHideableGeometry: Bool {
+        guard let sel = selectedIndex else { return false }
+        var descendants = Set<Int>()
+        collectDescendants(sel, into: &descendants)
+        return descendants.contains { nodes[$0].hasGeometry }
     }
 
     // MARK: - Measurement
