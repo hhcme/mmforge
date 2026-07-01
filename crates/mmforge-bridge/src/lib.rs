@@ -32,6 +32,12 @@ pub struct MmfDocument {
     node_names: Vec<CString>,
     /// Pre-computed CStrings for geometry labels (borrowed by mmf_node_geometry_label).
     geometry_labels: Vec<CString>,
+    /// 2D draw list (populated for DXF documents, empty for 3D).
+    draw_list: mmforge_render::draw2d::DrawingDrawList,
+    /// Pre-computed CStrings for draw command text content.
+    draw_text_cstrings: Vec<CString>,
+    /// Pre-computed CStrings for layer names in the draw list.
+    draw_layer_cstrings: Vec<CString>,
 }
 
 // --- Lifecycle ---
@@ -59,11 +65,50 @@ fn build_document(output: ParseOutput, registry: TessellationRegistry) -> MmfDoc
             CString::new(label).unwrap_or_default()
         })
         .collect();
+
+    // Build 2D draw list from Drawing2D geometry (if present).
+    let draw_list = output
+        .model
+        .geometries
+        .iter()
+        .find_map(|g| {
+            if let Geometry::Drawing2D { drawing, .. } = g {
+                Some(mmforge_render::draw2d::build_draw_list(drawing))
+            } else {
+                None
+            }
+        })
+        .unwrap_or(mmforge_render::draw2d::DrawingDrawList {
+            layers: Vec::new(),
+            bounds: mmforge_core::drawing::BBox2D::EMPTY,
+            flat_commands: Vec::new(),
+        });
+
+    let draw_text_cstrings: Vec<CString> = draw_list
+        .flat_commands
+        .iter()
+        .map(|fc| match &fc.cmd {
+            mmforge_render::draw2d::DrawCommand2D::Text { content, .. } => {
+                CString::new(content.as_str()).unwrap_or_default()
+            }
+            _ => CString::default(),
+        })
+        .collect();
+
+    let draw_layer_cstrings: Vec<CString> = draw_list
+        .layers
+        .iter()
+        .map(|l| CString::new(l.layer_name.as_str()).unwrap_or_default())
+        .collect();
+
     MmfDocument {
         packet,
         model: output.model,
         node_names,
         geometry_labels,
+        draw_list,
+        draw_text_cstrings,
+        draw_layer_cstrings,
     }
 }
 
@@ -623,4 +668,303 @@ pub extern "C" fn mmf_drawing_layer_visible(
         }
     }
     0
+}
+
+// --- Draw command accessors (flat list) ---
+
+/// Total number of draw commands across all layers.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_count(doc: *const MmfDocument) -> u32 {
+    if doc.is_null() {
+        return 0;
+    }
+    unsafe { &*doc }.draw_list.flat_commands.len() as u32
+}
+
+/// Draw command type: 0=Line, 1=Circle, 2=Arc, 3=Polyline, 4=Text, -1=invalid.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_type(doc: *const MmfDocument, index: u32) -> i32 {
+    if doc.is_null() {
+        return -1;
+    }
+    let doc = unsafe { &*doc };
+    match doc.draw_list.flat_commands.get(index as usize) {
+        Some(fc) => match &fc.cmd {
+            mmforge_render::draw2d::DrawCommand2D::Line { .. } => 0,
+            mmforge_render::draw2d::DrawCommand2D::Circle { .. } => 1,
+            mmforge_render::draw2d::DrawCommand2D::Arc { .. } => 2,
+            mmforge_render::draw2d::DrawCommand2D::Polyline { .. } => 3,
+            mmforge_render::draw2d::DrawCommand2D::Text { .. } => 4,
+        },
+        None => -1,
+    }
+}
+
+/// Layer index for a draw command.  Returns -1 if invalid.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_layer_index(doc: *const MmfDocument, index: u32) -> i32 {
+    if doc.is_null() {
+        return -1;
+    }
+    let doc = unsafe { &*doc };
+    match doc.draw_list.flat_commands.get(index as usize) {
+        Some(fc) => fc.layer_index as i32,
+        None => -1,
+    }
+}
+
+/// Layer name for a draw command.  Returns NULL if invalid.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_layer_name(doc: *const MmfDocument, index: u32) -> *const c_char {
+    if doc.is_null() {
+        return ptr::null();
+    }
+    let doc = unsafe { &*doc };
+    match doc.draw_list.flat_commands.get(index as usize) {
+        Some(fc) => match doc.draw_layer_cstrings.get(fc.layer_index as usize) {
+            Some(cs) => cs.as_ptr(),
+            None => ptr::null(),
+        },
+        None => ptr::null(),
+    }
+}
+
+/// Layer color index for a draw command.  Returns 7 (white) if invalid.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_color_index(doc: *const MmfDocument, index: u32) -> i16 {
+    if doc.is_null() {
+        return 7;
+    }
+    let doc = unsafe { &*doc };
+    match doc.draw_list.flat_commands.get(index as usize) {
+        Some(fc) => doc
+            .draw_list
+            .layers
+            .get(fc.layer_index as usize)
+            .map_or(7, |l| l.color_index),
+        None => 7,
+    }
+}
+
+/// Layer visibility for a draw command.  Returns 1 if visible.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_layer_visible(doc: *const MmfDocument, index: u32) -> i32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    match doc.draw_list.flat_commands.get(index as usize) {
+        Some(fc) => doc
+            .draw_list
+            .layers
+            .get(fc.layer_index as usize)
+            .map_or(0, |l| if l.visible { 1 } else { 0 }),
+        None => 0,
+    }
+}
+
+/// Read LINE command data.  Returns 1 on success.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_line(
+    doc: *const MmfDocument,
+    index: u32,
+    out_x0: *mut f64,
+    out_y0: *mut f64,
+    out_x1: *mut f64,
+    out_y1: *mut f64,
+) -> i32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    match doc.draw_list.flat_commands.get(index as usize) {
+        Some(mmforge_render::draw2d::FlatDrawCommand {
+            cmd: mmforge_render::draw2d::DrawCommand2D::Line { start, end },
+            ..
+        }) => {
+            unsafe {
+                *out_x0 = start[0];
+                *out_y0 = start[1];
+                *out_x1 = end[0];
+                *out_y1 = end[1];
+            }
+            1
+        }
+        _ => 0,
+    }
+}
+
+/// Read CIRCLE command data.  Returns 1 on success.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_circle(
+    doc: *const MmfDocument,
+    index: u32,
+    out_cx: *mut f64,
+    out_cy: *mut f64,
+    out_r: *mut f64,
+) -> i32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    match doc.draw_list.flat_commands.get(index as usize) {
+        Some(mmforge_render::draw2d::FlatDrawCommand {
+            cmd: mmforge_render::draw2d::DrawCommand2D::Circle { center, radius },
+            ..
+        }) => {
+            unsafe {
+                *out_cx = center[0];
+                *out_cy = center[1];
+                *out_r = *radius;
+            }
+            1
+        }
+        _ => 0,
+    }
+}
+
+/// Read ARC command data.  Angles in radians.  Returns 1 on success.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_arc(
+    doc: *const MmfDocument,
+    index: u32,
+    out_cx: *mut f64,
+    out_cy: *mut f64,
+    out_r: *mut f64,
+    out_start: *mut f64,
+    out_end: *mut f64,
+) -> i32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    match doc.draw_list.flat_commands.get(index as usize) {
+        Some(mmforge_render::draw2d::FlatDrawCommand {
+            cmd:
+                mmforge_render::draw2d::DrawCommand2D::Arc {
+                    center,
+                    radius,
+                    start_angle,
+                    end_angle,
+                },
+            ..
+        }) => {
+            unsafe {
+                *out_cx = center[0];
+                *out_cy = center[1];
+                *out_r = *radius;
+                *out_start = *start_angle;
+                *out_end = *end_angle;
+            }
+            1
+        }
+        _ => 0,
+    }
+}
+
+/// Get POLYLINE point count.  Returns 0 if not a polyline.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_polyline_count(doc: *const MmfDocument, index: u32) -> u32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    match doc.draw_list.flat_commands.get(index as usize) {
+        Some(mmforge_render::draw2d::FlatDrawCommand {
+            cmd: mmforge_render::draw2d::DrawCommand2D::Polyline { points, .. },
+            ..
+        }) => points.len() as u32,
+        _ => 0,
+    }
+}
+
+/// Read a polyline point.  Returns 1 on success.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_polyline_point(
+    doc: *const MmfDocument,
+    cmd_index: u32,
+    point_index: u32,
+    out_x: *mut f64,
+    out_y: *mut f64,
+) -> i32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    match doc.draw_list.flat_commands.get(cmd_index as usize) {
+        Some(mmforge_render::draw2d::FlatDrawCommand {
+            cmd: mmforge_render::draw2d::DrawCommand2D::Polyline { points, .. },
+            ..
+        }) => match points.get(point_index as usize) {
+            Some(p) => {
+                unsafe {
+                    *out_x = p[0];
+                    *out_y = p[1];
+                }
+                1
+            }
+            None => 0,
+        },
+        _ => 0,
+    }
+}
+
+/// Check if polyline is closed.  Returns 1 if closed.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_polyline_closed(doc: *const MmfDocument, index: u32) -> i32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    match doc.draw_list.flat_commands.get(index as usize) {
+        Some(mmforge_render::draw2d::FlatDrawCommand {
+            cmd: mmforge_render::draw2d::DrawCommand2D::Polyline { closed, .. },
+            ..
+        })
+            if *closed => {
+                1
+            }
+        _ => 0,
+    }
+}
+
+/// Read TEXT command data.  Returns content pointer, NULL if not text.
+/// out_x/out_y/out_height/out_rotation are filled on success.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_text(
+    doc: *const MmfDocument,
+    index: u32,
+    out_x: *mut f64,
+    out_y: *mut f64,
+    out_height: *mut f64,
+    out_rotation: *mut f64,
+) -> *const c_char {
+    if doc.is_null() {
+        return ptr::null();
+    }
+    let doc = unsafe { &*doc };
+    match doc.draw_list.flat_commands.get(index as usize) {
+        Some(mmforge_render::draw2d::FlatDrawCommand {
+            cmd:
+                mmforge_render::draw2d::DrawCommand2D::Text {
+                    position,
+                    height,
+                    rotation,
+                    ..
+                },
+            ..
+        }) => {
+            unsafe {
+                *out_x = position[0];
+                *out_y = position[1];
+                *out_height = *height;
+                *out_rotation = *rotation;
+            }
+            match doc.draw_text_cstrings.get(index as usize) {
+                Some(cs) => cs.as_ptr(),
+                None => ptr::null(),
+            }
+        }
+        _ => ptr::null(),
+    }
 }

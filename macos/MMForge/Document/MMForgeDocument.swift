@@ -134,6 +134,12 @@ final class DocumentViewModel: ObservableObject {
         return RustBridge.shared.drawing2DInfo(doc)
     }
 
+    /// Fetch draw commands for 2D rendering.
+    var drawCommands: [DrawCommandDTO] {
+        guard let doc = rustDoc else { return [] }
+        return RustBridge.shared.drawCommands(doc)
+    }
+
     var isLoaded: Bool {
         if case .loaded = state { return true }
         return false

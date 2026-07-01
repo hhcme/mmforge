@@ -11,3 +11,6 @@ description = "DXF file parser for MMForge"
 mmforge-core = { workspace = true }
 glam = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+mmforge-render = { workspace = true }

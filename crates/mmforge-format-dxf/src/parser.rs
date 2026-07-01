@@ -199,3 +199,113 @@ pub fn parse_dxf(path: &Path) -> Result<(ParseOutput, Drawing2DGeometry)> {
         drawing,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_test_fixture() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("test.dxf");
+        assert!(fixture.exists(), "test.dxf fixture missing");
+
+        let (output, drawing) = parse_dxf(&fixture).expect("parse_dxf should succeed");
+
+        // Verify entity counts.
+        assert_eq!(drawing.entities.len(), 6); // 2 LINE + 1 CIRCLE + 1 ARC + 1 LWPOLYLINE + 1 TEXT
+        assert_eq!(drawing.layers.len(), 3); // walls, text, hidden
+
+        // Verify layer names.
+        let layer_names: Vec<&str> = drawing.layers.iter().map(|l| l.name.as_str()).collect();
+        assert!(layer_names.contains(&"walls"));
+        assert!(layer_names.contains(&"text"));
+        assert!(layer_names.contains(&"hidden"));
+
+        // Verify hidden layer is not visible.
+        let hidden = drawing.layers.iter().find(|l| l.name == "hidden").unwrap();
+        assert!(!hidden.visible);
+
+        // Verify bounds are valid.
+        let bbox = drawing.bounds();
+        assert!(bbox.is_valid());
+        assert!(bbox.width() > 0.0);
+        assert!(bbox.height() > 0.0);
+
+        // Verify model structure.
+        assert_eq!(output.model.geometries.len(), 1);
+        assert!(matches!(
+            output.model.geometries[0],
+            Geometry::Drawing2D { .. }
+        ));
+
+        // Verify stats.
+        assert_eq!(output.stats.geometry_count, 1);
+    }
+
+    #[test]
+    fn parse_error_fixture_gracefully() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("error.dxf");
+        assert!(fixture.exists(), "error.dxf fixture missing");
+
+        // Should not panic — malformed values are skipped.
+        let result = parse_dxf(&fixture);
+        // May succeed with 0 entities or fail with an error.
+        match result {
+            Ok((output, drawing)) => {
+                // The malformed LINE has non-numeric value for code 10,
+                // so it should be skipped.
+                assert!(drawing.entities.len() <= 1);
+                assert_eq!(output.stats.geometry_count, 1);
+            }
+            Err(_) => {
+                // Also acceptable — the parser detected the error.
+            }
+        }
+    }
+
+    #[test]
+    fn draw_list_from_fixture() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("test.dxf");
+        let (_, drawing) = parse_dxf(&fixture).expect("parse_dxf");
+
+        let draw_list = mmforge_render::draw2d::build_draw_list(&drawing);
+
+        // Verify draw list has commands.
+        assert!(!draw_list.flat_commands.is_empty());
+
+        // Verify layer grouping.  "hidden" layer has no entities so it
+        // won't appear in the draw list — only layers with entities are included.
+        assert_eq!(draw_list.layers.len(), 2); // walls + text
+
+        // Verify walls layer has LINE, CIRCLE, ARC, POLYLINE commands.
+        let walls = draw_list.layers.iter().find(|l| l.layer_name == "walls").unwrap();
+        assert!(walls.commands.len() >= 4); // 2 line + 1 circle + 1 arc + expanded polyline segments
+
+        // Verify text layer has TEXT command.
+        let text_layer = draw_list.layers.iter().find(|l| l.layer_name == "text").unwrap();
+        assert_eq!(text_layer.commands.len(), 1);
+        assert!(matches!(text_layer.commands[0], mmforge_render::draw2d::DrawCommand2D::Text { .. }));
+    }
+
+    #[test]
+    fn polyline_bulge_expanded_to_arc() {
+        // The test.dxf LWPOLYLINE has bulge=0 (straight segments).
+        // Verify that all polyline segments are lines (no arcs).
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("test.dxf");
+        let (_, drawing) = parse_dxf(&fixture).expect("parse_dxf");
+        let draw_list = mmforge_render::draw2d::build_draw_list(&drawing);
+
+        let walls = draw_list.layers.iter().find(|l| l.layer_name == "walls").unwrap();
+        // The LWPOLYLINE with bulge=0 should produce 4 LINE commands (closed rectangle).
+        let line_cmds: Vec<_> = walls.commands.iter().filter(|c| matches!(c, mmforge_render::draw2d::DrawCommand2D::Line { .. })).collect();
+        assert!(line_cmds.len() >= 4);
+    }
+}

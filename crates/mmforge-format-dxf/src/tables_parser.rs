@@ -21,12 +21,16 @@ pub fn parse_layers(pairs: &[DxfPair]) -> Vec<Layer> {
         let pair = &pairs[i];
 
         // Detect TABLE start.
-        if pair.code == 0 && pair.value == "TABLE"
-            && i + 1 < pairs.len() && pairs[i + 1].code == 2 && pairs[i + 1].value == "LAYER" {
-                in_layer_table = true;
-                i += 2;
-                continue;
-            }
+        if pair.code == 0
+            && pair.value == "TABLE"
+            && i + 1 < pairs.len()
+            && pairs[i + 1].code == 2
+            && pairs[i + 1].value == "LAYER"
+        {
+            in_layer_table = true;
+            i += 2;
+            continue;
+        }
 
         // Detect TABLE end.
         if pair.code == 0 && pair.value == "ENDTAB" {

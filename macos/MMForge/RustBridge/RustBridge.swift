@@ -232,3 +232,91 @@ struct Drawing2DLayerInfo {
     let visible: Bool
     let colorIndex: Int
 }
+
+/// A single 2D draw command for Swift rendering.
+enum DrawCommandDTO {
+    case line(x0: Double, y0: Double, x1: Double, y1: Double,
+              layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool)
+    case circle(cx: Double, cy: Double, r: Double,
+                layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool)
+    case arc(cx: Double, cy: Double, r: Double, startAngle: Double, endAngle: Double,
+             layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool)
+    case polyline(points: [(Double, Double)], closed: Bool,
+                  layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool)
+    case text(x: Double, y: Double, content: String, height: Double, rotation: Double,
+              layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool)
+}
+
+extension RustBridge {
+    /// Fetch all draw commands from a 2D document.
+    func drawCommands(_ doc: OpaquePointer) -> [DrawCommandDTO] {
+        let count = Int(mmf_draw_cmd_count(doc))
+        var commands: [DrawCommandDTO] = []
+        commands.reserveCapacity(count)
+
+        for i in 0..<count {
+            let idx = UInt32(i)
+            let type = mmf_draw_cmd_type(doc, idx)
+            let layerIdx = Int(mmf_draw_cmd_layer_index(doc, idx))
+            let layerName: String = {
+                if let ptr = mmf_draw_cmd_layer_name(doc, idx) {
+                    return String(cString: ptr)
+                }
+                return "Layer \(layerIdx)"
+            }()
+            let colorIdx = Int(mmf_draw_cmd_color_index(doc, idx))
+            let visible = mmf_draw_cmd_layer_visible(doc, idx) != 0
+
+            switch type {
+            case 0: // Line
+                var x0: Double = 0, y0: Double = 0, x1: Double = 0, y1: Double = 0
+                if mmf_draw_cmd_line(doc, idx, &x0, &y0, &x1, &y1) != 0 {
+                    commands.append(.line(x0: x0, y0: y0, x1: x1, y1: y1,
+                                          layerIndex: layerIdx, layerName: layerName,
+                                          colorIndex: colorIdx, visible: visible))
+                }
+            case 1: // Circle
+                var cx: Double = 0, cy: Double = 0, r: Double = 0
+                if mmf_draw_cmd_circle(doc, idx, &cx, &cy, &r) != 0 {
+                    commands.append(.circle(cx: cx, cy: cy, r: r,
+                                            layerIndex: layerIdx, layerName: layerName,
+                                            colorIndex: colorIdx, visible: visible))
+                }
+            case 2: // Arc
+                var cx: Double = 0, cy: Double = 0, r: Double = 0
+                var startAngle: Double = 0, endAngle: Double = 0
+                if mmf_draw_cmd_arc(doc, idx, &cx, &cy, &r, &startAngle, &endAngle) != 0 {
+                    commands.append(.arc(cx: cx, cy: cy, r: r,
+                                         startAngle: startAngle, endAngle: endAngle,
+                                         layerIndex: layerIdx, layerName: layerName,
+                                         colorIndex: colorIdx, visible: visible))
+                }
+            case 3: // Polyline
+                let ptCount = Int(mmf_draw_cmd_polyline_count(doc, idx))
+                var points: [(Double, Double)] = []
+                for j in 0..<ptCount {
+                    var x: Double = 0, y: Double = 0
+                    if mmf_draw_cmd_polyline_point(doc, idx, UInt32(j), &x, &y) != 0 {
+                        points.append((x, y))
+                    }
+                }
+                let closed = mmf_draw_cmd_polyline_closed(doc, idx) != 0
+                commands.append(.polyline(points: points, closed: closed,
+                                          layerIndex: layerIdx, layerName: layerName,
+                                          colorIndex: colorIdx, visible: visible))
+            case 4: // Text
+                var x: Double = 0, y: Double = 0, height: Double = 0, rotation: Double = 0
+                let contentPtr = mmf_draw_cmd_text(doc, idx, &x, &y, &height, &rotation)
+                let content = contentPtr.map { String(cString: $0) } ?? ""
+                commands.append(.text(x: x, y: y, content: content, height: height,
+                                      rotation: rotation,
+                                      layerIndex: layerIdx, layerName: layerName,
+                                      colorIndex: colorIdx, visible: visible))
+            default:
+                break
+            }
+        }
+
+        return commands
+    }
+}

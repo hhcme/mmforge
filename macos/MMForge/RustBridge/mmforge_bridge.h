@@ -168,6 +168,58 @@ const char* mmf_drawing_layer_name(const MmfDocument* doc, uint32_t index);
 /** Check if layer is visible by index.  Returns 1 if visible. */
 int mmf_drawing_layer_visible(const MmfDocument* doc, uint32_t index);
 
+/* ------------------------------------------------------------------ */
+/*  Draw command accessors (flat list across all layers)               */
+/* ------------------------------------------------------------------ */
+
+/** Total draw commands. */
+uint32_t mmf_draw_cmd_count(const MmfDocument* doc);
+
+/** Command type: 0=Line, 1=Circle, 2=Arc, 3=Polyline, 4=Text, -1=invalid. */
+int32_t mmf_draw_cmd_type(const MmfDocument* doc, uint32_t index);
+
+/** Layer index for a draw command.  -1 if invalid. */
+int32_t mmf_draw_cmd_layer_index(const MmfDocument* doc, uint32_t index);
+
+/** Layer name for a draw command.  NULL if invalid. */
+const char* mmf_draw_cmd_layer_name(const MmfDocument* doc, uint32_t index);
+
+/** Layer ACI color index for a draw command. */
+int16_t mmf_draw_cmd_color_index(const MmfDocument* doc, uint32_t index);
+
+/** Layer visibility for a draw command.  1=visible. */
+int mmf_draw_cmd_layer_visible(const MmfDocument* doc, uint32_t index);
+
+/** Read LINE data.  Returns 1 on success. */
+int mmf_draw_cmd_line(const MmfDocument* doc, uint32_t index,
+                      double* out_x0, double* out_y0,
+                      double* out_x1, double* out_y1);
+
+/** Read CIRCLE data.  Returns 1 on success. */
+int mmf_draw_cmd_circle(const MmfDocument* doc, uint32_t index,
+                        double* out_cx, double* out_cy, double* out_r);
+
+/** Read ARC data.  Angles in radians.  Returns 1 on success. */
+int mmf_draw_cmd_arc(const MmfDocument* doc, uint32_t index,
+                     double* out_cx, double* out_cy, double* out_r,
+                     double* out_start, double* out_end);
+
+/** Polyline point count.  0 if not a polyline. */
+uint32_t mmf_draw_cmd_polyline_count(const MmfDocument* doc, uint32_t index);
+
+/** Read polyline point.  Returns 1 on success. */
+int mmf_draw_cmd_polyline_point(const MmfDocument* doc,
+                                uint32_t cmd_index, uint32_t point_index,
+                                double* out_x, double* out_y);
+
+/** Polyline closed flag.  1=closed. */
+int mmf_draw_cmd_polyline_closed(const MmfDocument* doc, uint32_t index);
+
+/** Read TEXT data.  Returns content string (borrowed), NULL if not text. */
+const char* mmf_draw_cmd_text(const MmfDocument* doc, uint32_t index,
+                              double* out_x, double* out_y,
+                              double* out_height, double* out_rotation);
+
 #ifdef __cplusplus
 }
 #endif

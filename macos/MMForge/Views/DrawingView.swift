@@ -2,19 +2,37 @@ import AppKit
 import SwiftUI
 import simd
 
+/// DXF ACI (AutoCAD Color Index) toCGColor mapping.
+private func aciColor(_ index: Int) -> CGColor {
+    switch index {
+    case 1: return CGColor(red: 1, green: 0, blue: 0, alpha: 1)     // red
+    case 2: return CGColor(red: 1, green: 1, blue: 0, alpha: 1)     // yellow
+    case 3: return CGColor(red: 0, green: 1, blue: 0, alpha: 1)     // green
+    case 4: return CGColor(red: 0, green: 1, blue: 1, alpha: 1)     // cyan
+    case 5: return CGColor(red: 0, green: 0, blue: 1, alpha: 1)     // blue
+    case 6: return CGColor(red: 1, green: 0, blue: 1, alpha: 1)     // magenta
+    default: return CGColor(red: 1, green: 1, blue: 1, alpha: 1)    // white
+    }
+}
+
 /// A 2D drawing view using Core Graphics.
 ///
 /// Renders DXF drawing entities (lines, circles, arcs, polylines, text)
 /// with pan, zoom, and fit-to-view support.  Layer visibility can be
 /// toggled per-layer.
 class Drawing2DView: NSView {
-    /// Parsed draw list data from the Rust bridge.
+    /// Parsed draw commands from the Rust bridge.
+    var drawCommands: [DrawCommandDTO] = [] {
+        didSet { needsDisplay = true }
+    }
+
+    /// 2D drawing metadata.
     var drawingInfo: Drawing2DInfo? {
         didSet { needsDisplay = true }
     }
 
-    /// Layer visibility overrides (layer name → visible).
-    var layerVisibility: [String: Bool] = [:] {
+    /// Layer visibility overrides (layer index → visible).
+    var layerVisibilityOverrides: [Int: Bool] = [:] {
         didSet { needsDisplay = true }
     }
 
@@ -44,18 +62,12 @@ class Drawing2DView: NSView {
         ctx.setFillColor(CGColor(red: 0.12, green: 0.12, blue: 0.14, alpha: 1.0))
         ctx.fill(bounds)
 
-        guard let info = drawingInfo else { return }
-
         // Compute transform: world → screen.
-        // 1. Translate to center of view.
-        // 2. Apply zoom.
-        // 3. Apply pan offset.
-        // 4. Translate world origin to view center.
         let viewCenter = CGPoint(x: bounds.midX, y: bounds.midY)
         let wb = worldBounds
         let worldCenter = CGPoint(x: wb.midX, y: wb.midY)
 
-        // Scale to fit the drawing in the view with some margin.
+        // Scale to fit the drawing in the view with margin.
         let margin: CGFloat = 40
         let scaleX = (bounds.width - margin * 2) / max(wb.width, 0.001)
         let scaleY = (bounds.height - margin * 2) / max(wb.height, 0.001)
@@ -63,13 +75,11 @@ class Drawing2DView: NSView {
 
         ctx.saveGState()
 
-        // Move to view center.
+        // Move to view center, apply zoom, apply pan, center world.
         ctx.translateBy(x: viewCenter.x, y: viewCenter.y)
-        // Apply zoom.
         ctx.scaleBy(x: zoomLevel * fitScale, y: zoomLevel * fitScale)
-        // Apply pan.
-        ctx.translateBy(x: panOffset.x / (zoomLevel * fitScale), y: panOffset.y / (zoomLevel * fitScale))
-        // Center the world bounds.
+        ctx.translateBy(x: panOffset.x / (zoomLevel * fitScale),
+                        y: panOffset.y / (zoomLevel * fitScale))
         ctx.translateBy(x: -worldCenter.x, y: -worldCenter.y)
 
         // Flip Y axis (DXF Y-up → screen Y-down).
@@ -79,11 +89,10 @@ class Drawing2DView: NSView {
         // Draw grid.
         drawGrid(ctx: ctx, worldBounds: wb, scale: zoomLevel * fitScale)
 
-        // Draw entities grouped by layer.
-        // For now, draw all entities directly since we don't have per-entity
-        // layer data in the C ABI yet.  The layer visibility is handled by
-        // the scene tree nodes.
-        drawAllEntities(ctx: ctx, info: info)
+        // Draw all entities.
+        for cmd in drawCommands {
+            drawCommand(ctx: ctx, cmd: cmd)
+        }
 
         ctx.restoreGState()
     }
@@ -129,10 +138,9 @@ class Drawing2DView: NSView {
         let extent = max(worldBounds.width, worldBounds.height)
         if extent <= 0 { return 1.0 }
         let raw = extent / 10.0
-        // Snap to 1, 2, 5, 10, 20, 50, ...
-        let log10 = log10(raw)
-        let exp = floor(log10)
-        let frac = pow(10.0, log10 - exp)
+        let log10Val = log10(raw)
+        let exp = floor(log10Val)
+        let frac = pow(10.0, log10Val - exp)
         let mantissa: CGFloat
         if frac < 1.5 { mantissa = 1 }
         else if frac < 3.5 { mantissa = 2 }
@@ -141,13 +149,87 @@ class Drawing2DView: NSView {
         return mantissa * pow(10.0, exp)
     }
 
-    private func drawAllEntities(ctx: CGContext, info: Drawing2DInfo) {
-        // We don't have per-entity data via C ABI yet.
-        // For now, draw a placeholder bounding box to verify the view works.
-        let wb = worldBounds
-        ctx.setStrokeColor(CGColor(red: 0.0, green: 1.0, blue: 0.0, alpha: 1.0))
-        ctx.setLineWidth(2.0)
-        ctx.stroke(wb)
+    // MARK: - Entity rendering
+
+    private func isLayerVisible(_ layerIndex: Int, default visible: Bool) -> Bool {
+        layerVisibilityOverrides[layerIndex] ?? visible
+    }
+
+    private func drawCommand(ctx: CGContext, cmd: DrawCommandDTO) {
+        switch cmd {
+        case .line(let x0, let y0, let x1, let y1,
+                   let layerIdx, _, let colorIdx, let visible):
+            guard isLayerVisible(layerIdx, default: visible) else { return }
+            ctx.setStrokeColor(aciColor(colorIdx))
+            ctx.setLineWidth(1.0)
+            ctx.beginPath()
+            ctx.move(to: CGPoint(x: x0, y: y0))
+            ctx.addLine(to: CGPoint(x: x1, y: y1))
+            ctx.strokePath()
+
+        case .circle(let cx, let cy, let r,
+                     let layerIdx, _, let colorIdx, let visible):
+            guard isLayerVisible(layerIdx, default: visible) else { return }
+            ctx.setStrokeColor(aciColor(colorIdx))
+            ctx.setLineWidth(1.0)
+            let rect = CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2)
+            ctx.strokeEllipse(in: rect)
+
+        case .arc(let cx, let cy, let r, let startAngle, let endAngle,
+                  let layerIdx, _, let colorIdx, let visible):
+            guard isLayerVisible(layerIdx, default: visible) else { return }
+            ctx.setStrokeColor(aciColor(colorIdx))
+            ctx.setLineWidth(1.0)
+            // Core Graphics arcs are clockwise in screen space.
+            // DXF angles are counter-clockwise in math space.
+            // Since we flipped Y, CG arcs are already CCW in world space.
+            let startRad = CGFloat(startAngle)
+            let endRad = CGFloat(endAngle)
+            ctx.beginPath()
+            ctx.addArc(center: CGPoint(x: cx, y: cy),
+                       radius: CGFloat(r),
+                       startAngle: startRad,
+                       endAngle: endRad,
+                       clockwise: false)
+            ctx.strokePath()
+
+        case .polyline(let points, let closed,
+                       let layerIdx, _, let colorIdx, let visible):
+            guard isLayerVisible(layerIdx, default: visible) else { return }
+            guard !points.isEmpty else { return }
+            ctx.setStrokeColor(aciColor(colorIdx))
+            ctx.setLineWidth(1.0)
+            ctx.beginPath()
+            ctx.move(to: CGPoint(x: points[0].0, y: points[0].1))
+            for i in 1..<points.count {
+                ctx.addLine(to: CGPoint(x: points[i].0, y: points[i].1))
+            }
+            if closed && points.count > 1 {
+                ctx.closePath()
+            }
+            ctx.strokePath()
+
+        case .text(let x, let y, let content, let height, let rotation,
+                   let layerIdx, _, let colorIdx, let visible):
+            guard isLayerVisible(layerIdx, default: visible) else { return }
+            guard !content.isEmpty else { return }
+            let fontSize = max(1.0, CGFloat(height))
+            let font = NSFont.systemFont(ofSize: fontSize)
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: aciColor(colorIdx),
+            ]
+            let nsString = content as NSString
+
+            ctx.saveGState()
+            ctx.translateBy(x: CGFloat(x), y: CGFloat(y))
+            // DXF rotation is counter-clockwise degrees.
+            ctx.rotate(by: CGFloat(rotation) * .pi / 180.0)
+            // Flip back for text (we're in flipped Y context).
+            ctx.scaleBy(x: 1.0, y: -1.0)
+            nsString.draw(at: CGPoint(x: 0, y: 0), withAttributes: attrs)
+            ctx.restoreGState()
+        }
     }
 
     // MARK: - Gestures
@@ -183,8 +265,9 @@ class Drawing2DView: NSView {
 // MARK: - NSViewRepresentable wrapper
 
 struct Drawing2DViewRepresentable: NSViewRepresentable {
+    let drawCommands: [DrawCommandDTO]
     let drawingInfo: Drawing2DInfo?
-    @Binding var layerVisibility: [String: Bool]
+    @Binding var layerVisibilityOverrides: [Int: Bool]
 
     func makeNSView(context: Context) -> Drawing2DView {
         let view = Drawing2DView()
@@ -193,7 +276,8 @@ struct Drawing2DViewRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: Drawing2DView, context: Context) {
+        nsView.drawCommands = drawCommands
         nsView.drawingInfo = drawingInfo
-        nsView.layerVisibility = layerVisibility
+        nsView.layerVisibilityOverrides = layerVisibilityOverrides
     }
 }

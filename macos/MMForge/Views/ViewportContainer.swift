@@ -7,7 +7,7 @@ import MetalKit
 /// is open.
 struct ViewportContainer: View {
     @ObservedObject var viewModel: DocumentViewModel
-    @State private var layerVisibility: [String: Bool] = [:]
+    @State private var layerVisibilityOverrides: [Int: Bool] = [:]
 
     var body: some View {
         ZStack {
@@ -21,8 +21,9 @@ struct ViewportContainer: View {
             case .loaded:
                 if viewModel.is2DDrawing {
                     Drawing2DViewRepresentable(
+                        drawCommands: viewModel.drawCommands,
                         drawingInfo: viewModel.drawing2DInfo,
-                        layerVisibility: $layerVisibility
+                        layerVisibilityOverrides: $layerVisibilityOverrides
                     )
                 } else {
                     MetalViewWrapper(viewModel: viewModel)

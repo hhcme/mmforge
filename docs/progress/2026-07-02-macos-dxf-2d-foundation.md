@@ -199,13 +199,72 @@ Fixture source: hand-written, trivial geometry. Public domain.
 
 ---
 
-## Open Items
+---
+
+## Round 2 — Real rendering via C ABI
+
+### Problem
+Round 1's DrawingView only drew a bounding box placeholder. The C ABI exposed entity counts but not the actual draw command data (coordinates, types). LWPOLYLINE bulge-to-arc was documented but not implemented.
+
+### Fixes
+
+**1. C ABI draw command accessors (16 new functions)**
+- `mmf_draw_cmd_count/type/layer_index/layer_name/color_index/layer_visible` — per-command metadata
+- `mmf_draw_cmd_line(circle/arc/polyline/text` — per-type coordinate accessors
+- `mmf_draw_cmd_polyline_count/point/closed` — polyline vertex access
+- All return proper error codes (0/-1 on invalid, 1 on success)
+
+**2. MmfDocument stores DrawingDrawList**
+- `build_document()` now calls `build_draw_list()` for Drawing2D geometries
+- Pre-computed `draw_text_cstrings` and `draw_layer_cstrings` for stable C string pointers
+- `draw_list.flat_commands` provides indexed access for C ABI
+
+**3. LWPOLYLINE bulge-to-arc implemented**
+- `bulge_to_arc(p1, p2, bulge)` → `ArcParams { center, radius, start_angle, end_angle }`
+- `expand_polyline(vertices, closed)` → `Vec<DrawCommand2D>` (lines for bulge≈0, arcs for bulge≠0)
+- Closed polylines wrap around (segment from last to first vertex)
+- Degenerate cases handled (zero distance, zero bulge)
+
+**4. DrawingView renders actual entities via Core Graphics**
+- LINE: `CGContext.move/addLine/stroke`
+- CIRCLE: `CGContext.strokeEllipse`
+- ARC: `CGContext.addArc` with start/end angles
+- POLYLINE: `move/addLine` per point, `closePath` if closed
+- TEXT: `NSAttributedString.draw` with rotation transform
+- Each entity checks layer visibility before rendering
+- ACI color index → CGColor mapping (1=red, 2=yellow, 3=green, 4=cyan, 5=blue, 6=magenta, 7=white)
+
+**5. Layer visibility effective in rendering**
+- `layerVisibilityOverrides: [Int: Bool]` dictionary in Drawing2DView
+- Each draw command checks `isLayerVisible(layerIndex, default: visible)`
+- UI can override layer visibility via the dictionary
+
+**6. Swift DrawCommandDTO enum**
+- `DrawCommandDTO` with cases: `.line`, `.circle`, `.arc`, `.polyline`, `.text`
+- Each case carries layerIndex, layerName, colorIndex, visible
+- `RustBridge.drawCommands(_:)` fetches all commands from C ABI
+
+**7. E2E tests added**
+- `parse_test_fixture` — verifies entity counts, layer names, bounds, model structure
+- `parse_error_fixture_gracefully` — malformed DXF doesn't panic
+- `draw_list_from_fixture` — verifies draw list has commands, layer grouping, text command
+- `polyline_bulge_expanded_to_arc` — verifies bulge=0 produces LINE commands
+
+### Verification
+
+| Command | Result |
+|---------|--------|
+| `cargo test --workspace` | ✅ 166 tests pass |
+| `cargo clippy --workspace` | ✅ Clean |
+| `xcodebuild build` | ✅ BUILD SUCCEEDED |
+| `xcodebuild test` | ✅ 22 tests pass |
+
+---
+
+## Open Items (updated)
 
 | Item | Status | Notes |
 |------|--------|-------|
-| Per-entity layer data via C ABI | Planned | Currently only aggregate counts; need per-entity DTO for full 2D rendering |
-| Actual entity rendering in DrawingView | Planned | Currently draws bounding box placeholder; need to iterate entities via C ABI |
-| LWPOLYLINE bulge-to-arc | Spec complete | Algorithm documented; not yet applied in draw list builder |
 | MTEXT, SPLINE, ELLIPSE | Planned | P1 entities |
 | INSERT/BLOCK expansion | Planned | P1 — block references with transform |
 | Spatial index for large drawings | Planned | Phase 4 acceptance criterion |
