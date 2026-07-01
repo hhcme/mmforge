@@ -89,6 +89,8 @@ struct MetalViewWrapper: NSViewRepresentable {
         mtkView.depthStencilPixelFormat = .depth32Float
         mtkView.clearColor = MTLClearColor(red: 0.12, green: 0.12, blue: 0.14, alpha: 1)
         mtkView.preferredFramesPerSecond = 60
+        // Allow reading the drawable texture for screenshot capture.
+        mtkView.framebufferOnly = false
 
         if let renderer = MetalRenderer(mtkView: mtkView) {
             mtkView.delegate = renderer

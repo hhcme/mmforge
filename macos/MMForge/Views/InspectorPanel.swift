@@ -374,7 +374,7 @@ struct InspectorPanel: View {
 
                 Divider()
 
-                // Display (persisted via AppPreferences)
+                // Display preferences
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Display")
                         .font(.headline)
@@ -384,8 +384,6 @@ struct InspectorPanel: View {
                         .accessibilityHint("Toggle grid display in viewport")
                     Toggle("Show Axes", isOn: $viewModel.showAxes)
                         .accessibilityHint("Toggle axis indicator in viewport")
-                    Toggle("Anti-aliasing", isOn: $viewModel.antiAliasing)
-                        .accessibilityHint("Toggle anti-aliasing")
                 }
 
                 Divider()

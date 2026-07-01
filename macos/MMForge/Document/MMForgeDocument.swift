@@ -14,7 +14,6 @@ extension UTType {
 struct AppPreferences {
     @AppStorage("showGrid") static var showGrid: Bool = true
     @AppStorage("showAxes") static var showAxes: Bool = true
-    @AppStorage("antiAliasing") static var antiAliasing: Bool = true
     @AppStorage("exportFormat") static var exportFormat: String = "png"
     @AppStorage("exportScale") static var exportScale: Double = 1.0
 }
@@ -106,10 +105,6 @@ final class DocumentViewModel: ObservableObject {
     var showAxes: Bool {
         get { AppPreferences.showAxes }
         set { AppPreferences.showAxes = newValue }
-    }
-    var antiAliasing: Bool {
-        get { AppPreferences.antiAliasing }
-        set { AppPreferences.antiAliasing = newValue }
     }
 
     private var rustDoc: OpaquePointer?
@@ -429,11 +424,17 @@ final class DocumentViewModel: ObservableObject {
 
     // MARK: - Image export
 
+    /// Error message for failed export (shown as alert in UI).
+    @Published var exportError: String?
+
     /// Capture the current viewport and present NSSavePanel for export.
     func exportImage() {
-        guard let renderer else { return }
+        guard let renderer else {
+            exportError = "No renderer available."
+            return
+        }
         guard let image = renderer.captureImage() else {
-            // Could not capture — no drawable available.
+            exportError = "Failed to capture viewport — no drawable available."
             return
         }
 
@@ -451,7 +452,10 @@ final class DocumentViewModel: ObservableObject {
 
     private func saveImage(_ image: NSImage, to url: URL) {
         guard let tiffData = image.tiffRepresentation,
-              let bitmapRep = NSBitmapImageRep(data: tiffData) else { return }
+              let bitmapRep = NSBitmapImageRep(data: tiffData) else {
+            exportError = "Failed to encode image data."
+            return
+        }
 
         let isPNG = url.pathExtension.lowercased() == "png"
         let imageData = isPNG
@@ -461,7 +465,7 @@ final class DocumentViewModel: ObservableObject {
         do {
             try imageData?.write(to: url)
         } catch {
-            // Silently fail — could show alert in future.
+            exportError = "Failed to write image: \(error.localizedDescription)"
         }
     }
 

@@ -96,6 +96,15 @@ struct ContentView: View {
             }
         }
         .focusedObject(viewModel)
+        .alert("Export Error",
+               isPresented: Binding(
+                   get: { viewModel.exportError != nil },
+                   set: { if !$0 { viewModel.exportError = nil } }
+               )) {
+            Button("OK") { viewModel.exportError = nil }
+        } message: {
+            Text(viewModel.exportError ?? "")
+        }
         .onAppear {
             viewModel.parseFile(data: document.fileData)
         }
