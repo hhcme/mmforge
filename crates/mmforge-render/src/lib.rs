@@ -7,6 +7,7 @@ pub mod builder;
 pub mod camera;
 pub mod draw2d;
 pub mod packet;
+pub mod spatial2d;
 
 pub use builder::build_render_packet;
 pub use camera::OrbitCamera;

@@ -31,8 +31,8 @@ class Drawing2DView: NSView {
         didSet { needsDisplay = true }
     }
 
-    /// Layer visibility overrides (layer index → visible).
-    var layerVisibilityOverrides: [Int: Bool] = [:] {
+    /// Layer visibility overrides (layer name → visible).
+    var layerVisibilityOverrides: [String: Bool] = [:] {
         didSet { needsDisplay = true }
     }
 
@@ -90,8 +90,9 @@ class Drawing2DView: NSView {
         drawGrid(ctx: ctx, worldBounds: wb, scale: zoomLevel * fitScale)
 
         // Draw all entities.
+        let scale = zoomLevel * fitScale
         for cmd in drawCommands {
-            drawCommand(ctx: ctx, cmd: cmd)
+            drawCommand(ctx: ctx, cmd: cmd, scale: scale)
         }
 
         ctx.restoreGState()
@@ -151,38 +152,101 @@ class Drawing2DView: NSView {
 
     // MARK: - Entity rendering
 
-    private func isLayerVisible(_ layerIndex: Int, default visible: Bool) -> Bool {
-        layerVisibilityOverrides[layerIndex] ?? visible
+    private func isLayerVisible(_ layerName: String, default visible: Bool) -> Bool {
+        layerVisibilityOverrides[layerName] ?? visible
     }
 
-    private func drawCommand(ctx: CGContext, cmd: DrawCommandDTO) {
+    private func lineWidth(_ cmd: DrawCommandDTO, scale: CGFloat) -> CGFloat {
+        let weight: Double
         switch cmd {
-        case .line(let x0, let y0, let x1, let y1,
-                   let layerIdx, _, let colorIdx, let visible):
-            guard isLayerVisible(layerIdx, default: visible) else { return }
+        case .line(_, _, _, _, _, _, _, _, _, let lw),
+             .circle(_, _, _, _, _, _, _, _, let lw),
+             .arc(_, _, _, _, _, _, _, _, _, _, _, let lw),
+             .polyline(_, _, _, _, _, _, _, let lw):
+            weight = lw
+        case .text:
+            weight = 0
+        }
+        // Line weight in mm → points.  Default 0 means 1px.
+        if weight > 0 {
+            return CGFloat(weight) * 2.835 / scale // 1mm ≈ 2.835pt
+        }
+        return 1.0
+    }
+
+    private func lineDashPattern(_ cmd: DrawCommandDTO) -> [CGFloat]? {
+        let lineType: String?
+        switch cmd {
+        case .line(_, _, _, _, _, _, _, _, let lt, _),
+             .circle(_, _, _, _, _, _, _, let lt, _),
+             .arc(_, _, _, _, _, _, _, _, _, _, let lt, _),
+             .polyline(_, _, _, _, _, _, let lt, _):
+            lineType = lt
+        case .text:
+            lineType = nil
+        }
+        guard let lt = lineType else { return nil }
+        switch lt.lowercased() {
+        case "dashed":       return [6, 3]
+        case "dashdot":      return [6, 3, 1, 3]
+        case "dashdotdot":   return [6, 3, 1, 3, 1, 3]
+        case "dotted":       return [1, 3]
+        case "center":       return [12, 3, 3, 3]
+        case "hidden":       return [6, 3]
+        case "phantom":      return [12, 3, 3, 3, 3, 3]
+        case "border":       return [12, 3, 12, 3]
+        case "border2":      return [6, 3, 6, 3]
+        case "continuous":   return nil
+        default:             return nil
+        }
+    }
+
+    private func drawCommand(ctx: CGContext, cmd: DrawCommandDTO, scale: CGFloat) {
+        // Extract layer name and visibility from command.
+        let layerName: String
+        let visible: Bool
+        let colorIdx: Int
+        switch cmd {
+        case .line(_, _, _, _, _, let ln, let ci, let v, _, _),
+             .circle(_, _, _, _, let ln, let ci, let v, _, _),
+             .arc(_, _, _, _, _, _, _, let ln, let ci, let v, _, _),
+             .polyline(_, _, _, let ln, let ci, let v, _, _),
+             .text(_, _, _, _, _, _, let ln, let ci, let v):
+            layerName = ln
+            visible = v
+            colorIdx = ci
+        }
+
+        guard isLayerVisible(layerName, default: visible) else { return }
+
+        let lw = lineWidth(cmd, scale: scale)
+        let dash = lineDashPattern(cmd)
+
+        switch cmd {
+        case .line(let x0, let y0, let x1, let y1, _, _, _, _, _, _):
             ctx.setStrokeColor(aciColor(colorIdx))
-            ctx.setLineWidth(1.0)
+            ctx.setLineWidth(lw)
+            if let dash { ctx.setLineDash(phase: 0, lengths: dash) }
+            else { ctx.setLineDash(phase: 0, lengths: []) }
             ctx.beginPath()
             ctx.move(to: CGPoint(x: x0, y: y0))
             ctx.addLine(to: CGPoint(x: x1, y: y1))
             ctx.strokePath()
 
-        case .circle(let cx, let cy, let r,
-                     let layerIdx, _, let colorIdx, let visible):
-            guard isLayerVisible(layerIdx, default: visible) else { return }
+        case .circle(let cx, let cy, let r, _, _, _, _, _, _):
             ctx.setStrokeColor(aciColor(colorIdx))
-            ctx.setLineWidth(1.0)
+            ctx.setLineWidth(lw)
+            if let dash { ctx.setLineDash(phase: 0, lengths: dash) }
+            else { ctx.setLineDash(phase: 0, lengths: []) }
             let rect = CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2)
             ctx.strokeEllipse(in: rect)
 
         case .arc(let cx, let cy, let r, let startAngle, let endAngle, let ccw,
-                  let layerIdx, _, let colorIdx, let visible):
-            guard isLayerVisible(layerIdx, default: visible) else { return }
+                  _, _, _, _, _, _):
             ctx.setStrokeColor(aciColor(colorIdx))
-            ctx.setLineWidth(1.0)
-            // Angles are already in radians from the draw list builder.
-            // CGContext Y-flip means: ccw=true → clockwise=false (CG CCW),
-            // ccw=false → clockwise=true (CG CW).
+            ctx.setLineWidth(lw)
+            if let dash { ctx.setLineDash(phase: 0, lengths: dash) }
+            else { ctx.setLineDash(phase: 0, lengths: []) }
             ctx.beginPath()
             ctx.addArc(center: CGPoint(x: cx, y: cy),
                        radius: CGFloat(r),
@@ -191,12 +255,12 @@ class Drawing2DView: NSView {
                        clockwise: !ccw)
             ctx.strokePath()
 
-        case .polyline(let points, let closed,
-                       let layerIdx, _, let colorIdx, let visible):
-            guard isLayerVisible(layerIdx, default: visible) else { return }
+        case .polyline(let points, let closed, _, _, _, _, _, _):
             guard !points.isEmpty else { return }
             ctx.setStrokeColor(aciColor(colorIdx))
-            ctx.setLineWidth(1.0)
+            ctx.setLineWidth(lw)
+            if let dash { ctx.setLineDash(phase: 0, lengths: dash) }
+            else { ctx.setLineDash(phase: 0, lengths: []) }
             ctx.beginPath()
             ctx.move(to: CGPoint(x: points[0].0, y: points[0].1))
             for i in 1..<points.count {
@@ -208,8 +272,7 @@ class Drawing2DView: NSView {
             ctx.strokePath()
 
         case .text(let x, let y, let content, let height, let rotation,
-                   let layerIdx, _, let colorIdx, let visible):
-            guard isLayerVisible(layerIdx, default: visible) else { return }
+                   _, _, _, _):
             guard !content.isEmpty else { return }
             let fontSize = max(1.0, CGFloat(height))
             let font = NSFont.systemFont(ofSize: fontSize)
@@ -221,13 +284,14 @@ class Drawing2DView: NSView {
 
             ctx.saveGState()
             ctx.translateBy(x: CGFloat(x), y: CGFloat(y))
-            // DXF rotation is counter-clockwise degrees.
             ctx.rotate(by: CGFloat(rotation) * .pi / 180.0)
-            // Flip back for text (we're in flipped Y context).
             ctx.scaleBy(x: 1.0, y: -1.0)
             nsString.draw(at: CGPoint(x: 0, y: 0), withAttributes: attrs)
             ctx.restoreGState()
         }
+
+        // Reset line dash after each command.
+        ctx.setLineDash(phase: 0, lengths: [])
     }
 
     // MARK: - Gestures
@@ -265,7 +329,7 @@ class Drawing2DView: NSView {
 struct Drawing2DViewRepresentable: NSViewRepresentable {
     let drawCommands: [DrawCommandDTO]
     let drawingInfo: Drawing2DInfo?
-    @Binding var layerVisibilityOverrides: [Int: Bool]
+    let layerVisibilityOverrides: [String: Bool]
 
     func makeNSView(context: Context) -> Drawing2DView {
         let view = Drawing2DView()

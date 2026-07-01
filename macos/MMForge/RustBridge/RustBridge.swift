@@ -236,13 +236,17 @@ struct Drawing2DLayerInfo {
 /// A single 2D draw command for Swift rendering.
 enum DrawCommandDTO {
     case line(x0: Double, y0: Double, x1: Double, y1: Double,
-              layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool)
+              layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool,
+              lineType: String?, lineWeight: Double)
     case circle(cx: Double, cy: Double, r: Double,
-                layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool)
+                layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool,
+                lineType: String?, lineWeight: Double)
     case arc(cx: Double, cy: Double, r: Double, startAngle: Double, endAngle: Double, ccw: Bool,
-             layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool)
+             layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool,
+             lineType: String?, lineWeight: Double)
     case polyline(points: [(Double, Double)], closed: Bool,
-                  layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool)
+                  layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool,
+                  lineType: String?, lineWeight: Double)
     case text(x: Double, y: Double, content: String, height: Double, rotation: Double,
               layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool)
 }
@@ -266,6 +270,13 @@ extension RustBridge {
             }()
             let colorIdx = Int(mmf_draw_cmd_color_index(doc, idx))
             let visible = mmf_draw_cmd_layer_visible(doc, idx) != 0
+            let lineType: String? = {
+                if let ptr = mmf_draw_cmd_line_type(doc, idx) {
+                    return String(cString: ptr)
+                }
+                return nil
+            }()
+            let lineWeight = mmf_draw_cmd_line_weight(doc, idx)
 
             switch type {
             case 0: // Line
@@ -273,14 +284,16 @@ extension RustBridge {
                 if mmf_draw_cmd_line(doc, idx, &x0, &y0, &x1, &y1) != 0 {
                     commands.append(.line(x0: x0, y0: y0, x1: x1, y1: y1,
                                           layerIndex: layerIdx, layerName: layerName,
-                                          colorIndex: colorIdx, visible: visible))
+                                          colorIndex: colorIdx, visible: visible,
+                                          lineType: lineType, lineWeight: lineWeight))
                 }
             case 1: // Circle
                 var cx: Double = 0, cy: Double = 0, r: Double = 0
                 if mmf_draw_cmd_circle(doc, idx, &cx, &cy, &r) != 0 {
                     commands.append(.circle(cx: cx, cy: cy, r: r,
                                             layerIndex: layerIdx, layerName: layerName,
-                                            colorIndex: colorIdx, visible: visible))
+                                            colorIndex: colorIdx, visible: visible,
+                                            lineType: lineType, lineWeight: lineWeight))
                 }
             case 2: // Arc
                 var cx: Double = 0, cy: Double = 0, r: Double = 0
@@ -291,7 +304,8 @@ extension RustBridge {
                                          startAngle: startAngle, endAngle: endAngle,
                                          ccw: ccw != 0,
                                          layerIndex: layerIdx, layerName: layerName,
-                                         colorIndex: colorIdx, visible: visible))
+                                         colorIndex: colorIdx, visible: visible,
+                                         lineType: lineType, lineWeight: lineWeight))
                 }
             case 3: // Polyline
                 let ptCount = Int(mmf_draw_cmd_polyline_count(doc, idx))
@@ -305,7 +319,8 @@ extension RustBridge {
                 let closed = mmf_draw_cmd_polyline_closed(doc, idx) != 0
                 commands.append(.polyline(points: points, closed: closed,
                                           layerIndex: layerIdx, layerName: layerName,
-                                          colorIndex: colorIdx, visible: visible))
+                                          colorIndex: colorIdx, visible: visible,
+                                          lineType: lineType, lineWeight: lineWeight))
             case 4: // Text
                 var x: Double = 0, y: Double = 0, height: Double = 0, rotation: Double = 0
                 let contentPtr = mmf_draw_cmd_text(doc, idx, &x, &y, &height, &rotation)
@@ -320,5 +335,17 @@ extension RustBridge {
         }
 
         return commands
+    }
+
+    /// Query spatial index for visible commands in viewport.
+    /// Returns array of command indices, or empty array if no spatial index.
+    func spatialQuery(_ doc: OpaquePointer, minX: Double, minY: Double,
+                      maxX: Double, maxY: Double) -> [Int] {
+        let maxCount = 10000
+        let buffer = UnsafeMutablePointer<UInt32>.allocate(capacity: maxCount)
+        defer { buffer.deallocate() }
+        let count = mmf_draw_spatial_query(doc, minX, minY, maxX, maxY, buffer, UInt32(maxCount))
+        if count <= 0 { return [] }
+        return (0..<Int(count)).map { Int(buffer[$0]) }
     }
 }

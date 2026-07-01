@@ -4,7 +4,7 @@
 //! Each LAYER entry has group code 2 (name), 62 (color index), and
 //! 70 (flags — bit 1 = frozen).
 
-use mmforge_core::drawing::Layer;
+use mmforge_core::drawing::{Layer, LineType};
 
 use crate::tokenizer::DxfPair;
 
@@ -83,6 +83,79 @@ pub fn parse_layers(pairs: &[DxfPair]) -> Vec<Layer> {
     }
 
     layers
+}
+
+/// Parse LINETYPE entries from the TABLES section pairs.
+pub fn parse_line_types(pairs: &[DxfPair]) -> Vec<LineType> {
+    let mut line_types = Vec::new();
+    let mut in_ltype_table = false;
+    let mut current_name: Option<String> = None;
+    let mut current_desc = String::new();
+    let mut current_dashes: Vec<f64> = Vec::new();
+    let mut current_total: f64 = 0.0;
+
+    let mut i = 0;
+    while i < pairs.len() {
+        let pair = &pairs[i];
+
+        if pair.code == 0
+            && pair.value == "TABLE"
+            && i + 1 < pairs.len()
+            && pairs[i + 1].code == 2
+            && pairs[i + 1].value == "LTYPE"
+        {
+            in_ltype_table = true;
+            i += 2;
+            continue;
+        }
+
+        if pair.code == 0 && pair.value == "ENDTAB" {
+            in_ltype_table = false;
+            i += 1;
+            continue;
+        }
+
+        if in_ltype_table {
+            if pair.code == 0 && pair.value == "LTYPE" {
+                if let Some(name) = current_name.take() {
+                    line_types.push(LineType {
+                        name,
+                        description: std::mem::take(&mut current_desc),
+                        dashes: std::mem::take(&mut current_dashes),
+                        total_length: current_total,
+                    });
+                }
+                current_total = 0.0;
+                i += 1;
+                continue;
+            }
+
+            match pair.code {
+                2 => current_name = Some(pair.value.clone()),
+                3 => current_desc = pair.value.clone(),
+                40 => current_total = pair.value.parse().unwrap_or(0.0),
+                49 => {
+                    if let Ok(v) = pair.value.parse::<f64>() {
+                        current_dashes.push(v);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        i += 1;
+    }
+
+    if let Some(name) = current_name {
+        line_types.push(LineType {
+            name,
+            description: current_desc,
+            dashes: current_dashes,
+            total_length: current_total,
+        });
+    }
+
+    line_types
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ struct InspectorPanel: View {
                 Text("Properties").tag(0)
                 Text("Measure").tag(1)
                 Text("Settings").tag(2)
+                Text("Layers").tag(3)
             }
             .pickerStyle(.segmented)
             .padding(8)
@@ -24,8 +25,10 @@ struct InspectorPanel: View {
                     propertiesView
                 case 1:
                     measureView
-                default:
+                case 2:
                     settingsView
+                default:
+                    layersView
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -402,6 +405,56 @@ struct InspectorPanel: View {
                 LabeledContent("Version", value: RustBridge.shared.coreVersion())
             }
             .padding(12)
+        }
+    }
+
+    // MARK: - Layers
+
+    private var layersView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Layers")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+
+                if viewModel.layerVisibility.isEmpty {
+                    Text("No layers (3D model)")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    ForEach(Array(viewModel.layerVisibility.keys.sorted()), id: \.self) { name in
+                        HStack {
+                            Circle()
+                                .fill(aciSwiftUIColor(viewModel.layerColors[name] ?? 7))
+                                .frame(width: 10, height: 10)
+                            Text(name)
+                                .font(.body)
+                            Spacer()
+                            Image(systemName: viewModel.layerVisibility[name] ?? true
+                                  ? "eye" : "eye.slash")
+                                .foregroundStyle(.secondary)
+                                .onTapGesture {
+                                    viewModel.toggleLayerVisibility(name)
+                                }
+                                .accessibilityLabel("\(name) layer \(viewModel.layerVisibility[name] ?? true ? "visible" : "hidden")")
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private func aciSwiftUIColor(_ index: Int) -> Color {
+        switch index {
+        case 1: return .red
+        case 2: return .yellow
+        case 3: return .green
+        case 4: return .cyan
+        case 5: return .blue
+        case 6: return .purple
+        default: return .white
         }
     }
 

@@ -115,6 +115,10 @@ final class DocumentViewModel: ObservableObject {
     // Color override state
     @Published var nodeColorOverrides: [Int: simd_float4] = [:]
 
+    // Layer visibility state (for 2D drawings)
+    @Published var layerVisibility: [String: Bool] = [:]
+    @Published var layerColors: [String: Int] = [:]
+
     private var rustDoc: OpaquePointer?
     private var renderer: MetalRenderer?
     /// Stores DTO from async parse when renderer isn't ready yet.
@@ -179,6 +183,8 @@ final class DocumentViewModel: ObservableObject {
         measurementMode = false
         measurements = []
         pendingPoint = nil
+        layerVisibility = [:]
+        layerColors = [:]
     }
 
     func parseFile(data: Data, fileExtension: String = "step") {
@@ -240,6 +246,7 @@ final class DocumentViewModel: ObservableObject {
                     self.nodeNames = dto.nodeNames
                     self.nodes = dto.nodes
                     self.stats = dto.stats
+                    self.initLayerState()
                     // Expand root by default.
                     self.expandedIndices = [0]
                     self.state = .loaded(
@@ -407,6 +414,27 @@ final class DocumentViewModel: ObservableObject {
         var descendants = Set<Int>()
         collectDescendants(sel, into: &descendants)
         return descendants.contains { nodes[$0].hasGeometry }
+    }
+
+    // MARK: - Layer Visibility (2D drawings)
+
+    /// Initialize layer state from parsed drawing info.
+    func initLayerState() {
+        guard let info = drawing2DInfo else { return }
+        var vis: [String: Bool] = [:]
+        var colors: [String: Int] = [:]
+        for layer in info.layers {
+            vis[layer.name] = layer.visible
+            colors[layer.name] = layer.colorIndex
+        }
+        layerVisibility = vis
+        layerColors = colors
+    }
+
+    /// Toggle visibility for a specific layer.
+    func toggleLayerVisibility(_ layerName: String) {
+        let current = layerVisibility[layerName] ?? true
+        layerVisibility[layerName] = !current
     }
 
     // MARK: - Measurement

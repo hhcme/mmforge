@@ -4,6 +4,7 @@
 //! Supports LINE, CIRCLE, ARC, LWPOLYLINE, TEXT entities and the
 //! LAYER table.
 
+pub mod blocks_parser;
 pub mod detect;
 pub mod entity_parser;
 pub mod parser;

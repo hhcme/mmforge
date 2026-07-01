@@ -66,7 +66,12 @@ pub enum DrawCommand2D {
 #[derive(Debug, Clone)]
 pub struct FlatDrawCommand {
     pub layer_index: u32,
+    pub layer_name: String,
     pub cmd: DrawCommand2D,
+    /// Line type name (e.g., "Continuous", "DASHED").  None = Continuous.
+    pub line_type: Option<String>,
+    /// Line weight in mm.  None = default (0).
+    pub line_weight: Option<f64>,
 }
 
 /// Result of bulge-to-arc conversion.
@@ -195,7 +200,8 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
             | Entity2D::Circle { layer, .. }
             | Entity2D::Arc { layer, .. }
             | Entity2D::Polyline { layer, .. }
-            | Entity2D::Text { layer, .. } => layer.as_str(),
+            | Entity2D::Text { layer, .. }
+            | Entity2D::Insert { layer, .. } => layer.as_str(),
         };
         layer_map
             .entry(layer_name.to_string())
@@ -219,7 +225,13 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
         let mut commands = Vec::new();
         for entity in entities {
             match entity {
-                Entity2D::Line { start, end, .. } => {
+                Entity2D::Line {
+                    start,
+                    end,
+                    line_type,
+                    line_weight,
+                    ..
+                } => {
                     let cmd = DrawCommand2D::Line {
                         start: *start,
                         end: *end,
@@ -227,10 +239,19 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
                     commands.push(cmd.clone());
                     flat_commands.push(FlatDrawCommand {
                         layer_index: layer_idx as u32,
+                        layer_name: name.clone(),
                         cmd,
+                        line_type: line_type.clone(),
+                        line_weight: *line_weight,
                     });
                 }
-                Entity2D::Circle { center, radius, .. } => {
+                Entity2D::Circle {
+                    center,
+                    radius,
+                    line_type,
+                    line_weight,
+                    ..
+                } => {
                     let cmd = DrawCommand2D::Circle {
                         center: *center,
                         radius: *radius,
@@ -238,7 +259,10 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
                     commands.push(cmd.clone());
                     flat_commands.push(FlatDrawCommand {
                         layer_index: layer_idx as u32,
+                        layer_name: name.clone(),
                         cmd,
+                        line_type: line_type.clone(),
+                        line_weight: *line_weight,
                     });
                 }
                 Entity2D::Arc {
@@ -246,6 +270,8 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
                     radius,
                     start_angle,
                     end_angle,
+                    line_type,
+                    line_weight,
                     ..
                 } => {
                     // DXF ARC angles are in degrees → convert to radians.
@@ -259,18 +285,28 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
                     commands.push(cmd.clone());
                     flat_commands.push(FlatDrawCommand {
                         layer_index: layer_idx as u32,
+                        layer_name: name.clone(),
                         cmd,
+                        line_type: line_type.clone(),
+                        line_weight: *line_weight,
                     });
                 }
                 Entity2D::Polyline {
-                    vertices, closed, ..
+                    vertices,
+                    closed,
+                    line_type,
+                    line_weight,
+                    ..
                 } => {
                     let expanded = expand_polyline(vertices, *closed);
                     for cmd in expanded {
                         commands.push(cmd.clone());
                         flat_commands.push(FlatDrawCommand {
                             layer_index: layer_idx as u32,
+                            layer_name: name.clone(),
                             cmd,
+                            line_type: line_type.clone(),
+                            line_weight: *line_weight,
                         });
                     }
                 }
@@ -290,8 +326,15 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
                     commands.push(cmd.clone());
                     flat_commands.push(FlatDrawCommand {
                         layer_index: layer_idx as u32,
+                        layer_name: name.clone(),
                         cmd,
+                        line_type: None,
+                        line_weight: None,
                     });
+                }
+                Entity2D::Insert { .. } => {
+                    // INSERTs should be expanded before draw list construction.
+                    // If one survives, skip it silently.
                 }
             }
         }
@@ -348,11 +391,15 @@ mod tests {
             start: [0.0, 0.0],
             end: [1.0, 0.0],
             layer: "walls".to_string(),
+            line_type: None,
+            line_weight: None,
         });
         drawing.entities.push(Entity2D::Line {
             start: [0.0, 1.0],
             end: [1.0, 1.0],
             layer: "walls".to_string(),
+            line_type: None,
+            line_weight: None,
         });
         drawing.entities.push(Entity2D::Text {
             position: [0.5, 0.5],
@@ -386,6 +433,8 @@ mod tests {
             center: [0.0, 0.0],
             radius: 1.0,
             layer: "hidden".to_string(),
+            line_type: None,
+            line_weight: None,
         });
 
         let dl = build_draw_list(&drawing);
@@ -401,6 +450,8 @@ mod tests {
             start: [0.0, 0.0],
             end: [1.0, 1.0],
             layer: "unknown".to_string(),
+            line_type: None,
+            line_weight: None,
         });
 
         let dl = build_draw_list(&drawing);
@@ -422,6 +473,8 @@ mod tests {
             start_angle: 0.0, // degrees
             end_angle: 90.0,  // degrees
             layer: "0".to_string(),
+            line_type: None,
+            line_weight: None,
         });
 
         let dl = build_draw_list(&drawing);
@@ -451,6 +504,8 @@ mod tests {
             start_angle: 45.0,
             end_angle: 225.0,
             layer: "0".to_string(),
+            line_type: None,
+            line_weight: None,
         });
 
         let dl = build_draw_list(&drawing);
@@ -720,11 +775,15 @@ mod tests {
             start: [0.0, 0.0],
             end: [1.0, 0.0],
             layer: "L1".to_string(),
+            line_type: None,
+            line_weight: None,
         });
         drawing.entities.push(Entity2D::Circle {
             center: [5.0, 5.0],
             radius: 2.0,
             layer: "L1".to_string(),
+            line_type: None,
+            line_weight: None,
         });
 
         let dl = build_draw_list(&drawing);
@@ -748,6 +807,8 @@ mod tests {
             start_angle: 350.0,
             end_angle: 10.0,
             layer: "0".to_string(),
+            line_type: None,
+            line_weight: None,
         });
 
         let dl = build_draw_list(&drawing);

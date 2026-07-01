@@ -220,6 +220,28 @@ const char* mmf_draw_cmd_text(const MmfDocument* doc, uint32_t index,
                               double* out_x, double* out_y,
                               double* out_height, double* out_rotation);
 
+/** Line type name for a draw command.  NULL if Continuous (default). */
+const char* mmf_draw_cmd_line_type(const MmfDocument* doc, uint32_t index);
+
+/** Line weight for a draw command in mm.  0.0 if default. */
+double mmf_draw_cmd_line_weight(const MmfDocument* doc, uint32_t index);
+
+/**
+ * Spatial query for viewport culling.
+ * @param doc       Document handle.
+ * @param min_x     Viewport min X (world coords).
+ * @param min_y     Viewport min Y.
+ * @param max_x     Viewport max X.
+ * @param max_y     Viewport max Y.
+ * @param out_indices  Output array of command indices (caller-allocated).
+ * @param max_count    Max number of indices to write.
+ * @return Number of indices written, or -1 on error.
+ */
+int32_t mmf_draw_spatial_query(const MmfDocument* doc,
+                               double min_x, double min_y,
+                               double max_x, double max_y,
+                               uint32_t* out_indices, uint32_t max_count);
+
 #ifdef __cplusplus
 }
 #endif

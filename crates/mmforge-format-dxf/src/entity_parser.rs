@@ -46,6 +46,7 @@ fn parse_single_entity(entity_type: &str, pairs: &[&DxfPair]) -> Option<Entity2D
         "ARC" => parse_arc(pairs),
         "LWPOLYLINE" => parse_lwpolyline(pairs),
         "TEXT" => parse_text(pairs),
+        "INSERT" => parse_insert(pairs),
         _ => None, // Unsupported entity — skip.
     }
 }
@@ -75,21 +76,47 @@ fn layer_name(pairs: &[&DxfPair]) -> String {
     get_str(pairs, 8).unwrap_or("0").to_string()
 }
 
+/// Extract entity-level line type name (group 6).
+fn entity_line_type(pairs: &[&DxfPair]) -> Option<String> {
+    get_str(pairs, 6).map(|s| s.to_string())
+}
+
+/// Extract entity-level line weight in mm (group 370 or 39).
+/// Group 370 is the standard; group 39 is legacy.
+fn entity_line_weight(pairs: &[&DxfPair]) -> Option<f64> {
+    if let Some(v) = get_f64(pairs, 370) {
+        return Some(v * 0.01); // DXF 370 is in hundredths of mm.
+    }
+    get_f64(pairs, 39)
+}
+
 fn parse_line(pairs: &[&DxfPair]) -> Option<Entity2D> {
     let start = [get_f64(pairs, 10)?, get_f64(pairs, 20)?];
     let end = [get_f64(pairs, 11)?, get_f64(pairs, 21)?];
     let layer = layer_name(pairs);
-    Some(Entity2D::Line { start, end, layer })
+    let line_type = entity_line_type(pairs);
+    let line_weight = entity_line_weight(pairs);
+    Some(Entity2D::Line {
+        start,
+        end,
+        layer,
+        line_type,
+        line_weight,
+    })
 }
 
 fn parse_circle(pairs: &[&DxfPair]) -> Option<Entity2D> {
     let center = [get_f64(pairs, 10)?, get_f64(pairs, 20)?];
     let radius = get_f64(pairs, 40)?;
     let layer = layer_name(pairs);
+    let line_type = entity_line_type(pairs);
+    let line_weight = entity_line_weight(pairs);
     Some(Entity2D::Circle {
         center,
         radius,
         layer,
+        line_type,
+        line_weight,
     })
 }
 
@@ -99,18 +126,24 @@ fn parse_arc(pairs: &[&DxfPair]) -> Option<Entity2D> {
     let start_angle = get_f64(pairs, 50).unwrap_or(0.0);
     let end_angle = get_f64(pairs, 51).unwrap_or(360.0);
     let layer = layer_name(pairs);
+    let line_type = entity_line_type(pairs);
+    let line_weight = entity_line_weight(pairs);
     Some(Entity2D::Arc {
         center,
         radius,
         start_angle,
         end_angle,
         layer,
+        line_type,
+        line_weight,
     })
 }
 
 fn parse_lwpolyline(pairs: &[&DxfPair]) -> Option<Entity2D> {
     let closed = get_i32(pairs, 70).is_some_and(|f| f & 1 != 0);
     let layer = layer_name(pairs);
+    let line_type = entity_line_type(pairs);
+    let line_weight = entity_line_weight(pairs);
 
     // LWPOLYLINE has multiple 10/20/42 groups for each vertex.
     let mut vertices = Vec::new();
@@ -148,6 +181,8 @@ fn parse_lwpolyline(pairs: &[&DxfPair]) -> Option<Entity2D> {
         vertices,
         closed,
         layer,
+        line_type,
+        line_weight,
     })
 }
 
@@ -161,6 +196,25 @@ fn parse_text(pairs: &[&DxfPair]) -> Option<Entity2D> {
         position,
         content,
         height,
+        rotation,
+        layer,
+    })
+}
+
+fn parse_insert(pairs: &[&DxfPair]) -> Option<Entity2D> {
+    let block_name = get_str(pairs, 2)?.to_string();
+    let insert_point = [
+        get_f64(pairs, 10).unwrap_or(0.0),
+        get_f64(pairs, 20).unwrap_or(0.0),
+    ];
+    let scale_x = get_f64(pairs, 41).unwrap_or(1.0);
+    let scale_y = get_f64(pairs, 42).unwrap_or(1.0);
+    let rotation = get_f64(pairs, 50).unwrap_or(0.0);
+    let layer = layer_name(pairs);
+    Some(Entity2D::Insert {
+        block_name,
+        insert_point,
+        scale: [scale_x, scale_y],
         rotation,
         layer,
     })
@@ -189,7 +243,9 @@ mod tests {
         let refs: Vec<&DxfPair> = pairs.iter().collect();
         let entity = parse_line(&refs).unwrap();
         match entity {
-            Entity2D::Line { start, end, layer } => {
+            Entity2D::Line {
+                start, end, layer, ..
+            } => {
                 assert_eq!(start, [0.0, 0.0]);
                 assert_eq!(end, [10.0, 5.0]);
                 assert_eq!(layer, "walls");
@@ -213,6 +269,7 @@ mod tests {
                 center,
                 radius,
                 layer,
+                ..
             } => {
                 assert_eq!(center, [5.0, 5.0]);
                 assert_eq!(radius, 3.0);

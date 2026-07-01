@@ -10,10 +10,11 @@ use mmforge_core::math::BoundingBox;
 use mmforge_core::model::{Geometry, LsmModel, Node, ParseOutput, ParseStats, ParseWarning};
 use mmforge_core::parser::{DetectionResult, FormatParser};
 
+use crate::blocks_parser::parse_blocks;
 use crate::detect::detect_dxf;
 use crate::entity_parser::parse_entities;
 use crate::section_parser::parse_sections;
-use crate::tables_parser::parse_layers;
+use crate::tables_parser::{parse_layers, parse_line_types};
 use crate::tokenizer::DxfTokenizer;
 
 /// DXF file parser.
@@ -71,11 +72,13 @@ pub fn parse_dxf(path: &Path) -> Result<(ParseOutput, Drawing2DGeometry)> {
     let sections = parse_sections(&pairs);
     let mut warnings = Vec::new();
 
-    // Step 3: Parse TABLES → layers.
+    // Step 3: Parse TABLES → layers and line types.
     let mut layers = Vec::new();
+    let mut line_types = Vec::new();
     for section in &sections {
         if section.name == "TABLES" {
             layers = parse_layers(&section.pairs);
+            line_types = parse_line_types(&section.pairs);
         }
     }
 
@@ -88,7 +91,15 @@ pub fn parse_dxf(path: &Path) -> Result<(ParseOutput, Drawing2DGeometry)> {
         });
     }
 
-    // Step 4: Parse ENTITIES.
+    // Step 4: Parse BLOCKS.
+    let mut blocks = Vec::new();
+    for section in &sections {
+        if section.name == "BLOCKS" {
+            blocks = parse_blocks(&section.pairs);
+        }
+    }
+
+    // Step 5: Parse ENTITIES.
     let mut entities = Vec::new();
     for section in &sections {
         if section.name == "ENTITIES" {
@@ -110,12 +121,14 @@ pub fn parse_dxf(path: &Path) -> Result<(ParseOutput, Drawing2DGeometry)> {
         });
     }
 
-    // Build Drawing2DGeometry.
-    let drawing = Drawing2DGeometry {
+    // Build Drawing2DGeometry and expand INSERTs.
+    let mut drawing = Drawing2DGeometry {
         entities,
         layers: layers.clone(),
-        blocks: Vec::new(), // BLOCK/INSERT not yet supported.
+        blocks,
+        line_types,
     };
+    drawing.expand_inserts();
 
     // Compute bounds from drawing.
     let bbox2d = drawing.bounds();

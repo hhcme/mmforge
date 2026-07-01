@@ -38,6 +38,10 @@ pub struct MmfDocument {
     draw_text_cstrings: Vec<CString>,
     /// Pre-computed CStrings for layer names in the draw list.
     draw_layer_cstrings: Vec<CString>,
+    /// Pre-computed CStrings for line type names per draw command.
+    draw_linetype_cstrings: Vec<CString>,
+    /// Spatial index for 2D viewport culling.
+    spatial_index: Option<mmforge_render::spatial2d::SpatialIndex2D>,
 }
 
 // --- Lifecycle ---
@@ -101,6 +105,28 @@ fn build_document(output: ParseOutput, registry: TessellationRegistry) -> MmfDoc
         .map(|l| CString::new(l.layer_name.as_str()).unwrap_or_default())
         .collect();
 
+    let draw_linetype_cstrings: Vec<CString> = draw_list
+        .flat_commands
+        .iter()
+        .map(|fc| {
+            fc.line_type
+                .as_deref()
+                .and_then(|s| CString::new(s).ok())
+                .unwrap_or_default()
+        })
+        .collect();
+
+    // Build spatial index for 2D viewport culling.
+    let spatial_index = if draw_list.flat_commands.is_empty() {
+        None
+    } else {
+        Some(mmforge_render::spatial2d::SpatialIndex2D::build(
+            &draw_list.flat_commands,
+            draw_list.bounds,
+            32,
+        ))
+    };
+
     MmfDocument {
         packet,
         model: output.model,
@@ -109,6 +135,8 @@ fn build_document(output: ParseOutput, registry: TessellationRegistry) -> MmfDoc
         draw_list,
         draw_text_cstrings,
         draw_layer_cstrings,
+        draw_linetype_cstrings,
+        spatial_index,
     }
 }
 
@@ -721,10 +749,20 @@ pub extern "C" fn mmf_draw_cmd_layer_name(doc: *const MmfDocument, index: u32) -
     }
     let doc = unsafe { &*doc };
     match doc.draw_list.flat_commands.get(index as usize) {
-        Some(fc) => match doc.draw_layer_cstrings.get(fc.layer_index as usize) {
-            Some(cs) => cs.as_ptr(),
-            None => ptr::null(),
-        },
+        Some(fc) => {
+            // Use the stable layer_name from FlatDrawCommand directly.
+            let name = &fc.layer_name;
+            if name.is_empty() {
+                ptr::null()
+            } else {
+                // Safety: we need a stable pointer. Use the pre-computed cstring
+                // as backing store, falling back to the layer index lookup.
+                doc.draw_layer_cstrings
+                    .get(fc.layer_index as usize)
+                    .map(|cs| cs.as_ptr())
+                    .unwrap_or(ptr::null())
+            }
+        }
         None => ptr::null(),
     }
 }
@@ -968,4 +1006,66 @@ pub extern "C" fn mmf_draw_cmd_text(
         }
         _ => ptr::null(),
     }
+}
+
+/// Get line type name for a draw command.  Returns NULL if not set (Continuous).
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_line_type(doc: *const MmfDocument, index: u32) -> *const c_char {
+    if doc.is_null() {
+        return ptr::null();
+    }
+    let doc = unsafe { &*doc };
+    match doc.draw_linetype_cstrings.get(index as usize) {
+        Some(cs) if !cs.is_empty() => cs.as_ptr(),
+        _ => ptr::null(),
+    }
+}
+
+/// Get line weight for a draw command (in mm).  Returns 0.0 if not set.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_line_weight(doc: *const MmfDocument, index: u32) -> f64 {
+    if doc.is_null() {
+        return 0.0;
+    }
+    let doc = unsafe { &*doc };
+    doc.draw_list
+        .flat_commands
+        .get(index as usize)
+        .and_then(|fc| fc.line_weight)
+        .unwrap_or(0.0)
+}
+
+/// Query spatial index for commands visible in the given viewport rect.
+/// Returns the number of indices written to `out_indices` (up to `max_count`).
+/// Returns -1 if no spatial index available or error.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_spatial_query(
+    doc: *const MmfDocument,
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+    out_indices: *mut u32,
+    max_count: u32,
+) -> i32 {
+    if doc.is_null() || out_indices.is_null() {
+        return -1;
+    }
+    let doc = unsafe { &*doc };
+    let spatial = match &doc.spatial_index {
+        Some(s) => s,
+        None => return -1,
+    };
+    let viewport = mmforge_core::drawing::BBox2D {
+        min: [min_x, min_y],
+        max: [max_x, max_y],
+    };
+    let indices = spatial.query(viewport);
+    let count = indices.len().min(max_count as usize);
+    for (i, &idx) in indices.iter().enumerate().take(count) {
+        unsafe {
+            *out_indices.add(i) = idx;
+        }
+    }
+    count as i32
 }
