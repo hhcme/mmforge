@@ -34,6 +34,13 @@ const char* mmf_version(void);
  */
 MmfDocument* mmf_parse_step(const char* path);
 
+/**
+ * Parse a file with auto-detection (STL, glTF/GLB, STEP).
+ * Returns NULL on error — call mmf_last_error() for the message.
+ * The returned handle must be freed with mmf_document_free().
+ */
+MmfDocument* mmf_parse_file(const char* path);
+
 /** Free a document.  Passing NULL is a no-op. */
 void mmf_document_free(MmfDocument* doc);
 

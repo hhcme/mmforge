@@ -24,20 +24,16 @@
     <array>
         <dict>
             <key>CFBundleTypeName</key>
-            <string>STEP File</string>
+            <string>3D Model File</string>
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
             <key>LSItemContentTypes</key>
             <array>
                 <string>com.mmforge.step</string>
-                <string>public.data</string>
-            </array>
-            <key>CFBundleTypeExtensions</key>
-            <array>
-                <string>step</string>
-                <string>stp</string>
-                <string>STEP</string>
-                <string>STP</string>
+                <string>com.mmforge.stl</string>
+                <string>com.mmforge.gltf</string>
+                <string>com.mmforge.glb</string>
+                <string>com.mmforge.iges</string>
             </array>
         </dict>
     </array>
@@ -58,6 +54,76 @@
                 <array>
                     <string>step</string>
                     <string>stp</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.mmforge.stl</string>
+            <key>UTTypeDescription</key>
+            <string>STL Mesh File</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>stl</string>
+                    <string>STL</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.mmforge.gltf</string>
+            <key>UTTypeDescription</key>
+            <string>glTF File</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>gltf</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.mmforge.glb</string>
+            <key>UTTypeDescription</key>
+            <string>glTF Binary File</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>glb</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.mmforge.iges</string>
+            <key>UTTypeDescription</key>
+            <string>IGES File</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>igs</string>
+                    <string>iges</string>
                 </array>
             </dict>
         </dict>

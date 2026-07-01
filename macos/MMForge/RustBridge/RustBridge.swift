@@ -51,9 +51,9 @@ final class RustBridge {
         return String(cString: ptr)
     }
 
-    /// Parse a STEP file and return render-ready data.
+    /// Parse a file (auto-detect format: STEP, STL, glTF/GLB) and return render-ready data.
     func parseFile(at path: String) throws -> (OpaquePointer, RenderPacketDTO) {
-        guard let doc = mmf_parse_step(path) else {
+        guard let doc = mmf_parse_file(path) else {
             let msg = mmf_last_error().map { String(cString: $0) } ?? "unknown error"
             throw NSError(domain: "MMForge", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: msg])

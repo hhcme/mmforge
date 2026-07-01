@@ -1,10 +1,16 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
+mod gltf_parser;
+mod iges_detector;
+mod stl_parser;
+
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr;
 
+use mmforge_core::model::{Geometry, ParseOutput};
+use mmforge_geometry::tessellation::TessellationRegistry;
 use mmforge_render::packet::RenderPacket;
 
 thread_local! {
@@ -28,57 +34,116 @@ pub struct MmfDocument {
 
 // --- Lifecycle ---
 
+/// Helper: build MmfDocument from parse output + tessellation registry.
+fn build_document(output: ParseOutput, registry: TessellationRegistry) -> MmfDocument {
+    let packet = mmforge_render::build_render_packet(&registry);
+    let node_names: Vec<CString> = output
+        .model
+        .scene
+        .nodes
+        .iter()
+        .map(|n| CString::new(n.name.as_str()).unwrap_or_default())
+        .collect();
+    let geometry_labels: Vec<CString> = output
+        .model
+        .geometries
+        .iter()
+        .map(|g| {
+            let label = match g {
+                Geometry::BRepHandleRef { label, .. } => label.as_str(),
+                Geometry::Mesh(_) => "Mesh",
+                Geometry::Drawing2D { .. } => "Drawing2D",
+            };
+            CString::new(label).unwrap_or_default()
+        })
+        .collect();
+    MmfDocument {
+        packet,
+        model: output.model,
+        node_names,
+        geometry_labels,
+    }
+}
+
+/// Parse a STEP file.  Returns NULL on error.
 #[unsafe(no_mangle)]
 pub extern "C" fn mmf_parse_step(path: *const c_char) -> *mut MmfDocument {
-    if path.is_null() {
-        set_last_error("null path");
-        return ptr::null_mut();
-    }
-    let path_str = match unsafe { CStr::from_ptr(path) }.to_str() {
-        Ok(s) => s,
-        Err(e) => {
-            set_last_error(&format!("invalid UTF-8 path: {e}"));
-            return ptr::null_mut();
-        }
+    let path = match c_path_to_rust(path) {
+        Some(p) => p,
+        None => return ptr::null_mut(),
     };
-    let path = std::path::Path::new(path_str);
 
     match mmforge_format_step::parse_step_with_tessellation(path) {
-        Ok((output, registry)) => {
-            let packet = mmforge_render::build_render_packet(&registry);
-            let node_names: Vec<CString> = output
-                .model
-                .scene
-                .nodes
-                .iter()
-                .map(|n| CString::new(n.name.as_str()).unwrap_or_default())
-                .collect();
-            let geometry_labels: Vec<CString> = output
-                .model
-                .geometries
-                .iter()
-                .map(|g| {
-                    let label = match g {
-                        mmforge_core::model::Geometry::BRepHandleRef { label, .. } => {
-                            label.as_str()
-                        }
-                        mmforge_core::model::Geometry::Mesh(_) => "Mesh",
-                        mmforge_core::model::Geometry::Drawing2D { .. } => "Drawing2D",
-                    };
-                    CString::new(label).unwrap_or_default()
-                })
-                .collect();
-            let doc = MmfDocument {
-                packet,
-                model: output.model,
-                node_names,
-                geometry_labels,
-            };
-            Box::into_raw(Box::new(doc))
-        }
+        Ok((output, registry)) => Box::into_raw(Box::new(build_document(output, registry))),
         Err(e) => {
             set_last_error(&format!("{e}"));
             ptr::null_mut()
+        }
+    }
+}
+
+/// Parse a file with auto-detection (STL, glTF/GLB, STEP).
+/// Returns NULL on error — call mmf_last_error() for the message.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_parse_file(path: *const c_char) -> *mut MmfDocument {
+    let path = match c_path_to_rust(path) {
+        Some(p) => p,
+        None => return ptr::null_mut(),
+    };
+
+    // Read first 84 bytes for format detection (STL binary needs 80-byte header + u32 count).
+    let header = match std::fs::read(path) {
+        Ok(data) => {
+            let mut buf = [0u8; 84];
+            let len = data.len().min(84);
+            buf[..len].copy_from_slice(&data[..len]);
+            buf
+        }
+        Err(e) => {
+            set_last_error(&format!("cannot read file: {e}"));
+            return ptr::null_mut();
+        }
+    };
+
+    // IGES: detected but no parser yet — return clear error.
+    if iges_detector::detect_iges(&header, path) {
+        set_last_error(
+            "IGES format detected but parsing requires OCCT IGES adapter (not yet implemented)",
+        );
+        return ptr::null_mut();
+    }
+
+    let result = if stl_parser::detect_stl(&header, path) {
+        stl_parser::parse_stl(path)
+    } else if gltf_parser::detect_gltf(&header, path) {
+        gltf_parser::parse_gltf(path)
+    } else if mmforge_format_step::detect::detect_step(&header, path).is_some() {
+        mmforge_format_step::parse_step_with_tessellation(path)
+    } else {
+        // Try STEP as fallback (it has the most flexible detection).
+        mmforge_format_step::parse_step_with_tessellation(path)
+    };
+
+    match result {
+        Ok((output, registry)) => Box::into_raw(Box::new(build_document(output, registry))),
+        Err(e) => {
+            set_last_error(&format!("{e}"));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Helper: convert C path to Rust &Path.
+fn c_path_to_rust(path: *const c_char) -> Option<&'static std::path::Path> {
+    if path.is_null() {
+        set_last_error("null path");
+        return None;
+    }
+    match unsafe { CStr::from_ptr(path) }.to_str() {
+        Ok(s) => Some(std::path::Path::new(s)),
+        Err(e) => {
+            set_last_error(&format!("invalid UTF-8 path: {e}"));
+            None
         }
     }
 }

@@ -6,6 +6,10 @@ import simd
 
 extension UTType {
     static let step = UTType("com.mmforge.step")!
+    static let stl  = UTType("com.mmforge.stl")!
+    static let gltf = UTType("com.mmforge.gltf")!
+    static let glb  = UTType("com.mmforge.glb")!
+    static let iges = UTType("com.mmforge.iges")!
 }
 
 // MARK: - App preferences (persisted via UserDefaults)
@@ -39,7 +43,7 @@ struct Measurement: Identifiable {
 /// The document type for MMForge model files.
 struct MMForgeDocument: FileDocument {
     static var readableContentTypes: [UTType] {
-        [.step, .data]
+        [.step, .stl, .gltf, .glb, .iges, .data]
     }
 
     /// Raw file data (passed to Rust bridge for parsing).
