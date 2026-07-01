@@ -148,9 +148,35 @@ struct InspectorPanel: View {
                 LabeledContent("Min", value: formatVec3(bmin))
                 LabeledContent("Max", value: formatVec3(bmax))
                 LabeledContent("Size", value: formatVec3(size))
-                // Diagonal
-                let diag = sqrt(size.x * size.x + size.y * size.y + size.z * size.z)
+                let diag = computeDiagonal(size)
                 LabeledContent("Diagonal", value: String(format: "%.2f", diag))
+            }
+
+            // Color override (for geometry nodes)
+            if node.hasGeometry {
+                Divider()
+                Text("Appearance")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
+
+                let hasOverride = viewModel.nodeColorOverrides[index] != nil
+                if hasOverride {
+                    HStack {
+                        Text("Color")
+                            .font(.subheadline)
+                        Spacer()
+                        Button("Reset") {
+                            viewModel.setNodeColor(index, color: nil)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.accentColor)
+                        .font(.caption)
+                        .accessibilityLabel("Reset color to default")
+                    }
+                } else {
+                    LabeledContent("Color", value: "Default (grey)")
+                }
             }
         }
     }
@@ -229,7 +255,7 @@ struct InspectorPanel: View {
                     LabeledContent("Size X", value: String(format: "%.2f", size.x))
                     LabeledContent("Size Y", value: String(format: "%.2f", size.y))
                     LabeledContent("Size Z", value: String(format: "%.2f", size.z))
-                    let diag = sqrt(size.x * size.x + size.y * size.y + size.z * size.z)
+                    let diag = computeDiagonal(size)
                     LabeledContent("Diagonal", value: String(format: "%.2f", diag))
                 }
             }
@@ -430,6 +456,13 @@ struct InspectorPanel: View {
 
     private func formatVec3(_ v: simd_float3) -> String {
         String(format: "(%.2f, %.2f, %.2f)", v.x, v.y, v.z)
+    }
+
+    private func computeDiagonal(_ size: simd_float3) -> Float {
+        let sx = size.x * size.x
+        let sy = size.y * size.y
+        let sz = size.z * size.z
+        return sqrt(sx + sy + sz)
     }
 
     private func formatNumber(_ n: Int) -> String {

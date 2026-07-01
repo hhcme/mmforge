@@ -75,6 +75,13 @@ struct SelectionCommandsView: View {
                 viewModel?.clearMeasurements()
             }
             .disabled(viewModel?.measurements.isEmpty ?? true)
+
+            Divider()
+
+            Button("Reset All Colors") {
+                viewModel?.resetAllColors()
+            }
+            .disabled(viewModel?.nodeColorOverrides.isEmpty ?? true)
         }
     }
 }

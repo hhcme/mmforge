@@ -95,6 +95,9 @@ final class DocumentViewModel: ObservableObject {
     @Published var measurements: [Measurement] = []
     @Published var pendingPoint: simd_float3?
 
+    // Color override state
+    @Published var nodeColorOverrides: [Int: simd_float4] = [:]
+
     private var rustDoc: OpaquePointer?
     private var renderer: MetalRenderer?
     /// Stores DTO from async parse when renderer isn't ready yet.
@@ -128,6 +131,9 @@ final class DocumentViewModel: ObservableObject {
         pendingDTO = nil
         renderer?.clearMeshes()
         renderer?.clearOverlay()
+        renderer?.clearSectionFill()
+        renderer?.nodeColorOverrides = [:]
+        nodeColorOverrides = [:]
         nodeNames = []
         nodes = []
         stats = nil
@@ -410,6 +416,31 @@ final class DocumentViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Color Override
+
+    /// Set a color override for a node.  Pass nil to reset to default.
+    func setNodeColor(_ index: Int, color: simd_float4?) {
+        if let color {
+            nodeColorOverrides[index] = color
+        } else {
+            nodeColorOverrides.removeValue(forKey: index)
+        }
+        renderer?.nodeColorOverrides = nodeColorOverrides
+    }
+
+    /// Reset color for the selected node.
+    func resetSelectedNodeColor() {
+        if let idx = selectedIndex {
+            setNodeColor(idx, color: nil)
+        }
+    }
+
+    /// Reset all color overrides.
+    func resetAllColors() {
+        nodeColorOverrides.removeAll()
+        renderer?.nodeColorOverrides = [:]
+    }
+
     // MARK: - Image export
 
     /// Error message for failed export (shown as alert in UI).
@@ -581,8 +612,10 @@ final class DocumentViewModel: ObservableObject {
             default: normal = simd_float3(0, 0, 1)
             }
             renderer.clipPlane = simd_float4(normal.x, normal.y, normal.z, clipDistance)
+            renderer.updateSectionFill()
         } else {
             renderer.clipPlane = simd_float4(0, 0, 0, -999999)
+            renderer.clearSectionFill()
         }
     }
 

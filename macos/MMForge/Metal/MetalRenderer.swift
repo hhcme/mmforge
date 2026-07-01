@@ -165,6 +165,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var overlayVertexBuffer: MTLBuffer?
     private var overlayVertexCount: Int = 0
 
+    // Section fill state
+    private var sectionFillBuffer: MTLBuffer?
+    private var sectionFillVertexCount: Int = 0
+
+    // Color override: nodeIndex → override color
+    var nodeColorOverrides: [Int: simd_float4] = [:]
+
     private var gpuMeshes: [GPUMesh] = []
     private var sceneBounds: (min: simd_float3, max: simd_float3) = (.zero, .zero)
     private(set) var camera = CameraState()
@@ -421,6 +428,57 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         overlayVertexCount = 0
     }
 
+    /// Update section fill geometry from the current clip plane.
+    /// Computes intersection quads where the clip plane crosses
+    /// visible mesh triangles.
+    func updateSectionFill() {
+        guard clipPlane.w > -999990 else {
+            sectionFillBuffer = nil
+            sectionFillVertexCount = 0
+            return
+        }
+
+        let capColor = simd_float4(0.8, 0.3, 0.1, 0.6)
+
+        // Collect mesh data for visible meshes.
+        var meshData: [(positions: UnsafePointer<Float>, indices: UnsafePointer<UInt32>,
+                        vertexCount: Int, indexCount: Int)] = []
+        for mesh in gpuMeshes where mesh.visible {
+            let posPtr = UnsafePointer<Float>(
+                mesh.vertexBuffer.contents().bindMemory(to: Float.self,
+                    capacity: mesh.vertexBuffer.length / MemoryLayout<Float>.size))
+            let idxPtr = UnsafePointer<UInt32>(
+                mesh.indexBuffer.contents().bindMemory(to: UInt32.self,
+                    capacity: mesh.indexCount))
+            let vertCount = mesh.vertexBuffer.length / (6 * MemoryLayout<Float>.size)
+            meshData.append((posPtr, idxPtr, vertCount, mesh.indexCount))
+        }
+
+        let verts = computeSectionFillVertices(
+            meshes: meshData, clipPlane: clipPlane, capColor: capColor
+        )
+
+        let floatCount = verts.count
+        guard floatCount > 0 else {
+            sectionFillBuffer = nil
+            sectionFillVertexCount = 0
+            return
+        }
+
+        let byteCount = floatCount * MemoryLayout<Float>.size
+        if sectionFillBuffer == nil || sectionFillBuffer!.length < byteCount {
+            sectionFillBuffer = device.makeBuffer(length: byteCount, options: .storageModeShared)
+        }
+        sectionFillBuffer?.contents().copyMemory(from: verts, byteCount: byteCount)
+        sectionFillVertexCount = floatCount / 7
+    }
+
+    /// Clear the section fill buffer.
+    func clearSectionFill() {
+        sectionFillBuffer = nil
+        sectionFillVertexCount = 0
+    }
+
     private func appendMarker(_ verts: inout [OverlayVertex],
                               center: simd_float3, size: Float,
                               color: simd_float4) {
@@ -576,6 +634,18 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                      fillMode: .fill, meshOrder: sorted)
         }
 
+        // Section fill pass (filled triangles at clip plane, no depth write).
+        if let sfb = sectionFillBuffer, sectionFillVertexCount > 0 {
+            encoder.setRenderPipelineState(overlayPipeline)
+            encoder.setDepthStencilState(depthStencilStateNoWrite)
+            var fillUniforms = OverlayUniforms(mvp: mvp)
+            encoder.setVertexBuffer(sfb, offset: 0, index: 0)
+            encoder.setVertexBytes(&fillUniforms,
+                                   length: MemoryLayout<OverlayUniforms>.size, index: 1)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0,
+                                   vertexCount: sectionFillVertexCount)
+        }
+
         // Measurement overlay pass (lines/markers on top, no depth write).
         if let vb = overlayVertexBuffer, overlayVertexCount > 0 {
             encoder.setRenderPipelineState(overlayPipeline)
@@ -620,13 +690,21 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         encoder.setTriangleFillMode(fillMode)
 
         let indices = meshOrder ?? Array(gpuMeshes.indices)
+        let defaultAlpha: Float = mode == 3 ? 0.6 : 1.0
         for idx in indices {
             let mesh = gpuMeshes[idx]
             guard mesh.visible else { continue }
             let isHighlighted = (mesh.nodeIndex == selectedNodeIndex)
+            // Per-mesh color: override → default grey
+            var baseColor: simd_float4
+            if let override = nodeColorOverrides[mesh.nodeIndex] {
+                baseColor = simd_float4(override.x, override.y, override.z, defaultAlpha)
+            } else {
+                baseColor = simd_float4(0.7, 0.7, 0.72, defaultAlpha)
+            }
             var uniforms = Uniforms(
                 mvp: mvp, model: matrix_identity_float4x4,
-                baseColor: simd_float4(0.7, 0.7, 0.72, mode == 3 ? 0.6 : 1.0),
+                baseColor: baseColor,
                 highlightColor: isHighlighted ? highlightTint : simd_float4(0, 0, 0, 0),
                 clipPlane: clipPlane, renderMode: mode
             )
