@@ -35,6 +35,11 @@ IGES is **planned but not yet openable** — requires OCCT `IGESControl_Reader` 
 - **STL strict binary validation**: `parse_binary_stl` rejects files where `len > 84 + tri_count*50 + 80` (significant size mismatch). Accepts small trailing padding (nulls, newlines).
 - **Regression tests**: solid header with "facet" after 200 bytes, binary strict length rejection, binary small padding acceptance.
 
+### Round 5 — STL binary/ASCII disambiguation fix
+- **Prefer binary when file structure validates**: `parse_stl` now checks `binary_length_valid` first. If the file length matches `84 + tri_count * 50` exactly (±80 bytes padding), it's parsed as binary regardless of "solid" prefix or "facet" bytes in the data. Binary's exact-length check is a much stronger signal than searching for text keywords in potentially binary data.
+- **ASCII is now a fallback**: `is_probably_ascii` only checks for "solid" prefix (no "facet" search). It's only reached when binary validation has already failed.
+- **Regression test**: binary STL with "solid" header + "facet" bytes embedded in triangle data + non-UTF-8 bytes — correctly parsed as binary.
+
 ---
 
 ## Detection Priority
@@ -51,11 +56,11 @@ mmf_parse_file(path):
 STL internal disambiguation:
 ```
 parse_stl(data):
-  is_ascii_stl? (solid prefix + "facet" anywhere in file)
-  ├── yes → try parse_ascii_stl
-  │         ├── triangles > 0 → done
-  │         └── 0 triangles → fallback to parse_binary_stl (strict)
-  └── no  → parse_binary_stl (strict: exact length ± 80 bytes)
+  binary_length_valid? (exact 84 + tri_count*50 ± 80 bytes)
+  ├── yes → parse_binary_stl   (binary preferred — strongest signal)
+  └── no  → is_probably_ascii? (starts with "solid")
+            ├── yes → parse_ascii_stl
+            └── no  → error "neither binary nor ASCII"
 ```
 
 ---
@@ -67,11 +72,11 @@ Multi-root: synthetic `glTF_Assembly` root with orphan roots re-parented.
 
 ---
 
-## Tests (32 total)
+## Tests (33 total)
 
 | Module | # | Key tests |
 |--------|---|-----------|
-| stl_parser | 12 | binary/ascii detection, solid+facet disambiguation, solid+digit regression, binary+solid header, facet-after-200-bytes regression, strict length rejection, small padding acceptance, fixture parsing |
+| stl_parser | 13 | binary/ascii detection, solid+facet disambiguation, solid+digit regression, binary+solid header, facet-after-200-bytes, solid+facet-bytes+non-UTF-8 regression, strict length rejection, small padding acceptance, fixture parsing |
 | gltf_parser | 13 | GLB/glTF detection, data URI, multi-root assembly, single root, minimal triangle parse, decode errors |
 | iges_detector | 7 | .igs/.iges detection, header marker, rejection (reserved, not wired) |
 
@@ -83,7 +88,7 @@ Multi-root: synthetic `glTF_Assembly` root with orphan roots re-parented.
 |---------|--------|
 | `cargo fmt --all` | ✅ Clean |
 | `cargo clippy -p mmforge-bridge` | ✅ No warnings |
-| `cargo test -p mmforge-bridge` | ✅ 32 tests pass |
+| `cargo test -p mmforge-bridge` | ✅ 33 tests pass |
 | `cargo test --workspace` | ✅ All pass |
 | `xcodebuild build` | ✅ BUILD SUCCEEDED |
 | `xcodebuild test` | ✅ 22 tests pass |

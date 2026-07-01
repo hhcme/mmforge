@@ -46,9 +46,13 @@ pub fn detect_stl(header: &[u8], path: &Path) -> bool {
 
 /// Parse an STL file (binary or ASCII) into a model + tessellation registry.
 ///
-/// When the file starts with "solid", ASCII parsing is attempted first.
-/// If ASCII produces no triangles (e.g. binary STL with "solid" header),
-/// falls back to binary with strict file-length validation.
+/// Disambiguation strategy for files starting with "solid":
+/// 1. If binary file-length + triangle_count strictly validates → parse as
+///    binary.  Binary validation is a much stronger signal than searching
+///    for "facet" text bytes, which can appear coincidentally in binary data.
+/// 2. Otherwise → try ASCII parse.
+/// 3. If ASCII fails (UTF-8 error, structural error, 0 triangles) → return
+///    the error (file is neither valid binary nor valid ASCII).
 pub fn parse_stl(path: &Path) -> Result<(ParseOutput, TessellationRegistry)> {
     let data = std::fs::read(path).map_err(Error::Io)?;
 
@@ -56,17 +60,17 @@ pub fn parse_stl(path: &Path) -> Result<(ParseOutput, TessellationRegistry)> {
         return Err(Error::parse("STL", "file too small"));
     }
 
-    let (positions, normals) = if is_ascii_stl(&data) {
-        // "solid" prefix + "facet" found → try ASCII first.
-        let result = parse_ascii_stl(&data)?;
-        if result.0.is_empty() {
-            // ASCII parse produced 0 triangles — fall back to binary.
-            parse_binary_stl(&data)?
-        } else {
-            result
-        }
-    } else {
+    let (positions, normals) = if binary_length_valid(&data) {
+        // File structure matches binary STL exactly → parse as binary.
         parse_binary_stl(&data)?
+    } else if is_probably_ascii(&data) {
+        // "solid" prefix present but binary validation fails → try ASCII.
+        parse_ascii_stl(&data)?
+    } else {
+        return Err(Error::parse(
+            "STL",
+            "not a valid STL file (neither binary nor ASCII)",
+        ));
     };
 
     if positions.is_empty() {
@@ -169,19 +173,36 @@ pub fn parse_stl(path: &Path) -> Result<(ParseOutput, TessellationRegistry)> {
     ))
 }
 
-/// Determine if STL data is ASCII format by searching the entire file
-/// for the "facet" keyword.  Binary STL with "solid" in the 80-byte
-/// header will never contain "facet" at a text record boundary.
+/// Check if binary STL file-length validation passes strictly.
 ///
-/// Scanning the full file is safe because ASCII STL files are typically
-/// small (< 100 MB) and the scan is a simple byte search.
-fn is_ascii_stl(data: &[u8]) -> bool {
-    if !data.starts_with(b"solid") {
+/// Returns `true` if:
+/// - Bytes 80-84 form a reasonable triangle count (> 0, < 100M).
+/// - File length matches `84 + tri_count * 50` exactly, allowing up to
+///   80 bytes of trailing padding (some tools append nulls/newlines).
+///
+/// This is a very strong signal — binary STL files have a fixed record
+/// size, so the file length must match precisely.
+fn binary_length_valid(data: &[u8]) -> bool {
+    if data.len() < 84 {
         return false;
     }
-    // Search the entire file for "facet" — the definitive ASCII marker.
-    data.windows(5)
-        .any(|w| w == b"facet" || w == b"Facet" || w == b"FACET")
+    let tri_count = u32::from_le_bytes([data[80], data[81], data[82], data[83]]) as usize;
+    if tri_count == 0 || tri_count > 100_000_000 {
+        return false;
+    }
+    let expected = 84 + tri_count * 50;
+    // Accept exact match or small trailing padding (up to 80 bytes).
+    data.len() >= expected && data.len() <= expected + 80
+}
+
+/// Heuristic: does this data look like ASCII STL?
+///
+/// Checks for "solid" prefix.  Does NOT search for "facet" — binary data
+/// can coincidentally contain "facet" bytes, so that's not a reliable
+/// discriminator.  The caller uses `binary_length_valid` first; this
+/// function is only reached when binary validation has already failed.
+fn is_probably_ascii(data: &[u8]) -> bool {
+    data.starts_with(b"solid")
 }
 
 /// Parse a binary STL file.
@@ -392,19 +413,21 @@ mod tests {
         data.extend_from_slice(b"12345");
         assert!(detect_stl(&data, &p("model.stl")));
         // Verify is_ascii_stl also correctly identifies it.
-        assert!(is_ascii_stl(&data));
+        assert!(is_probably_ascii(&data));
     }
 
     #[test]
     fn detect_binary_stl_with_solid_header() {
         // Binary STL with "solid" in the 80-byte header (CAD edge case).
-        // No "facet" in header, bytes 80-84 = valid tri_count → binary.
+        // binary_length_valid must return true → preferred over ASCII.
         let mut data = vec![0u8; 84 + 50]; // header + 1 triangle
         data[..5].copy_from_slice(b"solid");
         data[80] = 1; // tri_count = 1
         assert!(detect_stl(&data, &p("model.stl")));
-        // Should be detected as binary (not ASCII) by is_ascii_stl.
-        assert!(!is_ascii_stl(&data));
+        // binary_length_valid takes priority.
+        assert!(binary_length_valid(&data));
+        // is_probably_ascii also true (starts with "solid") — but binary wins.
+        assert!(is_probably_ascii(&data));
     }
 
     #[test]
@@ -545,7 +568,7 @@ endsolid test
             endfacet\n\
             endsolid long_header_name\n",
         );
-        assert!(is_ascii_stl(&data));
+        assert!(is_probably_ascii(&data));
         assert!(detect_stl(&data, &p("model.stl")));
         // Also verify it parses correctly.
         let tmp = write_temp_stl(&data);
@@ -573,6 +596,52 @@ endsolid test
         let tmp = write_temp_stl(&data);
         let (output, _) = parse_stl(tmp.path()).unwrap();
         assert_eq!(output.stats.triangle_count, 1);
+    }
+
+    #[test]
+    fn binary_stl_with_solid_header_and_facet_bytes_in_triangle_data() {
+        // Regression: binary STL with "solid" in the 80-byte header AND
+        // the bytes "facet" appearing coincidentally in the triangle data.
+        // The file also contains non-UTF-8 bytes.
+        //
+        // binary_length_valid must detect this as binary (exact file length),
+        // and parse_stl must successfully parse it as binary — NOT fall
+        // through to ASCII parse which would fail on non-UTF-8 bytes.
+        let tri_count: u32 = 2;
+        let mut data = vec![0u8; 84 + tri_count as usize * 50];
+        // Write "solid" in the header (CAD edge case).
+        data[..5].copy_from_slice(b"solid");
+        // Write tri_count at offset 80.
+        data[80..84].copy_from_slice(&tri_count.to_le_bytes());
+
+        // Triangle 1: normal (0,0,1), vertices at origin.
+        // Normal bytes: 0x00000000, 0x00000000, 0x3F800000
+        write_f32_le(&mut data, 84 + 8, 1.0); // nz = 1.0
+
+        // Triangle 2: embed "facet" in the normal bytes.
+        // "facet" = 0x66 0x61 0x63 0x65 0x74
+        // Write these bytes directly into the triangle normal area.
+        let base2 = 84 + 50;
+        data[base2..base2 + 5].copy_from_slice(b"facet");
+        // Also embed a non-UTF-8 byte (0xFF) in the vertex data.
+        data[base2 + 12] = 0xFF;
+        data[base2 + 13] = 0xFF;
+        data[base2 + 14] = 0xFF;
+        data[base2 + 15] = 0xFF;
+
+        // Verify binary_length_valid detects this as binary.
+        assert!(binary_length_valid(&data));
+        // Verify is_probably_ascii also returns true (starts with "solid").
+        assert!(is_probably_ascii(&data));
+
+        // The critical test: parse_stl must succeed as binary.
+        let tmp = write_temp_stl(&data);
+        let (output, registry) = parse_stl(tmp.path()).unwrap();
+        assert_eq!(output.stats.triangle_count, 2);
+
+        let geom_id = output.model.geometries[0].id();
+        let mesh_data = registry.get(&geom_id).unwrap();
+        assert_eq!(mesh_data.indices.len(), 6); // 2 triangles * 3 indices
     }
 
     /// Helper to write a little-endian f32 into a byte buffer.
