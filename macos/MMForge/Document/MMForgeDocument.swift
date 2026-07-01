@@ -44,7 +44,7 @@ struct Measurement: Identifiable {
 /// The document type for MMForge model files.
 struct MMForgeDocument: FileDocument {
     static var readableContentTypes: [UTType] {
-        [.step, .stl, .gltf, .glb, .data]
+        [.step, .stl, .gltf, .glb]
     }
 
     /// Raw file data (passed to Rust bridge for parsing).

@@ -13,14 +13,11 @@ use mmforge_core::math::BoundingBox;
 use mmforge_core::model::{Geometry, LsmModel, MeshGeometry, Node, ParseOutput, ParseStats};
 use mmforge_geometry::tessellation::{TessellatedMeshData, TessellationRegistry};
 
-/// Detect if a file is STL by checking header bytes.
+/// Detect if a file is STL by extension and header bytes.
 ///
-/// Disambiguation strategy for files starting with "solid":
-/// - Look for "facet" in the first 84 bytes (strong ASCII indicator).
-/// - If found → ASCII STL.
-/// - If not found and bytes 80-84 form a valid triangle count → binary STL
-///   (some CAD tools write "solid" in the 80-byte binary header).
-/// - If neither → still accept (let the parser handle the ambiguity).
+/// This is a routing function — it decides whether to send the file to
+/// the STL parser.  The actual ASCII/binary disambiguation happens inside
+/// `parse_stl` (try ASCII first, fall back to strict binary).
 pub fn detect_stl(header: &[u8], path: &Path) -> bool {
     let ext = path
         .extension()
@@ -32,9 +29,9 @@ pub fn detect_stl(header: &[u8], path: &Path) -> bool {
         return false;
     }
 
-    // Need at least 84 bytes for binary detection (80-byte header + u32 count).
+    // Need at least 84 bytes for binary STL (80-byte header + u32 count).
     if header.len() < 84 {
-        // Too short for binary — check ASCII.
+        // Too short for binary — only accept if it looks like ASCII.
         return header.starts_with(b"solid");
     }
 
@@ -42,30 +39,16 @@ pub fn detect_stl(header: &[u8], path: &Path) -> bool {
     let tri_count = u32::from_le_bytes([header[80], header[81], header[82], header[83]]);
     let reasonable_tri = tri_count > 0 && tri_count < 100_000_000;
 
-    if starts_with_solid {
-        // "solid" prefix present — could be ASCII or binary with "solid" header.
-        // Look for "facet" in the header: strong ASCII indicator.
-        let header_str = &header[..80.min(header.len())];
-        let has_facet = header_str
-            .windows(5)
-            .any(|w| w == b"facet" || w == b"Facet" || w == b"FACET");
-        if has_facet {
-            return true; // ASCII STL.
-        }
-        // No "facet" in header.  If bytes 80-84 look like a valid binary
-        // triangle count, treat as binary (CAD "solid" header edge case).
-        if reasonable_tri {
-            return true;
-        }
-        // Ambiguous — accept and let the parser decide.
-        return true;
-    }
-
-    // No "solid" prefix — standard binary STL detection.
-    reasonable_tri
+    // Accept if: starts with "solid" (ASCII or solid-header binary),
+    // OR has a reasonable binary triangle count at offset 80-84.
+    starts_with_solid || reasonable_tri
 }
 
 /// Parse an STL file (binary or ASCII) into a model + tessellation registry.
+///
+/// When the file starts with "solid", ASCII parsing is attempted first.
+/// If ASCII produces no triangles (e.g. binary STL with "solid" header),
+/// falls back to binary with strict file-length validation.
 pub fn parse_stl(path: &Path) -> Result<(ParseOutput, TessellationRegistry)> {
     let data = std::fs::read(path).map_err(Error::Io)?;
 
@@ -74,7 +57,14 @@ pub fn parse_stl(path: &Path) -> Result<(ParseOutput, TessellationRegistry)> {
     }
 
     let (positions, normals) = if is_ascii_stl(&data) {
-        parse_ascii_stl(&data)?
+        // "solid" prefix + "facet" found → try ASCII first.
+        let result = parse_ascii_stl(&data)?;
+        if result.0.is_empty() {
+            // ASCII parse produced 0 triangles — fall back to binary.
+            parse_binary_stl(&data)?
+        } else {
+            result
+        }
     } else {
         parse_binary_stl(&data)?
     };
@@ -179,27 +169,54 @@ pub fn parse_stl(path: &Path) -> Result<(ParseOutput, TessellationRegistry)> {
     ))
 }
 
-/// Determine if STL data is ASCII format.
+/// Determine if STL data is ASCII format by searching the entire file
+/// for the "facet" keyword.  Binary STL with "solid" in the 80-byte
+/// header will never contain "facet" at a text record boundary.
 ///
-/// Checks for "solid" prefix and "facet" keyword in the first 200 bytes.
-/// The "facet" keyword is the reliable ASCII indicator — binary STL with
-/// "solid" in the header will not have "facet" at a record boundary.
+/// Scanning the full file is safe because ASCII STL files are typically
+/// small (< 100 MB) and the scan is a simple byte search.
 fn is_ascii_stl(data: &[u8]) -> bool {
     if !data.starts_with(b"solid") {
         return false;
     }
-    // Look for "facet" in the first 200 bytes (well before any binary record).
-    let scan_len = 200.min(data.len());
-    let scan = &data[..scan_len];
-    scan.windows(5)
+    // Search the entire file for "facet" — the definitive ASCII marker.
+    data.windows(5)
         .any(|w| w == b"facet" || w == b"Facet" || w == b"FACET")
 }
 
+/// Parse a binary STL file.
+///
+/// Validates:
+/// - Triangle count is reasonable (> 0, < 100M).
+/// - File length matches `84 + tri_count * 50` exactly, allowing up to
+///   80 bytes of trailing padding (some tools append nulls/newlines).
 fn parse_binary_stl(data: &[u8]) -> Result<(Vec<f32>, Vec<f32>)> {
     let tri_count = u32::from_le_bytes([data[80], data[81], data[82], data[83]]) as usize;
+
+    if tri_count == 0 {
+        return Err(Error::parse("STL", "binary triangle count is 0"));
+    }
+    if tri_count > 100_000_000 {
+        return Err(Error::parse(
+            "STL",
+            format!("binary triangle count too large: {tri_count}"),
+        ));
+    }
+
     let expected = 84 + tri_count * 50;
     if data.len() < expected {
         return Err(Error::parse("STL", "binary file truncated"));
+    }
+    // Reject if file is significantly larger than expected (> 80 bytes extra).
+    // Small trailing padding (nulls, newlines) is tolerated.
+    if data.len() > expected + 80 {
+        return Err(Error::parse(
+            "STL",
+            format!(
+                "binary file size mismatch: expected {expected}, got {}",
+                data.len()
+            ),
+        ));
     }
 
     let mut positions = Vec::with_capacity(tri_count * 9);
@@ -504,6 +521,58 @@ endsolid test
         let geom_id = output.model.geometries[0].id();
         let mesh_data = registry.get(&geom_id).unwrap();
         assert_eq!(mesh_data.indices.len(), 6);
+    }
+
+    #[test]
+    fn detect_ascii_stl_with_solid_header_and_facet_after_200_bytes() {
+        // Regression: ASCII STL with a very long "solid" header line where
+        // "facet" first appears well past byte 200.  The full-file scan
+        // must find it.  This tests that is_ascii_stl doesn't limit its
+        // search to the first N bytes.
+        let mut data = Vec::from(b"solid long_header_name");
+        // Pad with spaces to push "facet" past byte 200.
+        while data.len() < 250 {
+            data.push(b' ');
+        }
+        data.extend_from_slice(b"\nfacet normal 0 0 1\n");
+        // Add a minimal triangle to make it a valid ASCII STL.
+        data.extend_from_slice(
+            b"  outer loop\n\
+               vertex 0 0 0\n\
+               vertex 1 0 0\n\
+               vertex 0 1 0\n\
+             endloop\n\
+            endfacet\n\
+            endsolid long_header_name\n",
+        );
+        assert!(is_ascii_stl(&data));
+        assert!(detect_stl(&data, &p("model.stl")));
+        // Also verify it parses correctly.
+        let tmp = write_temp_stl(&data);
+        let (output, _) = parse_stl(tmp.path()).unwrap();
+        assert_eq!(output.stats.triangle_count, 1);
+    }
+
+    #[test]
+    fn binary_stl_strict_length_rejects_oversized_file() {
+        // Binary STL where file is significantly larger than expected.
+        // This should be rejected by strict validation.
+        let mut data = vec![0u8; 84 + 50 + 500]; // header + 1 triangle + 500 extra
+        data[80] = 1; // tri_count = 1
+        let tmp = write_temp_stl(&data);
+        assert!(parse_stl(tmp.path()).is_err());
+    }
+
+    #[test]
+    fn binary_stl_strict_length_accepts_small_trailing_padding() {
+        // Binary STL with small trailing nulls (some tools do this).
+        let mut data = vec![0u8; 84 + 50 + 20]; // header + 1 triangle + 20 padding
+        data[80] = 1; // tri_count = 1
+        // Valid triangle: normal (0,0,1), vertex 0 at origin
+        write_f32_le(&mut data, 84 + 8, 1.0); // nz = 1.0
+        let tmp = write_temp_stl(&data);
+        let (output, _) = parse_stl(tmp.path()).unwrap();
+        assert_eq!(output.stats.triangle_count, 1);
     }
 
     /// Helper to write a little-endian f32 into a byte buffer.
