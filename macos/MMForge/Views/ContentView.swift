@@ -106,10 +106,10 @@ struct ContentView: View {
             Text(viewModel.exportError ?? "")
         }
         .onAppear {
-            viewModel.parseFile(data: document.fileData)
+            viewModel.parseFile(data: document.fileData, fileExtension: document.fileExtension)
         }
         .onChange(of: document.fileData) { _, newData in
-            viewModel.parseFile(data: newData)
+            viewModel.parseFile(data: newData, fileExtension: document.fileExtension)
         }
     }
 
@@ -121,6 +121,10 @@ struct ContentView: View {
             DispatchQueue.main.async {
                 if let fileData = try? Data(contentsOf: url) {
                     document.fileData = fileData
+                    let ext = url.pathExtension.lowercased()
+                    if !ext.isEmpty {
+                        document.fileExtension = ext
+                    }
                 }
             }
         }

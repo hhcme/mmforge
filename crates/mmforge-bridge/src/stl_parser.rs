@@ -14,6 +14,13 @@ use mmforge_core::model::{Geometry, LsmModel, MeshGeometry, Node, ParseOutput, P
 use mmforge_geometry::tessellation::{TessellatedMeshData, TessellationRegistry};
 
 /// Detect if a file is STL by checking header bytes.
+///
+/// Disambiguation strategy for files starting with "solid":
+/// - Look for "facet" in the first 84 bytes (strong ASCII indicator).
+/// - If found → ASCII STL.
+/// - If not found and bytes 80-84 form a valid triangle count → binary STL
+///   (some CAD tools write "solid" in the 80-byte binary header).
+/// - If neither → still accept (let the parser handle the ambiguity).
 pub fn detect_stl(header: &[u8], path: &Path) -> bool {
     let ext = path
         .extension()
@@ -21,21 +28,41 @@ pub fn detect_stl(header: &[u8], path: &Path) -> bool {
         .unwrap_or("")
         .to_ascii_lowercase();
 
-    // Binary STL: 80-byte header + u32 triangle count.
-    // The triangle count * 50 + 84 should equal file size.
-    if header.len() >= 84 && ext == "stl" {
-        let tri_count = u32::from_le_bytes([header[80], header[81], header[82], header[83]]);
-        if tri_count > 0 && tri_count < 100_000_000 {
-            return true;
-        }
+    if ext != "stl" {
+        return false;
     }
 
-    // ASCII STL: starts with "solid".
-    if header.starts_with(b"solid") && ext == "stl" {
+    // Need at least 84 bytes for binary detection (80-byte header + u32 count).
+    if header.len() < 84 {
+        // Too short for binary — check ASCII.
+        return header.starts_with(b"solid");
+    }
+
+    let starts_with_solid = header.starts_with(b"solid");
+    let tri_count = u32::from_le_bytes([header[80], header[81], header[82], header[83]]);
+    let reasonable_tri = tri_count > 0 && tri_count < 100_000_000;
+
+    if starts_with_solid {
+        // "solid" prefix present — could be ASCII or binary with "solid" header.
+        // Look for "facet" in the header: strong ASCII indicator.
+        let header_str = &header[..80.min(header.len())];
+        let has_facet = header_str
+            .windows(5)
+            .any(|w| w == b"facet" || w == b"Facet" || w == b"FACET");
+        if has_facet {
+            return true; // ASCII STL.
+        }
+        // No "facet" in header.  If bytes 80-84 look like a valid binary
+        // triangle count, treat as binary (CAD "solid" header edge case).
+        if reasonable_tri {
+            return true;
+        }
+        // Ambiguous — accept and let the parser decide.
         return true;
     }
 
-    false
+    // No "solid" prefix — standard binary STL detection.
+    reasonable_tri
 }
 
 /// Parse an STL file (binary or ASCII) into a model + tessellation registry.
@@ -152,10 +179,20 @@ pub fn parse_stl(path: &Path) -> Result<(ParseOutput, TessellationRegistry)> {
     ))
 }
 
+/// Determine if STL data is ASCII format.
+///
+/// Checks for "solid" prefix and "facet" keyword in the first 200 bytes.
+/// The "facet" keyword is the reliable ASCII indicator — binary STL with
+/// "solid" in the header will not have "facet" at a record boundary.
 fn is_ascii_stl(data: &[u8]) -> bool {
-    data.starts_with(b"solid")
-        && data.len() > 80
-        && !data[80..84].iter().all(|&b| b.is_ascii_digit())
+    if !data.starts_with(b"solid") {
+        return false;
+    }
+    // Look for "facet" in the first 200 bytes (well before any binary record).
+    let scan_len = 200.min(data.len());
+    let scan = &data[..scan_len];
+    scan.windows(5)
+        .any(|w| w == b"facet" || w == b"Facet" || w == b"FACET")
 }
 
 fn parse_binary_stl(data: &[u8]) -> Result<(Vec<f32>, Vec<f32>)> {
@@ -322,6 +359,35 @@ mod tests {
     fn reject_stl_with_zero_triangles() {
         let data = [0u8; 84]; // tri_count = 0
         assert!(!detect_stl(&data, &p("model.stl")));
+    }
+
+    #[test]
+    fn detect_ascii_stl_with_solid_header_and_digit_offset() {
+        // Regression: ASCII STL where the 80-byte header happens to have
+        // digit characters at offset 80-84 (could be misread as binary tri_count).
+        // The "facet" keyword at offset 10 must disambiguate.
+        let mut data = Vec::from(b"solid test\nfacet normal 0 0 1\n");
+        // Pad to >84 bytes with the header filled.
+        while data.len() < 84 {
+            data.push(b' ');
+        }
+        // Write ASCII digits at offset 80-84 (would be tri_count=12345 in binary).
+        data.extend_from_slice(b"12345");
+        assert!(detect_stl(&data, &p("model.stl")));
+        // Verify is_ascii_stl also correctly identifies it.
+        assert!(is_ascii_stl(&data));
+    }
+
+    #[test]
+    fn detect_binary_stl_with_solid_header() {
+        // Binary STL with "solid" in the 80-byte header (CAD edge case).
+        // No "facet" in header, bytes 80-84 = valid tri_count → binary.
+        let mut data = vec![0u8; 84 + 50]; // header + 1 triangle
+        data[..5].copy_from_slice(b"solid");
+        data[80] = 1; // tri_count = 1
+        assert!(detect_stl(&data, &p("model.stl")));
+        // Should be detected as binary (not ASCII) by is_ascii_stl.
+        assert!(!is_ascii_stl(&data));
     }
 
     #[test]

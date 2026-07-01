@@ -1,8 +1,12 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 mod gltf_parser;
-mod iges_detector;
 mod stl_parser;
+
+// IGES detector: reserved for future OCCT IGESControl_Reader integration.
+// Not wired into mmf_parse_file yet — no real parser available.
+#[allow(dead_code)]
+mod iges_detector;
 
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
@@ -68,12 +72,12 @@ fn build_document(output: ParseOutput, registry: TessellationRegistry) -> MmfDoc
 /// Parse a STEP file.  Returns NULL on error.
 #[unsafe(no_mangle)]
 pub extern "C" fn mmf_parse_step(path: *const c_char) -> *mut MmfDocument {
-    let path = match c_path_to_rust(path) {
+    let path = match c_path_to_owned(path) {
         Some(p) => p,
         None => return ptr::null_mut(),
     };
 
-    match mmforge_format_step::parse_step_with_tessellation(path) {
+    match mmforge_format_step::parse_step_with_tessellation(&path) {
         Ok((output, registry)) => Box::into_raw(Box::new(build_document(output, registry))),
         Err(e) => {
             set_last_error(&format!("{e}"));
@@ -86,13 +90,13 @@ pub extern "C" fn mmf_parse_step(path: *const c_char) -> *mut MmfDocument {
 /// Returns NULL on error — call mmf_last_error() for the message.
 #[unsafe(no_mangle)]
 pub extern "C" fn mmf_parse_file(path: *const c_char) -> *mut MmfDocument {
-    let path = match c_path_to_rust(path) {
+    let path = match c_path_to_owned(path) {
         Some(p) => p,
         None => return ptr::null_mut(),
     };
 
     // Read first 84 bytes for format detection (STL binary needs 80-byte header + u32 count).
-    let header = match std::fs::read(path) {
+    let header = match std::fs::read(&path) {
         Ok(data) => {
             let mut buf = [0u8; 84];
             let len = data.len().min(84);
@@ -105,23 +109,20 @@ pub extern "C" fn mmf_parse_file(path: *const c_char) -> *mut MmfDocument {
         }
     };
 
-    // IGES: detected but no parser yet — return clear error.
-    if iges_detector::detect_iges(&header, path) {
-        set_last_error(
-            "IGES format detected but parsing requires OCCT IGES adapter (not yet implemented)",
-        );
-        return ptr::null_mut();
-    }
+    // IGES: not yet openable — requires OCCT IGESControl_Reader adapter.
+    // Detection module exists (iges_detector.rs) but is not wired into the
+    // parse pipeline.  IGES files will fall through to STEP detection and
+    // produce a clear "not a STEP file" error.
 
-    let result = if stl_parser::detect_stl(&header, path) {
-        stl_parser::parse_stl(path)
-    } else if gltf_parser::detect_gltf(&header, path) {
-        gltf_parser::parse_gltf(path)
-    } else if mmforge_format_step::detect::detect_step(&header, path).is_some() {
-        mmforge_format_step::parse_step_with_tessellation(path)
+    let result = if stl_parser::detect_stl(&header, &path) {
+        stl_parser::parse_stl(&path)
+    } else if gltf_parser::detect_gltf(&header, &path) {
+        gltf_parser::parse_gltf(&path)
+    } else if mmforge_format_step::detect::detect_step(&header, &path).is_some() {
+        mmforge_format_step::parse_step_with_tessellation(&path)
     } else {
         // Try STEP as fallback (it has the most flexible detection).
-        mmforge_format_step::parse_step_with_tessellation(path)
+        mmforge_format_step::parse_step_with_tessellation(&path)
     };
 
     match result {
@@ -133,14 +134,18 @@ pub extern "C" fn mmf_parse_file(path: *const c_char) -> *mut MmfDocument {
     }
 }
 
-/// Helper: convert C path to Rust &Path.
-fn c_path_to_rust(path: *const c_char) -> Option<&'static std::path::Path> {
+/// Helper: convert C string path to an owned `PathBuf`.
+///
+/// Copies the C string into Rust-owned memory so there is no lifetime
+/// dependence on the caller's buffer.  Returns `None` (with last-error
+/// set) on null pointer or invalid UTF-8.
+fn c_path_to_owned(path: *const c_char) -> Option<std::path::PathBuf> {
     if path.is_null() {
         set_last_error("null path");
         return None;
     }
     match unsafe { CStr::from_ptr(path) }.to_str() {
-        Ok(s) => Some(std::path::Path::new(s)),
+        Ok(s) => Some(std::path::PathBuf::from(s)),
         Err(e) => {
             set_last_error(&format!("invalid UTF-8 path: {e}"));
             None

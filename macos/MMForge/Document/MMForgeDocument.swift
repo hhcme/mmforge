@@ -9,7 +9,8 @@ extension UTType {
     static let stl  = UTType("com.mmforge.stl")!
     static let gltf = UTType("com.mmforge.gltf")!
     static let glb  = UTType("com.mmforge.glb")!
-    static let iges = UTType("com.mmforge.iges")!
+    // IGES (com.mmforge.iges) — planned, not yet openable.
+    // Requires OCCT IGESControl_Reader adapter (C++ shim + Rust FFI).
 }
 
 // MARK: - App preferences (persisted via UserDefaults)
@@ -43,14 +44,20 @@ struct Measurement: Identifiable {
 /// The document type for MMForge model files.
 struct MMForgeDocument: FileDocument {
     static var readableContentTypes: [UTType] {
-        [.step, .stl, .gltf, .glb, .iges, .data]
+        [.step, .stl, .gltf, .glb, .data]
     }
 
     /// Raw file data (passed to Rust bridge for parsing).
     var fileData: Data
 
-    init(fileData: Data = Data()) {
+    /// Original file extension (e.g. "step", "stl", "glb").
+    /// Used to create temp files with the correct extension so Rust
+    /// format detection works properly.
+    var fileExtension: String
+
+    init(fileData: Data = Data(), fileExtension: String = "step") {
         self.fileData = fileData
+        self.fileExtension = fileExtension
     }
 
     init(configuration: ReadConfiguration) throws {
@@ -58,6 +65,12 @@ struct MMForgeDocument: FileDocument {
             throw CocoaError(.fileReadCorruptFile)
         }
         self.fileData = data
+        // Extract extension from the original filename.
+        let filename = configuration.file.filename ?? "model.step"
+        self.fileExtension = (filename as NSString).pathExtension.lowercased()
+        if self.fileExtension.isEmpty {
+            self.fileExtension = "step"
+        }
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
@@ -150,7 +163,7 @@ final class DocumentViewModel: ObservableObject {
         pendingPoint = nil
     }
 
-    func parseFile(data: Data) {
+    func parseFile(data: Data, fileExtension: String = "step") {
         // Increment generation FIRST — any in-flight async parse from a
         // previous call will see a mismatch and discard its result.
         parseGeneration += 1
@@ -166,9 +179,11 @@ final class DocumentViewModel: ObservableObject {
 
         state = .loading
 
-        // Write to temp file (Rust bridge needs a file path).
+        // Write to temp file with the ORIGINAL extension so Rust format
+        // detection works correctly (STL requires .stl, etc.).
+        let ext = fileExtension.isEmpty ? "step" : fileExtension
         let tmpURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mmforge_\(UUID().uuidString).step")
+            .appendingPathComponent("mmforge_\(UUID().uuidString).\(ext)")
         do {
             try data.write(to: tmpURL)
         } catch {
