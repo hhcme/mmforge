@@ -14,6 +14,9 @@ struct MMForgeApp: App {
             CommandMenu("Camera") {
                 CameraCommandsView()
             }
+            CommandMenu("Export") {
+                ExportCommandsView()
+            }
             CommandGroup(after: .textEditing) {
                 SelectionCommandsView()
             }
@@ -72,6 +75,21 @@ struct SelectionCommandsView: View {
                 viewModel?.clearMeasurements()
             }
             .disabled(viewModel?.measurements.isEmpty ?? true)
+        }
+    }
+}
+
+/// Export menu commands.
+struct ExportCommandsView: View {
+    @FocusedObject private var viewModel: DocumentViewModel?
+
+    var body: some View {
+        Group {
+            Button("Export Image…") {
+                viewModel?.exportImage()
+            }
+            .keyboardShortcut("e", modifiers: .command)
+            .disabled(!(viewModel?.isLoaded ?? false))
         }
     }
 }

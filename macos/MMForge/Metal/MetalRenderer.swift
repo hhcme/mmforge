@@ -158,6 +158,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private let depthStencilState: MTLDepthStencilState
     private let depthStencilStateNoWrite: MTLDepthStencilState
 
+    /// Weak reference to the MTKView for screenshot capture.
+    weak var mtkView: MTKView?
+
     // Measurement overlay state
     private var overlayVertexBuffer: MTLBuffer?
     private var overlayVertexCount: Int = 0
@@ -684,5 +687,66 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         camera.yaw = 0
         camera.pitch = Float.pi / 9
         camera.isOrthographic = false
+    }
+
+    // MARK: - Screenshot capture
+
+    /// Capture the current viewport as an NSImage.
+    ///
+    /// Reads the current drawable texture via a blit command encoder
+    /// and creates a CGImage from the pixel data.  Returns nil if
+    /// the capture fails (e.g. no drawable available).
+    func captureImage() -> NSImage? {
+        guard let view = mtkView,
+              let drawable = view.currentDrawable else { return nil }
+
+        let texture = drawable.texture
+        let width = texture.width
+        let height = texture.height
+        guard width > 0, height > 0 else { return nil }
+
+        let bytesPerRow = width * 4
+        let bufferSize = bytesPerRow * height
+
+        // Create a shared buffer for readback.
+        guard let buffer = device.makeBuffer(length: bufferSize, options: .storageModeShared)
+        else { return nil }
+
+        // Blit the drawable texture into the buffer.
+        guard let cmdBuf = commandQueue.makeCommandBuffer(),
+              let blit = cmdBuf.makeBlitCommandEncoder() else { return nil }
+        blit.copy(from: texture,
+                  sourceSlice: 0, sourceLevel: 0,
+                  sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: width, height: height, depth: 1),
+                  to: buffer,
+                  destinationOffset: 0,
+                  destinationBytesPerRow: bytesPerRow,
+                  destinationBytesPerImage: bufferSize)
+        // No synchronize needed — buffer is .storageModeShared.
+        blit.endEncoding()
+        cmdBuf.commit()
+        cmdBuf.waitUntilCompleted()
+
+        // Create CGImage from the buffer (BGRA pixel format).
+        let pixelData = buffer.contents().bindMemory(to: UInt8.self, capacity: bufferSize)
+        let data = Data(bytes: pixelData, count: bufferSize)
+        guard let provider = CGDataProvider(data: data as CFData) else { return nil }
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo(
+            rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue
+                | CGBitmapInfo.byteOrder32Little.rawValue
+        )
+        guard let cgImage = CGImage(
+            width: width, height: height,
+            bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace, bitmapInfo: bitmapInfo,
+            provider: provider, decode: nil,
+            shouldInterpolate: false, intent: .defaultIntent
+        ) else { return nil }
+
+        return NSImage(cgImage: cgImage, size: NSSize(width: width, height: height))
     }
 }

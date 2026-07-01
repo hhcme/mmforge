@@ -8,6 +8,17 @@ extension UTType {
     static let step = UTType("com.mmforge.step")!
 }
 
+// MARK: - App preferences (persisted via UserDefaults)
+
+/// Global viewer preferences, persisted across sessions.
+struct AppPreferences {
+    @AppStorage("showGrid") static var showGrid: Bool = true
+    @AppStorage("showAxes") static var showAxes: Bool = true
+    @AppStorage("antiAliasing") static var antiAliasing: Bool = true
+    @AppStorage("exportFormat") static var exportFormat: String = "png"
+    @AppStorage("exportScale") static var exportScale: Double = 1.0
+}
+
 // MARK: - Measurement
 
 /// A point-to-point measurement in world coordinates.
@@ -86,6 +97,20 @@ final class DocumentViewModel: ObservableObject {
     @Published var measurementMode: Bool = false
     @Published var measurements: [Measurement] = []
     @Published var pendingPoint: simd_float3?
+
+    // Display preferences (persisted via AppPreferences)
+    var showGrid: Bool {
+        get { AppPreferences.showGrid }
+        set { AppPreferences.showGrid = newValue }
+    }
+    var showAxes: Bool {
+        get { AppPreferences.showAxes }
+        set { AppPreferences.showAxes = newValue }
+    }
+    var antiAliasing: Bool {
+        get { AppPreferences.antiAliasing }
+        set { AppPreferences.antiAliasing = newValue }
+    }
 
     private var rustDoc: OpaquePointer?
     private var renderer: MetalRenderer?
@@ -399,6 +424,44 @@ final class DocumentViewModel: ObservableObject {
         } else {
             let overlayData = measurements.map { (start: $0.start, end: $0.end) }
             renderer.updateOverlay(measurements: overlayData, pendingPoint: pendingPoint)
+        }
+    }
+
+    // MARK: - Image export
+
+    /// Capture the current viewport and present NSSavePanel for export.
+    func exportImage() {
+        guard let renderer else { return }
+        guard let image = renderer.captureImage() else {
+            // Could not capture — no drawable available.
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.title = "Export Image"
+        panel.allowedContentTypes = [.png, .jpeg]
+        panel.nameFieldStringValue = "mmforge_view.\(AppPreferences.exportFormat)"
+        panel.canCreateDirectories = true
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            self.saveImage(image, to: url)
+        }
+    }
+
+    private func saveImage(_ image: NSImage, to url: URL) {
+        guard let tiffData = image.tiffRepresentation,
+              let bitmapRep = NSBitmapImageRep(data: tiffData) else { return }
+
+        let isPNG = url.pathExtension.lowercased() == "png"
+        let imageData = isPNG
+            ? bitmapRep.representation(using: .png, properties: [:])
+            : bitmapRep.representation(using: .jpeg, properties: [.compressionFactor: 0.9])
+
+        do {
+            try imageData?.write(to: url)
+        } catch {
+            // Silently fail — could show alert in future.
         }
     }
 

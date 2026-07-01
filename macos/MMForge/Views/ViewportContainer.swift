@@ -92,6 +92,7 @@ struct MetalViewWrapper: NSViewRepresentable {
 
         if let renderer = MetalRenderer(mtkView: mtkView) {
             mtkView.delegate = renderer
+            renderer.mtkView = mtkView  // store reference for screenshot capture
             context.coordinator.renderer = renderer
             viewModel.setRenderer(renderer)
         }

@@ -374,17 +374,17 @@ struct InspectorPanel: View {
 
                 Divider()
 
-                // Display
+                // Display (persisted via AppPreferences)
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Display")
                         .font(.headline)
                         .accessibilityAddTraits(.isHeader)
 
-                    Toggle("Show Grid", isOn: .constant(true))
+                    Toggle("Show Grid", isOn: $viewModel.showGrid)
                         .accessibilityHint("Toggle grid display in viewport")
-                    Toggle("Show Axes", isOn: .constant(true))
+                    Toggle("Show Axes", isOn: $viewModel.showAxes)
                         .accessibilityHint("Toggle axis indicator in viewport")
-                    Toggle("Anti-aliasing", isOn: .constant(true))
+                    Toggle("Anti-aliasing", isOn: $viewModel.antiAliasing)
                         .accessibilityHint("Toggle anti-aliasing")
                 }
 
