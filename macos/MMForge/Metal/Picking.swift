@@ -184,14 +184,29 @@ func rayAABB(ray: Ray, bmin: simd_float3, bmax: simd_float3,
 
 /// Build a BVH from triangle soup.
 ///
-/// 1. Compute per-triangle centroid and AABB.
-/// 2. Sort triangles along longest axis at each split.
-/// 3. Build top-down with explicit left/right children.
-/// 4. Leaf threshold: ≤ 4 triangles.
-/// 5. `sortedTriIndices` maps sorted position → original triangle index.
+/// Input validation:
+/// - `positions.count` must be a multiple of 3 (xyz triples).
+/// - `indices.count` must be a multiple of 3 (triangle triples).
+/// - Each index must be < `positions.count / 3`.
+/// - Invalid triangles are silently skipped.
+///
+/// Returns an empty BVH if no valid triangles remain after filtering.
 func buildMeshBVH(positions: [Float], indices: [UInt32]) -> MeshBVH {
+    // Validate positions layout.
+    guard positions.count % 3 == 0 else {
+        return MeshBVH(nodes: [], sortedTriIndices: [],
+                       positions: positions, indices: indices)
+    }
+    let vertexCount = positions.count / 3
+
+    // Validate indices layout.
+    guard indices.count % 3 == 0 else {
+        return MeshBVH(nodes: [], sortedTriIndices: [],
+                       positions: positions, indices: indices)
+    }
     let triCount = indices.count / 3
-    guard triCount > 0 else {
+
+    guard triCount > 0, vertexCount > 0 else {
         return MeshBVH(nodes: [], sortedTriIndices: [],
                        positions: positions, indices: indices)
     }
@@ -204,12 +219,17 @@ func buildMeshBVH(positions: [Float], indices: [UInt32]) -> MeshBVH {
         var originalIndex: Int  // index into original indices array
     }
 
+    // Filter: only keep triangles whose indices are in range.
     var triInfos: [TriInfo] = []
     triInfos.reserveCapacity(triCount)
     for i in 0..<triCount {
         let i0 = Int(indices[i * 3])
         let i1 = Int(indices[i * 3 + 1])
         let i2 = Int(indices[i * 3 + 2])
+        // Skip triangles with out-of-bounds indices.
+        guard i0 < vertexCount, i1 < vertexCount, i2 < vertexCount else {
+            continue
+        }
         let v0 = vert(positions, i0)
         let v1 = vert(positions, i1)
         let v2 = vert(positions, i2)
@@ -220,6 +240,11 @@ func buildMeshBVH(positions: [Float], indices: [UInt32]) -> MeshBVH {
             boundsMin: bmin, boundsMax: bmax,
             originalIndex: i
         ))
+    }
+
+    guard !triInfos.isEmpty else {
+        return MeshBVH(nodes: [], sortedTriIndices: [],
+                       positions: positions, indices: indices)
     }
 
     var nodes: [BVHNode] = []

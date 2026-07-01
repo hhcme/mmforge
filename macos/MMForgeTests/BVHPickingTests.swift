@@ -11,6 +11,26 @@ import simd
 // Fallback: define simd types inline for Linux CI.
 #endif
 
+// SIMD3 subscript for axis access (matches Picking.swift).
+extension SIMD3 {
+    subscript(axis: Int) -> Scalar {
+        get {
+            switch axis {
+            case 0: return x
+            case 1: return y
+            default: return z
+            }
+        }
+        set {
+            switch axis {
+            case 0: x = newValue
+            case 1: y = newValue
+            default: z = newValue
+            }
+        }
+    }
+}
+
 // MARK: - Inline Ray/Hit/BVH types (matches Picking.swift)
 
 struct Ray {
@@ -84,16 +104,22 @@ struct MeshBVH {
 
     private func intersectNode(ray: Ray, nodeIndex: Int, tMin: Float,
                                 bestT: inout Float, bestHit: inout HitResult?) {
+        guard nodeIndex >= 0 && nodeIndex < nodes.count else { return }
         let node = nodes[nodeIndex]
         guard rayAABB(ray: ray, bmin: node.boundsMin, bmax: node.boundsMax,
                       tMin: tMin, tMax: bestT) else { return }
         if node.isLeaf {
             for i in 0..<node.triCount {
                 let sortedIdx = node.triIndex + i
+                guard sortedIdx >= 0 && sortedIdx < sortedTriIndices.count else { continue }
                 let triIdx = sortedTriIndices[sortedIdx]
+                let vertCount = positions.count / 3
                 let i0 = Int(indices[triIdx * 3])
                 let i1 = Int(indices[triIdx * 3 + 1])
                 let i2 = Int(indices[triIdx * 3 + 2])
+                guard i0 >= 0 && i0 < vertCount &&
+                      i1 >= 0 && i1 < vertCount &&
+                      i2 >= 0 && i2 < vertCount else { continue }
                 let v0 = vertex(i0), v1 = vertex(i1), v2 = vertex(i2)
                 if let hit = rayTriangleIntersect(ray: ray, v0: v0, v1: v1, v2: v2,
                                                    tMin: tMin, tMax: bestT) {
@@ -114,24 +140,43 @@ struct MeshBVH {
 
     private func vertex(_ index: Int) -> SIMD3<Float> {
         let o = index * 3
+        guard o >= 0 && o + 2 < positions.count else { return SIMD3<Float>(0, 0, 0) }
         return SIMD3<Float>(positions[o], positions[o+1], positions[o+2])
     }
 }
 
 func rayAABB(ray: Ray, bmin: SIMD3<Float>, bmax: SIMD3<Float>,
              tMin: Float, tMax: Float) -> Bool {
-    let t1 = (bmin - ray.origin) * ray.invDir
-    let t2 = (bmax - ray.origin) * ray.invDir
-    let tmin3 = simd_min(t1, t2)
-    let tmax3 = simd_max(t1, t2)
-    let tmin = max(tmin3.x, max(tmin3.y, tmin3.z))
-    let tmax = min(tmax3.x, min(tmax3.y, tmax3.z))
-    return tmin <= tmax && tmax >= tMin && tmin <= tMax
+    var tmin: Float = 0
+    var tmax: Float = .infinity
+    for axis in 0..<3 {
+        let o = ray.origin[axis], inv = ray.invDir[axis]
+        let lo = bmin[axis], hi = bmax[axis]
+        let t1 = (lo - o) * inv
+        let t2 = (hi - o) * inv
+        if t1.isNaN || t2.isNaN {
+            if o < lo - 1e-12 || o > hi + 1e-12 { return false }
+        } else {
+            let axisMin = min(t1, t2)
+            let axisMax = max(t1, t2)
+            tmin = max(tmin, axisMin)
+            tmax = min(tmax, axisMax)
+            if tmin > tmax { return false }
+        }
+    }
+    return tmax >= tMin && tmin <= tMax
 }
 
 func buildMeshBVH(positions: [Float], indices: [UInt32]) -> MeshBVH {
+    guard positions.count % 3 == 0 else {
+        return MeshBVH(nodes: [], sortedTriIndices: [], positions: positions, indices: indices)
+    }
+    let vertexCount = positions.count / 3
+    guard indices.count % 3 == 0 else {
+        return MeshBVH(nodes: [], sortedTriIndices: [], positions: positions, indices: indices)
+    }
     let triCount = indices.count / 3
-    guard triCount > 0 else {
+    guard triCount > 0, vertexCount > 0 else {
         return MeshBVH(nodes: [], sortedTriIndices: [], positions: positions, indices: indices)
     }
     struct TriInfo {
@@ -142,21 +187,27 @@ func buildMeshBVH(positions: [Float], indices: [UInt32]) -> MeshBVH {
     }
     func vert(_ positions: [Float], _ index: Int) -> SIMD3<Float> {
         let o = index * 3
+        guard o >= 0 && o + 2 < positions.count else { return SIMD3<Float>(0, 0, 0) }
         return SIMD3<Float>(positions[o], positions[o+1], positions[o+2])
     }
     var triInfos: [TriInfo] = []
     for i in 0..<triCount {
         let i0 = Int(indices[i*3]), i1 = Int(indices[i*3+1]), i2 = Int(indices[i*3+2])
+        guard i0 < vertexCount, i1 < vertexCount, i2 < vertexCount else { continue }
         let v0 = vert(positions, i0), v1 = vert(positions, i1), v2 = vert(positions, i2)
         let bmin = simd_min(v0, simd_min(v1, v2))
         let bmax = simd_max(v0, simd_max(v1, v2))
         triInfos.append(TriInfo(centroid: (v0+v1+v2)/3.0, boundsMin: bmin, boundsMax: bmax, originalIndex: i))
+    }
+    guard !triInfos.isEmpty else {
+        return MeshBVH(nodes: [], sortedTriIndices: [], positions: positions, indices: indices)
     }
     var nodes: [BVHNode] = []
     var sortedIndices: [Int] = []
     func build(begin: Int, end: Int) -> Int {
         let nodeIndex = nodes.count
         nodes.append(BVHNode(boundsMin: .zero, boundsMax: .zero, leftChild: 0, rightChild: 0, triIndex: 0, triCount: 0))
+        guard begin < end && begin >= 0 && end <= triInfos.count else { return nodeIndex }
         var nodeMin = SIMD3<Float>(Float.infinity, Float.infinity, Float.infinity)
         var nodeMax = SIMD3<Float>(-Float.infinity, -Float.infinity, -Float.infinity)
         for i in begin..<end {
@@ -237,7 +288,7 @@ do {
 
 // Test 5: Closest hit selection (two triangles at z=1 and z=5)
 do {
-    var positions: [Float] = [0,0,1, 1,0,1, 0.5,1,1, 0,0,5, 1,0,5, 0.5,1,5]
+    let positions: [Float] = [0,0,1, 1,0,1, 0.5,1,1, 0,0,5, 1,0,5, 0.5,1,5]
     let indices: [UInt32] = [0,1,2, 3,4,5]
     let bvh = buildMeshBVH(positions: positions, indices: indices)
     let ray = Ray(origin: SIMD3<Float>(0.5, 0.5, -1), dir: SIMD3<Float>(0, 0, 1))
@@ -301,6 +352,11 @@ do {
     let hit = bvh.intersect(ray: ray, tMin: 0, tMax: 100)
     assert(hit != nil, "BVH should find triangle in right child")
 }
+
+// Note: edge-case input validation tests (OOB indices, non-multiple-of-3,
+// degenerate triangles) are in the Xcode test target PickingTests.swift
+// which uses @testable import MMForge to test the production code directly.
+// This standalone file tests the reference implementation for CI without Xcode.
 
 // Summary
 print("\n=== BVH Picking Tests ===")

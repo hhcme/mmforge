@@ -183,6 +183,38 @@ final class PickingTests: XCTestCase {
         XCTAssertEqual(sorted.count, 12, "all 12 triangles should be in sorted index")
     }
 
+    // MARK: - Input Validation
+
+    func testOutOfBoundsIndices() {
+        let positions: [Float] = [0, 0, 0, 1, 0, 0, 0, 1, 0]
+        let indices: [UInt32] = [0, 1, 99]  // 99 is out of bounds
+        let bvh = buildMeshBVH(positions: positions, indices: indices)
+        XCTAssertTrue(bvh.nodes.isEmpty, "OOB indices should produce empty BVH")
+    }
+
+    func testIndicesNotMultipleOfThree() {
+        let positions: [Float] = [0, 0, 0, 1, 0, 0, 0, 1, 0]
+        let indices: [UInt32] = [0, 1]  // not a multiple of 3
+        let bvh = buildMeshBVH(positions: positions, indices: indices)
+        XCTAssertTrue(bvh.nodes.isEmpty, "non-multiple-of-3 indices should produce empty BVH")
+    }
+
+    func testPositionsNotMultipleOfThree() {
+        let positions: [Float] = [0, 0, 0, 1, 0]  // 5 floats
+        let indices: [UInt32] = [0, 1, 2]
+        let bvh = buildMeshBVH(positions: positions, indices: indices)
+        XCTAssertTrue(bvh.nodes.isEmpty, "non-multiple-of-3 positions should produce empty BVH")
+    }
+
+    func testMixedValidAndInvalidTriangles() {
+        let positions: [Float] = [0, 0, 0, 1, 0, 0, 0, 1, 0]
+        // Triangle 0: valid (0,1,2).  Triangle 1: invalid (99,100,101).
+        let indices: [UInt32] = [0, 1, 2, 99, 100, 101]
+        let bvh = buildMeshBVH(positions: positions, indices: indices)
+        XCTAssertEqual(bvh.sortedTriIndices.count, 1, "should have 1 valid triangle")
+        XCTAssertEqual(bvh.sortedTriIndices[0], 0, "valid triangle should be index 0")
+    }
+
     // MARK: - Helpers
 
     private func makeCubeMesh() -> (positions: [Float], indices: [UInt32]) {
