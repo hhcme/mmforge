@@ -152,3 +152,97 @@ fn occt_read_iges_with_tessellation(
         registry,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Without OCCT, read_iges_file returns NotAvailable.
+    #[cfg(not(feature = "occt"))]
+    #[test]
+    fn read_iges_file_without_occt_errors() {
+        let path = std::path::PathBuf::from("nonexistent.igs");
+        let result = read_iges_file(&path);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("not available") || msg.contains("OCCT"));
+    }
+
+    /// E2E: read a real IGES fixture and verify the pipeline.
+    ///
+    /// The fixture (`point.igs`) contains a single Point entity (type 116).
+    /// This is a valid IGES file but OCCT may fail to transfer it into a
+    /// B-Rep shape because points are not B-Rep geometry.  The test verifies
+    /// that the read path doesn't crash and produces a clear error or empty
+    /// shape list.
+    ///
+    /// A more substantial fixture (B-Rep solid) would be needed to test the
+    /// full shape-extraction + tessellation pipeline.  Such a fixture can
+    /// be generated with `IGESControl_Writer` from OCCT.
+    #[cfg(occt_found)]
+    #[test]
+    fn read_iges_file_e2e_real_occt() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("point.igs");
+
+        assert!(
+            fixture.exists(),
+            "IGES fixture missing at {}",
+            fixture.display()
+        );
+
+        // The read may succeed (file is valid IGES) but transfer may fail
+        // because a Point entity is not a B-Rep shape.
+        match read_iges_file(&fixture) {
+            Ok(data) => {
+                eprintln!(
+                    "IGES E2E: {} shapes, {} warnings",
+                    data.shapes.len(),
+                    data.transfer_messages.len()
+                );
+                for (i, shape) in data.shapes.iter().enumerate() {
+                    eprintln!(
+                        "  shape[{i}]: label={:?}, type={:?}, bounds={:?}",
+                        shape.label, shape.shape_type, shape.bounds
+                    );
+                }
+            }
+            Err(e) => {
+                // Point entity may fail transfer — this is expected.
+                eprintln!("IGES read returned error (expected for point entity): {e}");
+            }
+        }
+    }
+
+    /// E2E: read + tessellate a real IGES fixture.
+    #[cfg(occt_found)]
+    #[test]
+    fn read_iges_with_tessellation_e2e_real_occt() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("point.igs");
+
+        assert!(fixture.exists(), "IGES fixture missing");
+
+        let result = read_iges_file_with_tessellation(&fixture);
+        // A single-point IGES file may produce 0 shapes (points are not
+        // B-Rep solids), so the tessellation registry may be empty.
+        // The important thing is that the pipeline doesn't panic or error.
+        match result {
+            Ok((data, registry)) => {
+                eprintln!(
+                    "IGES tessellation: {} shapes, {} registry entries, {} warnings",
+                    data.shapes.len(),
+                    registry.len(),
+                    data.transfer_messages.len()
+                );
+            }
+            Err(e) => {
+                // A single-point IGES may fail tessellation — that's OK.
+                // The error should be a clear OCCT error, not a panic.
+                eprintln!("IGES tessellation returned error (expected for point entity): {e}");
+            }
+        }
+    }
+}

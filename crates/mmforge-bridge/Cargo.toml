@@ -12,7 +12,7 @@ crate-type = ["staticlib"]
 
 [features]
 default = []
-occt = ["mmforge-format-step/occt", "mmforge-geometry/occt"]
+occt = ["mmforge-format-step/occt", "mmforge-format-iges/occt", "mmforge-geometry/occt"]
 
 [dependencies]
 mmforge-core = { workspace = true }

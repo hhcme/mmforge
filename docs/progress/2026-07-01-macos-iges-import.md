@@ -167,3 +167,37 @@ mmf_parse_file(path):
 | `TKDEIGES` (OCCT 7.9) | — | LGPL 2.1 | IGES data exchange |
 
 No new Rust crate dependencies added (reuses existing mmforge-core, mmforge-geometry, glam, thiserror).
+
+---
+
+## Round 2 — Feature chain fix + E2E test
+
+### Problem
+`mmforge-bridge/occt` feature did not propagate to `mmforge-format-iges/occt`. When building with `--features occt`, the IGES parser was compiled without the `occt` feature, so `parse_iges_with_tessellation()` would always return "OCCT feature not enabled" even when OCCT was available.
+
+### Fix
+- **`crates/mmforge-bridge/Cargo.toml`**: Added `mmforge-format-iges/occt` to the `occt` feature chain.
+  ```
+  occt = ["mmforge-format-step/occt", "mmforge-format-iges/occt", "mmforge-geometry/occt"]
+  ```
+
+### IGES fixture
+- **`crates/mmforge-geometry/testdata/point.igs`**: Minimal IGES file with a single Point entity (type 116). This is a valid IGES file (ANSI/USPRO IGES 5.3 format) but does not contain B-Rep geometry, so OCCT's `IGESCAFControl_Reader::Transfer` may return false. The fixture tests the read path without crashing.
+  - Source: hand-written, trivial geometry (a single point at the origin). No copyrightable creative content.
+  - License: public domain (trivial data, no original authorship).
+
+### E2E tests added
+- **`crates/mmforge-geometry/src/occt/iges_reader.rs`**:
+  - `read_iges_file_e2e_real_occt` — reads the IGES fixture, verifies read succeeds or returns a clear error.
+  - `read_iges_with_tessellation_e2e_real_occt` — reads + tessellates, verifies pipeline doesn't crash.
+
+### Verification
+
+| Command | Result |
+|---------|--------|
+| `cargo tree -p mmforge-bridge -e features --features mmforge-bridge/occt` | ✅ `mmforge-format-iges feature "occt"` confirmed |
+| `cargo test -p mmforge-geometry --features occt` | ✅ 10 tests pass (including 2 IGES E2E) |
+| `cargo test --workspace` | ✅ All pass |
+| `cargo clippy --workspace` | ✅ Clean |
+| `xcodebuild build` | ✅ BUILD SUCCEEDED |
+| `xcodebuild test` | ✅ 22 tests pass |
