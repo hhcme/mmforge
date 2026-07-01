@@ -144,15 +144,40 @@ struct MeshBVH {
 
 // MARK: - Ray–AABB (slab method)
 
+/// Fast ray–AABB test (slab method).
+///
+/// Handles NaN from 0*infinity (ray parallel to axis, origin on boundary)
+/// by treating NaN as "inside the slab" for that axis.
 func rayAABB(ray: Ray, bmin: simd_float3, bmax: simd_float3,
              tMin: Float, tMax: Float) -> Bool {
-    let t1 = (bmin - ray.origin) * ray.invDir
-    let t2 = (bmax - ray.origin) * ray.invDir
-    let tmin3 = simd_min(t1, t2)
-    let tmax3 = simd_max(t1, t2)
-    let tmin = max(tmin3.x, max(tmin3.y, tmin3.z))
-    let tmax = min(tmax3.x, min(tmax3.y, tmax3.z))
-    return tmin <= tmax && tmax >= tMin && tmin <= tMax
+    var tmin: Float = 0
+    var tmax: Float = .infinity
+
+    for axis in 0..<3 {
+        let o = ray.origin[axis]
+        let inv = ray.invDir[axis]
+        let lo = bmin[axis]
+        let hi = bmax[axis]
+
+        let t1 = (lo - o) * inv
+        let t2 = (hi - o) * inv
+
+        if t1.isNaN || t2.isNaN {
+            // Ray parallel to this axis and origin on boundary.
+            // If origin is inside [lo, hi], continue (no constraint).
+            // If outside, no hit.
+            if o < lo - 1e-12 || o > hi + 1e-12 { return false }
+            // else: no constraint from this axis
+        } else {
+            let axisMin = min(t1, t2)
+            let axisMax = max(t1, t2)
+            tmin = max(tmin, axisMin)
+            tmax = min(tmax, axisMax)
+            if tmin > tmax { return false }
+        }
+    }
+
+    return tmax >= tMin && tmin <= tMax
 }
 
 // MARK: - BVH Builder
