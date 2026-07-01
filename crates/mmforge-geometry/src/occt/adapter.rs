@@ -824,6 +824,9 @@ mod tests {
     #[cfg(occt_found)]
     #[test]
     fn link_probe_references_all_shim_symbols() {
+        let _lock = crate::occt::OCCT_TEST_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // Collect the address of every extern "C" symbol.
         // Uses full crate::occt::sys:: paths — no intermediate variable
         // (modules are not values in Rust).
@@ -892,6 +895,9 @@ mod tests {
     #[cfg(occt_found)]
     #[test]
     fn tessellate_step_fixture() {
+        let _lock = crate::occt::OCCT_TEST_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("testdata")
             .join("PQ-04909-A.STEP");

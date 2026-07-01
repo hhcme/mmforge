@@ -221,6 +221,9 @@ mod tests {
     #[cfg(occt_found)]
     #[test]
     fn read_step_file_e2e_real_occt() {
+        let _lock = crate::occt::OCCT_TEST_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("testdata")
             .join("PQ-04909-A.STEP");

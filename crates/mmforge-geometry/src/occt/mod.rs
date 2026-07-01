@@ -32,6 +32,12 @@ pub mod sys;
 #[cfg(feature = "occt")]
 pub mod adapter;
 
+/// Mutex to serialize OCCT tests.  OCCT is not thread-safe — concurrent
+/// reader instances in the same process cause SIGABRT/SIGKILL.  Every
+/// test that touches OCCT FFI must hold this lock.
+#[cfg(test)]
+pub(crate) static OCCT_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Error type for OCCT operations.
 #[derive(Debug, thiserror::Error)]
 pub enum OcctError {

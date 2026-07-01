@@ -168,23 +168,20 @@ mod tests {
         assert!(msg.contains("not available") || msg.contains("OCCT"));
     }
 
-    /// E2E: read a real IGES fixture and verify the pipeline.
+    /// E2E: read the IGES face fixture and verify shapes are extracted.
     ///
-    /// The fixture (`point.igs`) contains a single Point entity (type 116).
-    /// This is a valid IGES file but OCCT may fail to transfer it into a
-    /// B-Rep shape because points are not B-Rep geometry.  The test verifies
-    /// that the read path doesn't crash and produces a clear error or empty
-    /// shape list.
-    ///
-    /// A more substantial fixture (B-Rep solid) would be needed to test the
-    /// full shape-extraction + tessellation pipeline.  Such a fixture can
-    /// be generated with `IGESControl_Writer` from OCCT.
+    /// The fixture (`face.igs`) contains a single trimmed surface (entity 144)
+    /// — a flat unit square in the XY plane.  OCCT should transfer it into
+    /// at least one B-Rep shape with valid bounds.
     #[cfg(occt_found)]
     #[test]
     fn read_iges_file_e2e_real_occt() {
+        let _lock = crate::occt::OCCT_TEST_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("testdata")
-            .join("point.igs");
+            .join("box.igs");
 
         assert!(
             fixture.exists(),
@@ -192,56 +189,76 @@ mod tests {
             fixture.display()
         );
 
-        // The read may succeed (file is valid IGES) but transfer may fail
-        // because a Point entity is not a B-Rep shape.
-        match read_iges_file(&fixture) {
-            Ok(data) => {
-                eprintln!(
-                    "IGES E2E: {} shapes, {} warnings",
-                    data.shapes.len(),
-                    data.transfer_messages.len()
-                );
-                for (i, shape) in data.shapes.iter().enumerate() {
-                    eprintln!(
-                        "  shape[{i}]: label={:?}, type={:?}, bounds={:?}",
-                        shape.label, shape.shape_type, shape.bounds
-                    );
-                }
-            }
-            Err(e) => {
-                // Point entity may fail transfer — this is expected.
-                eprintln!("IGES read returned error (expected for point entity): {e}");
-            }
+        let data = read_iges_file(&fixture).expect("read_iges_file should succeed");
+        assert!(
+            !data.shapes.is_empty(),
+            "expected at least one shape from the IGES face fixture"
+        );
+
+        // Verify shape metadata.
+        for (i, shape) in data.shapes.iter().enumerate() {
+            eprintln!(
+                "  shape[{i}]: label={:?}, type={:?}, bounds={:?}",
+                shape.label, shape.shape_type, shape.bounds
+            );
+            // Bounds should be valid and within a reasonable range
+            // (the face is a unit square at the origin).
+            assert!(shape.bounds.is_valid(), "shape {i} bounds should be valid");
         }
     }
 
-    /// E2E: read + tessellate a real IGES fixture.
+    /// E2E: read + tessellate the IGES face fixture and verify mesh data.
     #[cfg(occt_found)]
     #[test]
     fn read_iges_with_tessellation_e2e_real_occt() {
+        let _lock = crate::occt::OCCT_TEST_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("testdata")
-            .join("point.igs");
+            .join("box.igs");
 
         assert!(fixture.exists(), "IGES fixture missing");
 
-        let result = read_iges_file_with_tessellation(&fixture);
-        // A single-point IGES file may produce 0 shapes (points are not
-        // B-Rep solids), so the tessellation registry may be empty.
-        // The important thing is that the pipeline doesn't panic or error.
-        match result {
-            Ok((data, registry)) => {
-                eprintln!(
-                    "IGES tessellation: {} shapes, {} registry entries, {} warnings",
-                    data.shapes.len(),
-                    registry.len(),
-                    data.transfer_messages.len()
+        let (data, registry) = read_iges_file_with_tessellation(&fixture)
+            .expect("read_iges_file_with_tessellation should succeed");
+
+        assert!(
+            !data.shapes.is_empty(),
+            "expected at least one shape from the IGES face fixture"
+        );
+        assert!(
+            !registry.is_empty(),
+            "expected at least one tessellated mesh in the registry"
+        );
+
+        // Verify tessellation data.
+        for (geom_id, mesh) in registry.iter() {
+            eprintln!(
+                "  registry[{geom_id:?}]: {} vertices, {} triangles",
+                mesh.positions.len(),
+                mesh.indices.len() / 3
+            );
+            assert!(!mesh.positions.is_empty(), "mesh should have vertices");
+            assert!(
+                mesh.indices.len() >= 3,
+                "mesh should have at least one triangle"
+            );
+            assert!(mesh.bounds.is_valid(), "mesh bounds should be valid");
+            // Verify positions are finite.
+            for pos in &mesh.positions {
+                assert!(
+                    pos[0].is_finite() && pos[1].is_finite() && pos[2].is_finite(),
+                    "non-finite position: {pos:?}"
                 );
             }
-            Err(e) => {
-                // A single-point IGES may fail tessellation — that's OK.
-                // The error should be a clear OCCT error, not a panic.
-                eprintln!("IGES tessellation returned error (expected for point entity): {e}");
+            // Verify indices are in range.
+            let vc = mesh.positions.len() as u32;
+            for tri in mesh.indices.chunks(3) {
+                assert!(
+                    tri[0] < vc && tri[1] < vc && tri[2] < vc,
+                    "index out of range: {tri:?} (vertex_count={vc})"
+                );
             }
         }
     }
