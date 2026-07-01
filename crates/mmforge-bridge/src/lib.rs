@@ -824,6 +824,7 @@ pub extern "C" fn mmf_draw_cmd_circle(
 }
 
 /// Read ARC command data.  Angles in radians.  Returns 1 on success.
+/// `out_ccw` is set to 1 for counter-clockwise, 0 for clockwise.
 #[unsafe(no_mangle)]
 pub extern "C" fn mmf_draw_cmd_arc(
     doc: *const MmfDocument,
@@ -833,6 +834,7 @@ pub extern "C" fn mmf_draw_cmd_arc(
     out_r: *mut f64,
     out_start: *mut f64,
     out_end: *mut f64,
+    out_ccw: *mut i32,
 ) -> i32 {
     if doc.is_null() {
         return 0;
@@ -846,6 +848,7 @@ pub extern "C" fn mmf_draw_cmd_arc(
                     radius,
                     start_angle,
                     end_angle,
+                    ccw,
                 },
             ..
         }) => {
@@ -855,6 +858,7 @@ pub extern "C" fn mmf_draw_cmd_arc(
                 *out_r = *radius;
                 *out_start = *start_angle;
                 *out_end = *end_angle;
+                *out_ccw = if *ccw { 1 } else { 0 };
             }
             1
         }
@@ -920,10 +924,7 @@ pub extern "C" fn mmf_draw_cmd_polyline_closed(doc: *const MmfDocument, index: u
         Some(mmforge_render::draw2d::FlatDrawCommand {
             cmd: mmforge_render::draw2d::DrawCommand2D::Polyline { closed, .. },
             ..
-        })
-            if *closed => {
-                1
-            }
+        }) if *closed => 1,
         _ => 0,
     }
 }

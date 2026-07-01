@@ -284,13 +284,79 @@ mod tests {
         assert_eq!(draw_list.layers.len(), 2); // walls + text
 
         // Verify walls layer has LINE, CIRCLE, ARC, POLYLINE commands.
-        let walls = draw_list.layers.iter().find(|l| l.layer_name == "walls").unwrap();
+        let walls = draw_list
+            .layers
+            .iter()
+            .find(|l| l.layer_name == "walls")
+            .unwrap();
         assert!(walls.commands.len() >= 4); // 2 line + 1 circle + 1 arc + expanded polyline segments
 
         // Verify text layer has TEXT command.
-        let text_layer = draw_list.layers.iter().find(|l| l.layer_name == "text").unwrap();
+        let text_layer = draw_list
+            .layers
+            .iter()
+            .find(|l| l.layer_name == "text")
+            .unwrap();
         assert_eq!(text_layer.commands.len(), 1);
-        assert!(matches!(text_layer.commands[0], mmforge_render::draw2d::DrawCommand2D::Text { .. }));
+        assert!(matches!(
+            text_layer.commands[0],
+            mmforge_render::draw2d::DrawCommand2D::Text { .. }
+        ));
+    }
+
+    #[test]
+    fn arc_e2e_dxf_degrees_to_draw_list_radians() {
+        // The test.dxf has an ARC entity: center(7.5, 2.5), radius=1.0,
+        // start_angle=0°, end_angle=180°.
+        // Verify the draw list converts degrees → radians correctly.
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("test.dxf");
+        let (_, drawing) = parse_dxf(&fixture).expect("parse_dxf");
+        let draw_list = mmforge_render::draw2d::build_draw_list(&drawing);
+
+        // Find the ARC command in the walls layer.
+        let walls = draw_list
+            .layers
+            .iter()
+            .find(|l| l.layer_name == "walls")
+            .unwrap();
+        let arc_cmd = walls
+            .commands
+            .iter()
+            .find(|c| matches!(c, mmforge_render::draw2d::DrawCommand2D::Arc { .. }));
+        assert!(arc_cmd.is_some(), "expected an ARC command in walls layer");
+
+        match arc_cmd.unwrap() {
+            mmforge_render::draw2d::DrawCommand2D::Arc {
+                center,
+                radius,
+                start_angle,
+                end_angle,
+                ccw,
+            } => {
+                // Verify center and radius.
+                assert!((center[0] - 7.5).abs() < 1e-10);
+                assert!((center[1] - 2.5).abs() < 1e-10);
+                assert!((radius - 1.0).abs() < 1e-10);
+
+                // Verify angles converted from degrees to radians.
+                // 0° → 0.0 rad, 180° → π rad.
+                let pi = std::f64::consts::PI;
+                assert!(
+                    (start_angle - 0.0).abs() < 1e-10,
+                    "start_angle should be 0.0 rad (0°), got {start_angle}"
+                );
+                assert!(
+                    (end_angle - pi).abs() < 1e-10,
+                    "end_angle should be π rad (180°), got {end_angle}"
+                );
+
+                // DXF ARC is always CCW.
+                assert!(*ccw, "DXF ARC should be CCW");
+            }
+            _ => unreachable!(),
+        }
     }
 
     #[test]
@@ -303,9 +369,17 @@ mod tests {
         let (_, drawing) = parse_dxf(&fixture).expect("parse_dxf");
         let draw_list = mmforge_render::draw2d::build_draw_list(&drawing);
 
-        let walls = draw_list.layers.iter().find(|l| l.layer_name == "walls").unwrap();
+        let walls = draw_list
+            .layers
+            .iter()
+            .find(|l| l.layer_name == "walls")
+            .unwrap();
         // The LWPOLYLINE with bulge=0 should produce 4 LINE commands (closed rectangle).
-        let line_cmds: Vec<_> = walls.commands.iter().filter(|c| matches!(c, mmforge_render::draw2d::DrawCommand2D::Line { .. })).collect();
+        let line_cmds: Vec<_> = walls
+            .commands
+            .iter()
+            .filter(|c| matches!(c, mmforge_render::draw2d::DrawCommand2D::Line { .. }))
+            .collect();
         assert!(line_cmds.len() >= 4);
     }
 }

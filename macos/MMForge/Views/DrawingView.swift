@@ -175,22 +175,20 @@ class Drawing2DView: NSView {
             let rect = CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2)
             ctx.strokeEllipse(in: rect)
 
-        case .arc(let cx, let cy, let r, let startAngle, let endAngle,
+        case .arc(let cx, let cy, let r, let startAngle, let endAngle, let ccw,
                   let layerIdx, _, let colorIdx, let visible):
             guard isLayerVisible(layerIdx, default: visible) else { return }
             ctx.setStrokeColor(aciColor(colorIdx))
             ctx.setLineWidth(1.0)
-            // Core Graphics arcs are clockwise in screen space.
-            // DXF angles are counter-clockwise in math space.
-            // Since we flipped Y, CG arcs are already CCW in world space.
-            let startRad = CGFloat(startAngle)
-            let endRad = CGFloat(endAngle)
+            // Angles are already in radians from the draw list builder.
+            // CGContext Y-flip means: ccw=true → clockwise=false (CG CCW),
+            // ccw=false → clockwise=true (CG CW).
             ctx.beginPath()
             ctx.addArc(center: CGPoint(x: cx, y: cy),
                        radius: CGFloat(r),
-                       startAngle: startRad,
-                       endAngle: endRad,
-                       clockwise: false)
+                       startAngle: CGFloat(startAngle),
+                       endAngle: CGFloat(endAngle),
+                       clockwise: !ccw)
             ctx.strokePath()
 
         case .polyline(let points, let closed,

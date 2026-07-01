@@ -239,7 +239,7 @@ enum DrawCommandDTO {
               layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool)
     case circle(cx: Double, cy: Double, r: Double,
                 layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool)
-    case arc(cx: Double, cy: Double, r: Double, startAngle: Double, endAngle: Double,
+    case arc(cx: Double, cy: Double, r: Double, startAngle: Double, endAngle: Double, ccw: Bool,
              layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool)
     case polyline(points: [(Double, Double)], closed: Bool,
                   layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool)
@@ -285,9 +285,11 @@ extension RustBridge {
             case 2: // Arc
                 var cx: Double = 0, cy: Double = 0, r: Double = 0
                 var startAngle: Double = 0, endAngle: Double = 0
-                if mmf_draw_cmd_arc(doc, idx, &cx, &cy, &r, &startAngle, &endAngle) != 0 {
+                var ccw: Int32 = 0
+                if mmf_draw_cmd_arc(doc, idx, &cx, &cy, &r, &startAngle, &endAngle, &ccw) != 0 {
                     commands.append(.arc(cx: cx, cy: cy, r: r,
                                          startAngle: startAngle, endAngle: endAngle,
+                                         ccw: ccw != 0,
                                          layerIndex: layerIdx, layerName: layerName,
                                          colorIndex: colorIdx, visible: visible))
                 }

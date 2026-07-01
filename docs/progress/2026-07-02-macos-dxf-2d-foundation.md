@@ -261,6 +261,54 @@ Round 1's DrawingView only drew a bounding box placeholder. The C ABI exposed en
 
 ---
 
+---
+
+## Round 3 — Arc angle unification + negative bulge fix
+
+### Problem
+1. DXF ARC entity stores angles in **degrees** but `DrawCommand2D::Arc` had no documented unit convention. The `bulge_to_arc` function returned radians, but DXF ARC passed degrees through unchanged. Swift `CGContext.addArc` expects radians — DXF arcs were rendered at wrong angles.
+2. `bulge_to_arc` used signed `sagitta` in the radius formula, causing incorrect center position for negative bulge (CW arcs). For `|bulge| > 1` (arcs > 180°), the center was placed on the wrong side.
+3. No `ccw` direction field on `DrawCommand2D::Arc` — Swift couldn't distinguish CW from CCW arcs.
+
+### Fixes
+
+**1. Unified angle convention: radians everywhere in DrawCommand2D**
+- `DrawCommand2D::Arc` doc comment: "All angles in **radians**."
+- `build_draw_list()` converts DXF ARC degrees → radians via `deg_to_rad()` (line: `start_angle: deg_to_rad(*start_angle)`).
+- `bulge_to_arc()` returns radians (from `atan2`).
+- Swift `DrawingView` passes radians directly to `CGContext.addArc`.
+
+**2. Added `ccw: bool` to `DrawCommand2D::Arc`**
+- `true` = counter-clockwise (positive bulge, DXF default)
+- `false` = clockwise (negative bulge)
+- C ABI: `mmf_draw_cmd_arc` now has `out_ccw: *mut i32` parameter
+- Swift `DrawCommandDTO.arc` carries `ccw: Bool`
+- DrawingView uses `clockwise: !ccw` for `CGContext.addArc`
+
+**3. Fixed negative bulge center calculation**
+- Before: `offset = radius - sagitta` (signed) → wrong for negative sagitta
+- After: `offset = radius - abs_sagitta` (always positive) → correct center placement
+- `bulge.signum()` still controls which side of the chord the center is on
+- Semicircle (|bulge|=1): offset=0, center at midpoint ✓
+- Arc > 180° (|bulge|>1): offset < 0, center on opposite side ✓
+
+**4. New tests (10 added, 175 total)**
+
+| Test | What |
+|------|------|
+| `dxf_arc_converted_to_radians` | 0°→0.0, 90°→π/2, ccw=true |
+| `dxf_arc_180_degrees` | 45°→π/4, 225°→5π/4 |
+| `bulge_positive_semicircle` | bulge=1.0, center at midpoint, ccw=true |
+| `bulge_negative_semicircle` | bulge=-1.0, center at midpoint, ccw=false |
+| `bulge_positive_small_arc` | bulge=0.1, center above chord, ccw=true |
+| `bulge_negative_small_arc` | bulge=-0.1, center below chord, ccw=false |
+| `bulge_positive_large_arc` | bulge=2.0, center on opposite side, ccw=true |
+| `arc_crossing_zero_degrees` | 350°→10°, radians correct |
+| `bulge_opposite_directions_have_opposite_centers` | ±0.5 → opposite Y, same radius |
+| `arc_e2e_dxf_degrees_to_draw_list_radians` | Full E2E: DXF ARC(0°,180°) → rad(0,π) in draw list |
+
+---
+
 ## Open Items (updated)
 
 | Item | Status | Notes |

@@ -1,8 +1,8 @@
 //! 2D draw list — platform-neutral rendering commands for 2D drawings.
 //!
-//! Converts [`Drawing2DGeometry`] into a flat list of draw commands
-//! grouped by layer.  Platform renderers (Core Graphics, Direct2D,
-//! Canvas) consume this structure to produce native 2D output.
+//! All angles in [`DrawCommand2D::Arc`] are in **radians**.
+//! DXF ARC entities (which use degrees) are converted during draw-list
+//! construction.  Bulge-to-arc conversion also produces radians.
 
 use mmforge_core::drawing::{BBox2D, Drawing2DGeometry, Entity2D, PolylineVertex};
 
@@ -25,17 +25,26 @@ pub struct LayerDrawList {
 }
 
 /// A single 2D draw command.
+///
+/// **Angle convention**: all angles are in **radians**.
 #[derive(Debug, Clone)]
 pub enum DrawCommand2D {
     Line {
         start: [f64; 2],
         end: [f64; 2],
     },
+    /// Circular arc.
+    ///
+    /// - `start_angle` / `end_angle`: in **radians**, measured from the
+    ///   positive X-axis.
+    /// - `ccw`: `true` = counter-clockwise from `start_angle` to
+    ///   `end_angle`; `false` = clockwise.
     Arc {
         center: [f64; 2],
         radius: f64,
         start_angle: f64,
         end_angle: f64,
+        ccw: bool,
     },
     Circle {
         center: [f64; 2],
@@ -66,44 +75,63 @@ struct ArcParams {
     radius: f64,
     start_angle: f64,
     end_angle: f64,
+    ccw: bool,
+}
+
+/// Convert degrees to radians.
+fn deg_to_rad(deg: f64) -> f64 {
+    deg * std::f64::consts::PI / 180.0
 }
 
 /// Convert a polyline bulge between two points into arc parameters.
 ///
-/// `bulge = 0` means a straight segment.  `bulge != 0` means an arc:
-/// `theta = 4 * atan(|bulge|)`.  Positive bulge = counter-clockwise.
+/// - `bulge = 0` → straight segment (caller should emit a Line).
+/// - `bulge > 0` → counter-clockwise arc (CCW).
+/// - `bulge < 0` → clockwise arc (CW).
+/// - `|bulge| = 1` → semicircle.
+/// - `|bulge| > 1` → arc > 180°.
+///
+/// All returned angles are in **radians**.
 fn bulge_to_arc(p1: [f64; 2], p2: [f64; 2], bulge: f64) -> ArcParams {
     let dx = p2[0] - p1[0];
     let dy = p2[1] - p1[1];
     let dist = (dx * dx + dy * dy).sqrt();
 
     if dist < 1e-10 || bulge.abs() < 1e-10 {
-        // Degenerate: return a zero-radius arc at p1.
         return ArcParams {
             center: p1,
             radius: 0.0,
             start_angle: 0.0,
             end_angle: 0.0,
+            ccw: true,
         };
     }
 
-    let sagitta = bulge * dist / 2.0;
-    let radius = (dist * dist / 4.0 + sagitta * sagitta) / (2.0 * sagitta.abs());
+    let abs_sagitta = bulge.abs() * dist / 2.0;
+    let radius = (dist * dist / 4.0 + abs_sagitta * abs_sagitta) / (2.0 * abs_sagitta);
 
     // Midpoint of chord.
     let mx = (p1[0] + p2[0]) / 2.0;
     let my = (p1[1] + p2[1]) / 2.0;
 
-    // Perpendicular direction (normalized).
+    // Left normal of the chord (perpendicular, pointing left when looking
+    // from p1 to p2).
     let nx = -dy / dist;
     let ny = dx / dist;
 
-    // Center offset from midpoint.
-    let offset = radius - sagitta;
-    let cx = mx + nx * offset * bulge.signum();
-    let cy = my + ny * offset * bulge.signum();
+    // Distance from midpoint to center along the normal.
+    // For |bulge| < 1 (arc < 180°): offset > 0, center on arc side.
+    // For |bulge| = 1 (semicircle): offset = 0, center at midpoint.
+    // For |bulge| > 1 (arc > 180°): offset < 0, center on opposite side.
+    let offset = radius - abs_sagitta;
 
-    // Start and end angles (radians).
+    // Positive bulge → center on left side (nx direction).
+    // Negative bulge → center on right side (-nx direction).
+    let sign = bulge.signum();
+    let cx = mx + nx * offset * sign;
+    let cy = my + ny * offset * sign;
+
+    // Angles from center to endpoints (radians).
     let start_angle = (p1[1] - cy).atan2(p1[0] - cx);
     let end_angle = (p2[1] - cy).atan2(p2[0] - cx);
 
@@ -112,6 +140,7 @@ fn bulge_to_arc(p1: [f64; 2], p2: [f64; 2], bulge: f64) -> ArcParams {
         radius,
         start_angle,
         end_angle,
+        ccw: bulge > 0.0,
     }
 }
 
@@ -136,16 +165,15 @@ fn expand_polyline(vertices: &[PolylineVertex], closed: bool) -> Vec<DrawCommand
         let bulge = vertices[i].bulge;
 
         if bulge.abs() < 1e-10 {
-            // Straight segment.
             commands.push(DrawCommand2D::Line { start: p1, end: p2 });
         } else {
-            // Arc segment.
             let arc = bulge_to_arc(p1, p2, bulge);
             commands.push(DrawCommand2D::Arc {
                 center: arc.center,
                 radius: arc.radius,
                 start_angle: arc.start_angle,
                 end_angle: arc.end_angle,
+                ccw: arc.ccw,
             });
         }
     }
@@ -156,7 +184,7 @@ fn expand_polyline(vertices: &[PolylineVertex], closed: bool) -> Vec<DrawCommand
 /// Build a [`DrawingDrawList`] from parsed drawing geometry.
 ///
 /// Groups entities by layer, resolves polyline bulge to arc segments,
-/// and computes the overall bounding box.
+/// converts DXF degrees to radians, and computes the overall bounding box.
 pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
     // Group entities by layer.
     let mut layer_map: std::collections::HashMap<String, Vec<&Entity2D>> =
@@ -179,7 +207,6 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
     let mut layers = Vec::new();
     let mut flat_commands = Vec::new();
 
-    // Sort layer names for deterministic output.
     let mut layer_names: Vec<String> = layer_map.keys().cloned().collect();
     layer_names.sort();
 
@@ -221,11 +248,13 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
                     end_angle,
                     ..
                 } => {
+                    // DXF ARC angles are in degrees → convert to radians.
                     let cmd = DrawCommand2D::Arc {
                         center: *center,
                         radius: *radius,
-                        start_angle: *start_angle,
-                        end_angle: *end_angle,
+                        start_angle: deg_to_rad(*start_angle),
+                        end_angle: deg_to_rad(*end_angle),
+                        ccw: true, // DXF ARC is always CCW in DXF convention.
                     };
                     commands.push(cmd.clone());
                     flat_commands.push(FlatDrawCommand {
@@ -236,7 +265,6 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
                 Entity2D::Polyline {
                     vertices, closed, ..
                 } => {
-                    // Expand bulge segments into line/arc commands.
                     let expanded = expand_polyline(vertices, *closed);
                     for cmd in expanded {
                         commands.push(cmd.clone());
@@ -289,6 +317,10 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
 mod tests {
     use super::*;
     use mmforge_core::drawing::{Drawing2DGeometry, Entity2D, Layer, PolylineVertex};
+
+    // ---------------------------------------------------------------
+    // Draw list builder tests
+    // ---------------------------------------------------------------
 
     #[test]
     fn build_empty_draw_list() {
@@ -359,7 +391,6 @@ mod tests {
         let dl = build_draw_list(&drawing);
         let hidden = &dl.layers[0];
         assert!(!hidden.visible);
-        // Command is still in flat list (visibility is a rendering decision).
         assert_eq!(dl.flat_commands.len(), 1);
     }
 
@@ -377,6 +408,72 @@ mod tests {
         assert!(dl.layers[0].visible);
         assert_eq!(dl.layers[0].color_index, 7);
     }
+
+    // ---------------------------------------------------------------
+    // DXF ARC degree → radian conversion
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn dxf_arc_converted_to_radians() {
+        let mut drawing = Drawing2DGeometry::new();
+        drawing.entities.push(Entity2D::Arc {
+            center: [0.0, 0.0],
+            radius: 5.0,
+            start_angle: 0.0, // degrees
+            end_angle: 90.0,  // degrees
+            layer: "0".to_string(),
+        });
+
+        let dl = build_draw_list(&drawing);
+        assert_eq!(dl.flat_commands.len(), 1);
+        match &dl.flat_commands[0].cmd {
+            DrawCommand2D::Arc {
+                start_angle,
+                end_angle,
+                ccw,
+                ..
+            } => {
+                // 0° → 0.0 rad, 90° → π/2 rad
+                assert!((start_angle - 0.0).abs() < 1e-10);
+                assert!((end_angle - std::f64::consts::FRAC_PI_2).abs() < 1e-10);
+                assert!(*ccw);
+            }
+            _ => panic!("expected Arc"),
+        }
+    }
+
+    #[test]
+    fn dxf_arc_180_degrees() {
+        let mut drawing = Drawing2DGeometry::new();
+        drawing.entities.push(Entity2D::Arc {
+            center: [1.0, 2.0],
+            radius: 3.0,
+            start_angle: 45.0,
+            end_angle: 225.0,
+            layer: "0".to_string(),
+        });
+
+        let dl = build_draw_list(&drawing);
+        match &dl.flat_commands[0].cmd {
+            DrawCommand2D::Arc {
+                center,
+                radius,
+                start_angle,
+                end_angle,
+                ..
+            } => {
+                assert_eq!(*center, [1.0, 2.0]);
+                assert_eq!(*radius, 3.0);
+                assert!((start_angle - deg_to_rad(45.0)).abs() < 1e-10);
+                assert!((end_angle - deg_to_rad(225.0)).abs() < 1e-10);
+            }
+            _ => panic!("expected Arc"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Bulge-to-arc tests
+    // ---------------------------------------------------------------
 
     #[test]
     fn bulge_zero_is_straight_line() {
@@ -398,8 +495,8 @@ mod tests {
     }
 
     #[test]
-    fn bulge_nonzero_is_arc() {
-        // bulge = 1.0 means semicircle.
+    fn bulge_positive_semicircle() {
+        // bulge = 1.0 → semicircle, CCW.
         let cmds = expand_polyline(
             &[
                 PolylineVertex {
@@ -415,10 +512,151 @@ mod tests {
         );
         assert_eq!(cmds.len(), 1);
         match &cmds[0] {
-            DrawCommand2D::Arc { center, radius, .. } => {
+            DrawCommand2D::Arc {
+                center,
+                radius,
+                ccw,
+                ..
+            } => {
                 // Semicircle: center at (1, 0), radius = 1.
-                assert!((center[0] - 1.0).abs() < 0.01);
-                assert!((radius - 1.0).abs() < 0.01);
+                assert!((center[0] - 1.0).abs() < 1e-10);
+                assert!((center[1] - 0.0).abs() < 1e-10);
+                assert!((radius - 1.0).abs() < 1e-10);
+                assert!(*ccw);
+            }
+            _ => panic!("expected Arc"),
+        }
+    }
+
+    #[test]
+    fn bulge_negative_semicircle() {
+        // bulge = -1.0 → semicircle, CW.
+        let cmds = expand_polyline(
+            &[
+                PolylineVertex {
+                    point: [0.0, 0.0],
+                    bulge: -1.0,
+                },
+                PolylineVertex {
+                    point: [2.0, 0.0],
+                    bulge: 0.0,
+                },
+            ],
+            false,
+        );
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            DrawCommand2D::Arc {
+                center,
+                radius,
+                ccw,
+                ..
+            } => {
+                // Semicircle: center at (1, 0), radius = 1.
+                assert!((center[0] - 1.0).abs() < 1e-10);
+                assert!((center[1] - 0.0).abs() < 1e-10);
+                assert!((radius - 1.0).abs() < 1e-10);
+                assert!(!(*ccw)); // CW
+            }
+            _ => panic!("expected Arc"),
+        }
+    }
+
+    #[test]
+    fn bulge_positive_small_arc() {
+        // bulge = 0.1 → small arc, CCW.
+        let cmds = expand_polyline(
+            &[
+                PolylineVertex {
+                    point: [0.0, 0.0],
+                    bulge: 0.1,
+                },
+                PolylineVertex {
+                    point: [1.0, 0.0],
+                    bulge: 0.0,
+                },
+            ],
+            false,
+        );
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            DrawCommand2D::Arc {
+                center,
+                radius,
+                ccw,
+                ..
+            } => {
+                // Small arc: center above the chord (CCW).
+                assert!(center[1] > 0.0); // center on left side of P1→P2
+                assert!(*radius > 0.5); // radius > half chord
+                assert!(*ccw);
+            }
+            _ => panic!("expected Arc"),
+        }
+    }
+
+    #[test]
+    fn bulge_negative_small_arc() {
+        // bulge = -0.1 → small arc, CW.
+        let cmds = expand_polyline(
+            &[
+                PolylineVertex {
+                    point: [0.0, 0.0],
+                    bulge: -0.1,
+                },
+                PolylineVertex {
+                    point: [1.0, 0.0],
+                    bulge: 0.0,
+                },
+            ],
+            false,
+        );
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            DrawCommand2D::Arc {
+                center,
+                radius,
+                ccw,
+                ..
+            } => {
+                // Small arc: center below the chord (CW).
+                assert!(center[1] < 0.0); // center on right side of P1→P2
+                assert!(*radius > 0.5);
+                assert!(!(*ccw)); // CW
+            }
+            _ => panic!("expected Arc"),
+        }
+    }
+
+    #[test]
+    fn bulge_positive_large_arc() {
+        // bulge = 2.0 → arc > 180°, CCW.
+        let cmds = expand_polyline(
+            &[
+                PolylineVertex {
+                    point: [0.0, 0.0],
+                    bulge: 2.0,
+                },
+                PolylineVertex {
+                    point: [2.0, 0.0],
+                    bulge: 0.0,
+                },
+            ],
+            false,
+        );
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            DrawCommand2D::Arc {
+                center,
+                radius,
+                ccw,
+                ..
+            } => {
+                // For |bulge| > 1, center is on opposite side of chord from arc.
+                // Positive bulge (CCW), arc is above, center is below.
+                assert!(center[1] < 0.0);
+                assert!(*radius > 0.0);
+                assert!(*ccw);
             }
             _ => panic!("expected Arc"),
         }
@@ -441,10 +679,9 @@ mod tests {
                     bulge: 0.0,
                 },
             ],
-            true, // closed
+            true,
         );
-        // 3 segments for closed triangle.
-        assert_eq!(cmds.len(), 3);
+        assert_eq!(cmds.len(), 3); // 3 segments for closed triangle
     }
 
     #[test]
@@ -466,7 +703,6 @@ mod tests {
             ],
             false,
         );
-        // Segment 1: straight line. Segment 2: arc.
         assert_eq!(cmds.len(), 2);
         assert!(matches!(cmds[0], DrawCommand2D::Line { .. }));
         assert!(matches!(cmds[1], DrawCommand2D::Arc { .. }));
@@ -495,5 +731,58 @@ mod tests {
         assert_eq!(dl.flat_commands.len(), 2);
         assert_eq!(dl.flat_commands[0].layer_index, 0);
         assert_eq!(dl.flat_commands[1].layer_index, 0);
+    }
+
+    // ---------------------------------------------------------------
+    // Cross-0° arc test
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn arc_crossing_zero_degrees() {
+        // DXF ARC: start=350°, end=10° → crosses 0°.
+        // In radians: start ≈ 6.108, end ≈ 0.175.
+        let mut drawing = Drawing2DGeometry::new();
+        drawing.entities.push(Entity2D::Arc {
+            center: [0.0, 0.0],
+            radius: 1.0,
+            start_angle: 350.0,
+            end_angle: 10.0,
+            layer: "0".to_string(),
+        });
+
+        let dl = build_draw_list(&drawing);
+        match &dl.flat_commands[0].cmd {
+            DrawCommand2D::Arc {
+                start_angle,
+                end_angle,
+                ccw,
+                ..
+            } => {
+                assert!((start_angle - deg_to_rad(350.0)).abs() < 1e-10);
+                assert!((end_angle - deg_to_rad(10.0)).abs() < 1e-10);
+                assert!(*ccw);
+            }
+            _ => panic!("expected Arc"),
+        }
+    }
+
+    #[test]
+    fn bulge_opposite_directions_have_opposite_centers() {
+        // Same chord, opposite bulge signs → centers on opposite sides.
+        let p1 = [0.0, 0.0];
+        let p2 = [2.0, 0.0];
+
+        let arc_pos = bulge_to_arc(p1, p2, 0.5);
+        let arc_neg = bulge_to_arc(p1, p2, -0.5);
+
+        // Positive bulge: center above (positive Y).
+        assert!(arc_pos.center[1] > 0.0);
+        // Negative bulge: center below (negative Y).
+        assert!(arc_neg.center[1] < 0.0);
+        // Same radius.
+        assert!((arc_pos.radius - arc_neg.radius).abs() < 1e-10);
+        // Opposite direction.
+        assert!(arc_pos.ccw);
+        assert!(!arc_neg.ccw);
     }
 }

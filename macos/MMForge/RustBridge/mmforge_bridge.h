@@ -199,10 +199,10 @@ int mmf_draw_cmd_line(const MmfDocument* doc, uint32_t index,
 int mmf_draw_cmd_circle(const MmfDocument* doc, uint32_t index,
                         double* out_cx, double* out_cy, double* out_r);
 
-/** Read ARC data.  Angles in radians.  Returns 1 on success. */
+/** Read ARC data.  Angles in radians.  out_ccw: 1=CCW, 0=CW.  Returns 1 on success. */
 int mmf_draw_cmd_arc(const MmfDocument* doc, uint32_t index,
                      double* out_cx, double* out_cy, double* out_r,
-                     double* out_start, double* out_end);
+                     double* out_start, double* out_end, int32_t* out_ccw);
 
 /** Polyline point count.  0 if not a polyline. */
 uint32_t mmf_draw_cmd_polyline_count(const MmfDocument* doc, uint32_t index);
