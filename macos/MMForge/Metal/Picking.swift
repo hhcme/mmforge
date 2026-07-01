@@ -247,10 +247,14 @@ func buildMeshBVH(positions: [Float], indices: [UInt32]) -> MeshBVH {
                        positions: positions, indices: indices)
     }
 
+    // Use filtered count — not the original triCount — for all
+    // subsequent sizing and build calls.
+    let validTriCount = triInfos.count
+
     var nodes: [BVHNode] = []
-    nodes.reserveCapacity(triCount * 2)
+    nodes.reserveCapacity(validTriCount * 2)
     var sortedIndices: [Int] = []
-    sortedIndices.reserveCapacity(triCount)
+    sortedIndices.reserveCapacity(validTriCount)
 
     func build(begin: Int, end: Int) -> Int {
         let nodeIndex = nodes.count
@@ -305,7 +309,7 @@ func buildMeshBVH(positions: [Float], indices: [UInt32]) -> MeshBVH {
         return nodeIndex
     }
 
-    _ = build(begin: 0, end: triCount)
+    _ = build(begin: 0, end: validTriCount)
 
     return MeshBVH(
         nodes: nodes, sortedTriIndices: sortedIndices,
