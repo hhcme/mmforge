@@ -166,4 +166,69 @@ final class RustBridge {
     func freeDocument(_ doc: OpaquePointer) {
         mmf_document_free(doc)
     }
+
+    /// Check if the document is a 2D drawing (DXF).
+    func is2DDrawing(_ doc: OpaquePointer) -> Bool {
+        mmf_is_2d_drawing(doc) != 0
+    }
+
+    /// Get 2D drawing metadata for the document.
+    func drawing2DInfo(_ doc: OpaquePointer) -> Drawing2DInfo? {
+        guard is2DDrawing(doc) else { return nil }
+
+        let entityCount = Int(mmf_drawing_entity_count(doc))
+        let layerCount = Int(mmf_drawing_layer_count(doc))
+
+        // Bounds
+        var minX: Double = 0, minY: Double = 0, maxX: Double = 0, maxY: Double = 0
+        let hasBounds = withUnsafeMutablePointer(to: &minX) { minXPtr in
+            withUnsafeMutablePointer(to: &minY) { minYPtr in
+                withUnsafeMutablePointer(to: &maxX) { maxXPtr in
+                    withUnsafeMutablePointer(to: &maxY) { maxYPtr in
+                        mmf_drawing_bounds(doc, minXPtr, minYPtr, maxXPtr, maxYPtr) != 0
+                    }
+                }
+            }
+        }
+
+        // Layers
+        var layers: [Drawing2DLayerInfo] = []
+        for i in 0..<layerCount {
+            let name: String
+            if let ptr = mmf_drawing_layer_name(doc, UInt32(i)) {
+                name = String(cString: ptr)
+            } else {
+                name = "Layer \(i)"
+            }
+            let visible = mmf_drawing_layer_visible(doc, UInt32(i)) != 0
+            layers.append(Drawing2DLayerInfo(name: name, visible: visible, colorIndex: 7))
+        }
+
+        return Drawing2DInfo(
+            entityCount: entityCount,
+            layerCount: layerCount,
+            boundsMinX: hasBounds ? minX : 0,
+            boundsMinY: hasBounds ? minY : 0,
+            boundsMaxX: hasBounds ? maxX : 0,
+            boundsMaxY: hasBounds ? maxY : 0,
+            layers: layers
+        )
+    }
+}
+
+/// 2D drawing metadata.
+struct Drawing2DInfo {
+    let entityCount: Int
+    let layerCount: Int
+    let boundsMinX: Double
+    let boundsMinY: Double
+    let boundsMaxX: Double
+    let boundsMaxY: Double
+    let layers: [Drawing2DLayerInfo]
+}
+
+struct Drawing2DLayerInfo {
+    let name: String
+    let visible: Bool
+    let colorIndex: Int
 }

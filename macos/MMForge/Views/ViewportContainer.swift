@@ -1,11 +1,13 @@
 import SwiftUI
 import MetalKit
 
-/// Container for the 3D viewport.  Shows Metal view when loaded,
-/// loading spinner when parsing, error view on failure, and
-/// empty state when no file is open.
+/// Container for the 3D/2D viewport.  Shows Metal view for 3D models,
+/// Core Graphics drawing view for 2D drawings (DXF), loading spinner
+/// when parsing, error view on failure, and empty state when no file
+/// is open.
 struct ViewportContainer: View {
     @ObservedObject var viewModel: DocumentViewModel
+    @State private var layerVisibility: [String: Bool] = [:]
 
     var body: some View {
         ZStack {
@@ -17,7 +19,14 @@ struct ViewportContainer: View {
             case .loading:
                 LoadingStateView()
             case .loaded:
-                MetalViewWrapper(viewModel: viewModel)
+                if viewModel.is2DDrawing {
+                    Drawing2DViewRepresentable(
+                        drawingInfo: viewModel.drawing2DInfo,
+                        layerVisibility: $layerVisibility
+                    )
+                } else {
+                    MetalViewWrapper(viewModel: viewModel)
+                }
             case .error(let message):
                 ErrorStateView(message: message)
             }

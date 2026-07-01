@@ -10,6 +10,7 @@ extension UTType {
     static let gltf = UTType("com.mmforge.gltf")!
     static let glb  = UTType("com.mmforge.glb")!
     static let iges = UTType("com.mmforge.iges")!
+    static let dxf  = UTType("com.mmforge.dxf")!
 }
 
 // MARK: - App preferences (persisted via UserDefaults)
@@ -43,7 +44,7 @@ struct Measurement: Identifiable {
 /// The document type for MMForge model files.
 struct MMForgeDocument: FileDocument {
     static var readableContentTypes: [UTType] {
-        [.step, .stl, .gltf, .glb, .iges]
+        [.step, .stl, .gltf, .glb, .iges, .dxf]
     }
 
     /// Raw file data (passed to Rust bridge for parsing).
@@ -120,6 +121,18 @@ final class DocumentViewModel: ObservableObject {
     private var pendingDTO: RenderPacketDTO?
     /// Increments on each parseFile call; stale async results are discarded.
     private var parseGeneration: UInt64 = 0
+
+    /// Whether the current document is a 2D drawing (DXF).
+    var is2DDrawing: Bool {
+        guard let doc = rustDoc else { return false }
+        return RustBridge.shared.is2DDrawing(doc)
+    }
+
+    /// 2D drawing metadata (nil if not a 2D drawing).
+    var drawing2DInfo: Drawing2DInfo? {
+        guard let doc = rustDoc else { return nil }
+        return RustBridge.shared.drawing2DInfo(doc)
+    }
 
     var isLoaded: Bool {
         if case .loaded = state { return true }

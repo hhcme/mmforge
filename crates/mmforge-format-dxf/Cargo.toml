@@ -1,0 +1,13 @@
+[package]
+name = "mmforge-format-dxf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DXF file parser for MMForge"
+
+[dependencies]
+mmforge-core = { workspace = true }
+glam = { workspace = true }
+thiserror = { workspace = true }

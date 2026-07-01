@@ -22,6 +22,7 @@
 		A10013 /* Picking.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10016; };
 		A10014 /* PickingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10017; };
 		A10015 /* SectionFill.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10018; };
+		A10016 /* DrawingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10019; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,6 +43,7 @@
 		B10016 /* Picking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Picking.swift; sourceTree = "<group>"; };
 		B10017 /* PickingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickingTests.swift; sourceTree = "<group>"; };
 		B10018 /* SectionFill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionFill.swift; sourceTree = "<group>"; };
+		B10019 /* DrawingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawingView.swift; sourceTree = "<group>"; };
 		B10015 /* mmforge_bridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = mmforge_bridge.h; sourceTree = "<group>"; };
 		C10001 /* MMForge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MMForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C10002 /* MMForgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MMForgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -97,6 +99,7 @@
 				B10005 /* StructureSidebar.swift */,
 				B10006 /* InspectorPanel.swift */,
 				B10007 /* ViewportContainer.swift */,
+				B10019 /* DrawingView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -242,6 +245,7 @@
 				A10005 /* StructureSidebar.swift in Sources */,
 				A10006 /* InspectorPanel.swift in Sources */,
 				A10007 /* ViewportContainer.swift in Sources */,
+				A10016 /* DrawingView.swift in Sources */,
 				A10008 /* MetalViewPlaceholder.swift in Sources */,
 				A10009 /* RustBridge.swift in Sources */,
 				A10010 /* Colors.swift in Sources */,

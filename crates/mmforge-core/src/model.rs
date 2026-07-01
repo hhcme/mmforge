@@ -93,8 +93,12 @@ pub enum Geometry {
     },
     /// Explicit triangle mesh.
     Mesh(MeshGeometry),
-    /// 2D drawing geometry (Phase 4).  Carries its own id and bounds.
-    Drawing2D { id: GeometryId, bounds: BoundingBox },
+    /// 2D drawing geometry.  Carries parsed drawing data, id, and bounds.
+    Drawing2D {
+        id: GeometryId,
+        bounds: BoundingBox,
+        drawing: Box<crate::drawing::Drawing2DGeometry>,
+    },
 }
 
 /// Explicit triangle mesh stored directly in the model.
@@ -1223,6 +1227,7 @@ mod tests {
         let geom = Geometry::Drawing2D {
             id: GeometryId::new(42),
             bounds: BoundingBox::new(Vec3::new(-1.0, -1.0, 0.0), Vec3::new(1.0, 1.0, 0.0)),
+            drawing: Box::new(crate::drawing::Drawing2DGeometry::new()),
         };
         assert_eq!(geom.id(), GeometryId::new(42));
         assert!(geom.bounds().is_valid());

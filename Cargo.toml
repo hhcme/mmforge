@@ -6,6 +6,7 @@ members = [
     "crates/mmforge-render",
     "crates/mmforge-format-step",
     "crates/mmforge-format-iges",
+    "crates/mmforge-format-dxf",
     "crates/mmforge-bridge",
     "crates/mmforge-cli",
 ]
@@ -25,6 +26,7 @@ mmforge-geometry = { path = "crates/mmforge-geometry" }
 mmforge-render = { path = "crates/mmforge-render" }
 mmforge-format-step = { path = "crates/mmforge-format-step" }
 mmforge-format-iges = { path = "crates/mmforge-format-iges" }
+mmforge-format-dxf = { path = "crates/mmforge-format-dxf" }
 mmforge-bridge = { path = "crates/mmforge-bridge" }
 
 # External dependencies

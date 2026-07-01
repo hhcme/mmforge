@@ -20,6 +20,7 @@ mmforge-geometry = { workspace = true }
 mmforge-render = { workspace = true }
 mmforge-format-step = { workspace = true }
 mmforge-format-iges = { workspace = true }
+mmforge-format-dxf = { workspace = true }
 glam = { workspace = true }
 gltf = { workspace = true }
 base64 = { workspace = true }

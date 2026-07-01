@@ -5,6 +5,7 @@
 
 pub mod builder;
 pub mod camera;
+pub mod draw2d;
 pub mod packet;
 
 pub use builder::build_render_packet;

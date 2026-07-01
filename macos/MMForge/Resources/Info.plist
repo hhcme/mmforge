@@ -34,6 +34,7 @@
                 <string>com.mmforge.gltf</string>
                 <string>com.mmforge.glb</string>
                 <string>com.mmforge.iges</string>
+                <string>com.mmforge.dxf</string>
             </array>
         </dict>
     </array>
@@ -124,6 +125,23 @@
                 <array>
                     <string>igs</string>
                     <string>iges</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.mmforge.dxf</string>
+            <key>UTTypeDescription</key>
+            <string>DXF Drawing File</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>dxf</string>
                 </array>
             </dict>
         </dict>

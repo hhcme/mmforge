@@ -141,6 +141,33 @@ uint32_t mmf_material_count(const MmfDocument* doc);
 /** Number of geometries in the model. */
 uint32_t mmf_geometry_count(const MmfDocument* doc);
 
+/* ------------------------------------------------------------------ */
+/*  2D Drawing data                                                    */
+/* ------------------------------------------------------------------ */
+
+/** Check if the document contains a 2D drawing.  Returns 1 if yes. */
+int mmf_is_2d_drawing(const MmfDocument* doc);
+
+/** Number of 2D drawing entities.  Returns 0 if not a 2D drawing. */
+uint32_t mmf_drawing_entity_count(const MmfDocument* doc);
+
+/** Number of layers in the 2D drawing. */
+uint32_t mmf_drawing_layer_count(const MmfDocument* doc);
+
+/**
+ * Get the 2D drawing bounding box.
+ * @return 1 on success, 0 if not a 2D drawing.
+ */
+int mmf_drawing_bounds(const MmfDocument* doc,
+                       double* out_min_x, double* out_min_y,
+                       double* out_max_x, double* out_max_y);
+
+/** Get layer name by index.  Returns NULL if out of range. */
+const char* mmf_drawing_layer_name(const MmfDocument* doc, uint32_t index);
+
+/** Check if layer is visible by index.  Returns 1 if visible. */
+int mmf_drawing_layer_visible(const MmfDocument* doc, uint32_t index);
+
 #ifdef __cplusplus
 }
 #endif

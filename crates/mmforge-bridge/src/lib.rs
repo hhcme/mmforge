@@ -1,5 +1,6 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
+mod dxf_detector;
 mod gltf_parser;
 mod stl_parser;
 
@@ -106,7 +107,12 @@ pub extern "C" fn mmf_parse_file(path: *const c_char) -> *mut MmfDocument {
         }
     };
 
-    let result = if stl_parser::detect_stl(&header, &path) {
+    let result = if dxf_detector::detect_dxf(&header, &path) {
+        // DXF produces Drawing2D, not tessellated meshes.
+        // Wrap into (ParseOutput, empty TessellationRegistry).
+        mmforge_format_dxf::parse_dxf(&path)
+            .map(|(output, _drawing)| (output, TessellationRegistry::new()))
+    } else if stl_parser::detect_stl(&header, &path) {
         stl_parser::parse_stl(&path)
     } else if gltf_parser::detect_gltf(&header, &path) {
         gltf_parser::parse_gltf(&path)
@@ -482,4 +488,139 @@ pub extern "C" fn mmf_geometry_count(doc: *const MmfDocument) -> u32 {
         return 0;
     }
     unsafe { &*doc }.model.geometries.len() as u32
+}
+
+// --- 2D Drawing data ---
+
+/// Check if the document contains a 2D drawing (has Drawing2D geometry).
+/// Returns 1 if yes, 0 if no or null.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_is_2d_drawing(doc: *const MmfDocument) -> std::os::raw::c_int {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    if doc
+        .model
+        .geometries
+        .iter()
+        .any(|g| matches!(g, Geometry::Drawing2D { .. }))
+    {
+        1
+    } else {
+        0
+    }
+}
+
+/// Get the number of 2D drawing entities.  Returns 0 if not a 2D drawing.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_drawing_entity_count(doc: *const MmfDocument) -> u32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    for g in &doc.model.geometries {
+        if let Geometry::Drawing2D { drawing, .. } = g {
+            return drawing.entities.len() as u32;
+        }
+    }
+    0
+}
+
+/// Get the number of layers in the 2D drawing.  Returns 0 if not a 2D drawing.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_drawing_layer_count(doc: *const MmfDocument) -> u32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    for g in &doc.model.geometries {
+        if let Geometry::Drawing2D { drawing, .. } = g {
+            return drawing.layers.len() as u32;
+        }
+    }
+    0
+}
+
+/// Get the 2D drawing bounding box.
+/// Returns 1 on success, 0 if not a 2D drawing or no bounds.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_drawing_bounds(
+    doc: *const MmfDocument,
+    out_min_x: *mut f64,
+    out_min_y: *mut f64,
+    out_max_x: *mut f64,
+    out_max_y: *mut f64,
+) -> std::os::raw::c_int {
+    if doc.is_null()
+        || out_min_x.is_null()
+        || out_min_y.is_null()
+        || out_max_x.is_null()
+        || out_max_y.is_null()
+    {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    for g in &doc.model.geometries {
+        if let Geometry::Drawing2D { drawing, .. } = g {
+            let bbox = drawing.bounds();
+            if bbox.is_valid() {
+                unsafe {
+                    *out_min_x = bbox.min[0];
+                    *out_min_y = bbox.min[1];
+                    *out_max_x = bbox.max[0];
+                    *out_max_y = bbox.max[1];
+                }
+                return 1;
+            }
+        }
+    }
+    0
+}
+
+/// Get a layer name by index.  Returns NULL if out of range or not a 2D drawing.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_drawing_layer_name(doc: *const MmfDocument, index: u32) -> *const c_char {
+    if doc.is_null() {
+        return ptr::null();
+    }
+    let doc = unsafe { &*doc };
+    for g in &doc.model.geometries {
+        if let Geometry::Drawing2D { drawing, .. } = g {
+            return match drawing.layers.get(index as usize) {
+                Some(layer) => {
+                    // We need to return a stable pointer.  Use the node names
+                    // trick: find the scene node with this layer's name.
+                    doc.node_names
+                        .iter()
+                        .find(|n| n.to_str().unwrap_or("") == layer.name)
+                        .map(|s| s.as_ptr())
+                        .unwrap_or(ptr::null())
+                }
+                None => ptr::null(),
+            };
+        }
+    }
+    ptr::null()
+}
+
+/// Check if a layer is visible by index.  Returns 1 if visible, 0 otherwise.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_drawing_layer_visible(
+    doc: *const MmfDocument,
+    index: u32,
+) -> std::os::raw::c_int {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    for g in &doc.model.geometries {
+        if let Geometry::Drawing2D { drawing, .. } = g {
+            return match drawing.layers.get(index as usize) {
+                Some(layer) if layer.visible => 1,
+                _ => 0,
+            };
+        }
+    }
+    0
 }
