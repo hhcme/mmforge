@@ -22,6 +22,7 @@
 //! - All handle wrappers implement `Drop` to free C++ resources.
 //! - No `unsafe` code exists outside `occt/sys` or `occt/adapter`.
 
+pub mod iges_reader;
 pub mod shape;
 pub mod step_reader;
 pub mod sys;

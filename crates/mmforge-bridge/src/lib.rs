@@ -3,9 +3,6 @@
 mod gltf_parser;
 mod stl_parser;
 
-// IGES detector: reserved for future OCCT IGESControl_Reader integration.
-// Not wired into mmf_parse_file yet — no real parser available.
-#[allow(dead_code)]
 mod iges_detector;
 
 use std::cell::RefCell;
@@ -109,15 +106,12 @@ pub extern "C" fn mmf_parse_file(path: *const c_char) -> *mut MmfDocument {
         }
     };
 
-    // IGES: not yet openable — requires OCCT IGESControl_Reader adapter.
-    // Detection module exists (iges_detector.rs) but is not wired into the
-    // parse pipeline.  IGES files will fall through to STEP detection and
-    // produce a clear "not a STEP file" error.
-
     let result = if stl_parser::detect_stl(&header, &path) {
         stl_parser::parse_stl(&path)
     } else if gltf_parser::detect_gltf(&header, &path) {
         gltf_parser::parse_gltf(&path)
+    } else if iges_detector::detect_iges(&header, &path) {
+        mmforge_format_iges::parse_iges_with_tessellation(&path)
     } else if mmforge_format_step::detect::detect_step(&header, &path).is_some() {
         mmforge_format_step::parse_step_with_tessellation(&path)
     } else {

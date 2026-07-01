@@ -33,6 +33,7 @@
                 <string>com.mmforge.stl</string>
                 <string>com.mmforge.gltf</string>
                 <string>com.mmforge.glb</string>
+                <string>com.mmforge.iges</string>
             </array>
         </dict>
     </array>
@@ -108,7 +109,24 @@
                 </array>
             </dict>
         </dict>
-        <!-- IGES (com.mmforge.iges, .igs/.iges) — planned, requires OCCT IGESControl_Reader -->
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.mmforge.iges</string>
+            <key>UTTypeDescription</key>
+            <string>IGES File</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>igs</string>
+                    <string>iges</string>
+                </array>
+            </dict>
+        </dict>
     </array>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026 MMForge Contributors. MIT OR Apache-2.0.</string>

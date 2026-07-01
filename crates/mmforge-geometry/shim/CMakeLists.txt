@@ -51,6 +51,7 @@ target_link_libraries(mmforge_occt_shim PRIVATE
     TKBool
     TKXSBase
     TKDESTEP
+    TKDEIGES
     TKXCAF
     TKCAF
     TKCDF

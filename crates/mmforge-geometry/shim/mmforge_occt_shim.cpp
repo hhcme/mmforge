@@ -32,6 +32,7 @@
 #include <Interface_Check.hxx>
 #include <Poly_Triangulation.hxx>
 #include <Standard_Version.hxx>
+#include <IGESCAFControl_Reader.hxx>
 #include <STEPCAFControl_Reader.hxx>
 #include <TCollection_AsciiString.hxx>
 #include <TCollection_HAsciiString.hxx>
@@ -160,6 +161,32 @@ void buildLabelMap(const Handle(XCAFDoc_ShapeTool)& st,
 
 const char* lookupLabel(const ReaderWrapper* w,
                         const TopoDS_Shape* shape) {
+    if (!w || !shape)
+        return nullptr;
+    auto it = w->labels.find(*shape);
+    if (it == w->labels.end())
+        return nullptr;
+    return it->second.c_str();
+}
+
+/**
+ * Internal state for one IGES reader session.
+ *
+ * Same lifecycle as STEP: new → read_file → transfer_roots → shape_* → free.
+ */
+struct IgesReaderWrapper {
+    IGESCAFControl_Reader     caf;
+    Handle(TDocStd_Document)  doc;
+    Handle(XCAFDoc_ShapeTool) st;
+
+    std::vector<TopoDS_Shape> roots;
+    std::vector<std::string>  warnings;
+    LabelMap                  labels;
+};
+
+/// Lookup label in an IGES reader's label map.
+const char* lookupIgesLabel(const IgesReaderWrapper* w,
+                            const TopoDS_Shape* shape) {
     if (!w || !shape)
         return nullptr;
     auto it = w->labels.find(*shape);
@@ -322,6 +349,180 @@ const char* mmforge_step_reader_get_warning(const MmfStepReader* reader,
 void mmforge_step_reader_free(MmfStepReader* reader) {
     if (!reader) return;
     delete reinterpret_cast<ReaderWrapper*>(reader);
+}
+
+// ======================================================================
+// IGES reader functions
+// ======================================================================
+
+MmfIgesReader* mmforge_iges_reader_new(void) {
+    try {
+        auto* w = new (std::nothrow) IgesReaderWrapper();
+        if (!w) return nullptr;
+        return reinterpret_cast<MmfIgesReader*>(w);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+MmfOcctError mmforge_iges_reader_read_file(MmfIgesReader* reader,
+                                            const char* path) {
+    if (!reader || !path)
+        return MMF_NULL_ARGUMENT;
+
+    auto* w = reinterpret_cast<IgesReaderWrapper*>(reader);
+
+    try {
+        IFSelect_ReturnStatus status = w->caf.ReadFile(path);
+
+        switch (status) {
+            case IFSelect_RetDone: return MMF_OK;
+            case IFSelect_RetVoid:
+            case IFSelect_RetError:
+            case IFSelect_RetFail: return MMF_PARSE_ERROR;
+            case IFSelect_RetStop: return MMF_IO_ERROR;
+            default:               return MMF_INTERNAL_ERROR;
+        }
+    } catch (...) {
+        return MMF_INTERNAL_ERROR;
+    }
+}
+
+MmfOcctError mmforge_iges_reader_transfer_roots(MmfIgesReader* reader) {
+    if (!reader)
+        return MMF_NULL_ARGUMENT;
+
+    auto* w = reinterpret_cast<IgesReaderWrapper*>(reader);
+
+    try {
+        w->roots.clear();
+        w->warnings.clear();
+        w->labels.clear();
+
+        w->doc = new TDocStd_Document("XmlXCAF");
+        w->st  = XCAFDoc_DocumentTool::ShapeTool(w->doc->Main());
+
+        Standard_Boolean ok = w->caf.Transfer(w->doc);
+        if (!ok)
+            return MMF_TRANSFER_ERROR;
+
+        // Collect transfer warnings via WorkSession.
+        Handle(XSControl_WorkSession) ws = w->caf.WS();
+        if (!ws.IsNull()) {
+            Handle(Transfer_TransientProcess) tp =
+                ws->TransferReader()->TransientProcess();
+            if (!tp.IsNull()) {
+                Standard_Integer nbMapped = tp->NbMapped();
+                for (Standard_Integer i = 1; i <= nbMapped; ++i) {
+                    Handle(Transfer_Binder) binder = tp->MapItem(i);
+                    if (binder.IsNull()) continue;
+                    Handle(Interface_Check) check = binder->Check();
+                    if (check.IsNull() || !check->HasWarnings()) continue;
+                    for (Standard_Integer j = 1; j <= check->NbWarnings(); ++j) {
+                        Handle(TCollection_HAsciiString) msg = check->Warning(j);
+                        if (!msg.IsNull())
+                            w->warnings.emplace_back(msg->ToCString());
+                    }
+                }
+            }
+        }
+
+        // Collect root shapes.
+        TDF_LabelSequence free;
+        w->st->GetFreeShapes(free);
+        w->roots.reserve(free.Length());
+        for (Standard_Integer i = 1; i <= free.Length(); ++i) {
+            TopoDS_Shape s = w->st->GetShape(free.Value(i));
+            if (!s.IsNull())
+                w->roots.push_back(s);
+        }
+
+        buildLabelMap(w->st, w->labels);
+
+        return MMF_OK;
+    } catch (...) {
+        return MMF_INTERNAL_ERROR;
+    }
+}
+
+int mmforge_iges_reader_root_count(const MmfIgesReader* reader) {
+    if (!reader) return 0;
+    auto* w = reinterpret_cast<IgesReaderWrapper*>(
+        const_cast<MmfIgesReader*>(reader));
+    return static_cast<int>(w->roots.size());
+}
+
+const MmfShape* mmforge_iges_reader_get_root(const MmfIgesReader* reader,
+                                              int index) {
+    if (!reader) return nullptr;
+    auto* w = reinterpret_cast<IgesReaderWrapper*>(
+        const_cast<MmfIgesReader*>(reader));
+    if (index < 0 || static_cast<size_t>(index) >= w->roots.size())
+        return nullptr;
+    return reinterpret_cast<const MmfShape*>(&w->roots[index]);
+}
+
+int mmforge_iges_reader_warning_count(const MmfIgesReader* reader) {
+    if (!reader) return 0;
+    auto* w = reinterpret_cast<IgesReaderWrapper*>(
+        const_cast<MmfIgesReader*>(reader));
+    return static_cast<int>(w->warnings.size());
+}
+
+const char* mmforge_iges_reader_get_warning(const MmfIgesReader* reader,
+                                             int index) {
+    if (!reader) return nullptr;
+    auto* w = reinterpret_cast<IgesReaderWrapper*>(
+        const_cast<MmfIgesReader*>(reader));
+    if (index < 0 || static_cast<size_t>(index) >= w->warnings.size())
+        return nullptr;
+    return w->warnings[index].c_str();
+}
+
+void mmforge_iges_reader_free(MmfIgesReader* reader) {
+    if (!reader) return;
+    delete reinterpret_cast<IgesReaderWrapper*>(reader);
+}
+
+// ======================================================================
+// IGES shape functions (delegate to same internal logic as STEP)
+// ======================================================================
+
+MmfOcctShapeType mmforge_iges_shape_type(const MmfIgesReader* /*reader*/,
+                                          const MmfShape* shape) {
+    if (!shape) return MMF_UNKNOWN;
+    auto* s = reinterpret_cast<const TopoDS_Shape*>(shape);
+    return mapShapeType(s->ShapeType());
+}
+
+MmfOcctError mmforge_iges_shape_bbox(const MmfIgesReader* /*reader*/,
+                                      const MmfShape* shape,
+                                      MmfOcctBBox* out) {
+    if (!shape || !out)
+        return MMF_NULL_ARGUMENT;
+    auto* s = reinterpret_cast<const TopoDS_Shape*>(shape);
+    try {
+        Bnd_Box box;
+        BRepBndLib::Add(*s, box);
+        if (box.IsVoid())
+            return MMF_INTERNAL_ERROR;
+        Standard_Real xn, yn, zn, xx, yx, zx;
+        box.Get(xn, yn, zn, xx, yx, zx);
+        out->min_x = xn;  out->min_y = yn;  out->min_z = zn;
+        out->max_x = xx;  out->max_y = yx;  out->max_z = zx;
+        return MMF_OK;
+    } catch (...) {
+        return MMF_INTERNAL_ERROR;
+    }
+}
+
+const char* mmforge_iges_shape_label(const MmfIgesReader* reader,
+                                      const MmfShape* shape) {
+    if (!reader || !shape) return nullptr;
+    auto* w = reinterpret_cast<IgesReaderWrapper*>(
+        const_cast<MmfIgesReader*>(reader));
+    auto* s = reinterpret_cast<const TopoDS_Shape*>(shape);
+    return lookupIgesLabel(w, s);
 }
 
 // ======================================================================

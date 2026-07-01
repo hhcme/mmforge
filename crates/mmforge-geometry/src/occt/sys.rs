@@ -27,6 +27,12 @@ pub struct StepControlReader {
     _private: [u8; 0],
 }
 
+/// Opaque handle to an `IGESControl_Reader` instance.
+#[repr(C)]
+pub struct IgesControlReader {
+    _private: [u8; 0],
+}
+
 /// Opaque handle to a `TopoDS_Shape` instance.
 #[repr(C)]
 pub struct TopoDsShape {
@@ -152,6 +158,61 @@ unsafe extern "C" {
     /// Free a `STEPControl_Reader` and all associated resources.
     /// Passing null is a no-op.
     pub fn mmforge_step_reader_free(reader: *mut StepControlReader);
+}
+
+// ---------------------------------------------------------------------------
+// IGESControl_Reader functions
+// ---------------------------------------------------------------------------
+
+#[cfg(occt_found)]
+unsafe extern "C" {
+    pub fn mmforge_iges_reader_new() -> *mut IgesControlReader;
+
+    pub fn mmforge_iges_reader_read_file(
+        reader: *mut IgesControlReader,
+        path: *const std::ffi::c_char,
+    ) -> OcctStatus;
+
+    pub fn mmforge_iges_reader_transfer_roots(reader: *mut IgesControlReader) -> OcctStatus;
+
+    pub fn mmforge_iges_reader_root_count(reader: *const IgesControlReader) -> std::ffi::c_int;
+
+    pub fn mmforge_iges_reader_get_root(
+        reader: *const IgesControlReader,
+        index: std::ffi::c_int,
+    ) -> *const TopoDsShape;
+
+    pub fn mmforge_iges_reader_warning_count(reader: *const IgesControlReader) -> std::ffi::c_int;
+
+    pub fn mmforge_iges_reader_get_warning(
+        reader: *const IgesControlReader,
+        index: std::ffi::c_int,
+    ) -> *const std::ffi::c_char;
+
+    pub fn mmforge_iges_reader_free(reader: *mut IgesControlReader);
+}
+
+// ---------------------------------------------------------------------------
+// IGES shape functions (same logic as STEP, different reader type)
+// ---------------------------------------------------------------------------
+
+#[cfg(occt_found)]
+unsafe extern "C" {
+    pub fn mmforge_iges_shape_type(
+        reader: *const IgesControlReader,
+        shape: *const TopoDsShape,
+    ) -> OcctShapeType;
+
+    pub fn mmforge_iges_shape_bbox(
+        reader: *const IgesControlReader,
+        shape: *const TopoDsShape,
+        out_bbox: *mut OcctBBox,
+    ) -> OcctStatus;
+
+    pub fn mmforge_iges_shape_label(
+        reader: *const IgesControlReader,
+        shape: *const TopoDsShape,
+    ) -> *const std::ffi::c_char;
 }
 
 // ---------------------------------------------------------------------------

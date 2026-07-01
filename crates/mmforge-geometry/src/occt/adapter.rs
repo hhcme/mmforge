@@ -72,7 +72,191 @@ pub struct ShapeHandle<'a> {
 /// Must match `MMFORGE_SHIM_ABI_VERSION` in `mmforge_occt_shim.h`.
 /// Bumped on every ABI-incompatible change to the shim.
 #[cfg(occt_found)]
-const EXPECTED_ABI_VERSION: i32 = 2;
+const EXPECTED_ABI_VERSION: i32 = 3;
+
+// ---------------------------------------------------------------------------
+// IGES adapter (same pattern as STEP)
+// ---------------------------------------------------------------------------
+
+/// Adapter for `IGESControl_Reader`.  Owns the C++ object and frees it on drop.
+#[allow(dead_code)]
+pub struct IgesReaderAdapter {
+    ptr: *mut super::sys::IgesControlReader,
+    _not_send_sync: std::marker::PhantomData<*const ()>,
+}
+
+impl std::fmt::Debug for IgesReaderAdapter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IgesReaderAdapter")
+            .field("ptr", &self.ptr)
+            .finish()
+    }
+}
+
+/// Borrowed handle to a `TopoDS_Shape` from an IGES reader.
+#[allow(dead_code)]
+pub struct IgesShapeHandle<'a> {
+    reader_ptr: *const super::sys::IgesControlReader,
+    ptr: *const super::sys::TopoDsShape,
+    _lifetime: std::marker::PhantomData<&'a ()>,
+}
+
+#[cfg(occt_found)]
+impl IgesReaderAdapter {
+    pub fn new() -> Result<Self, OcctError> {
+        let actual = unsafe { super::sys::mmforge_abi_version() };
+        if actual != EXPECTED_ABI_VERSION {
+            return Err(OcctError::NotAvailable(format!(
+                "OCCT shim ABI version mismatch: expected {EXPECTED_ABI_VERSION}, \
+                 got {actual}. Rebuild libmmforge_occt_shim.a."
+            )));
+        }
+        let ptr = unsafe { super::sys::mmforge_iges_reader_new() };
+        if ptr.is_null() {
+            return Err(OcctError::NotAvailable(
+                "failed to allocate IGESControl_Reader".to_string(),
+            ));
+        }
+        Ok(Self {
+            ptr,
+            _not_send_sync: std::marker::PhantomData,
+        })
+    }
+
+    pub fn read_file(&mut self, path: &Path) -> Result<(), OcctError> {
+        let c_path = CString::new(path.to_string_lossy().as_bytes())
+            .map_err(|_| OcctError::StepError("path contains null byte".to_string()))?;
+        let status =
+            unsafe { super::sys::mmforge_iges_reader_read_file(self.ptr, c_path.as_ptr()) };
+        status_to_result(status)
+    }
+
+    pub fn transfer_roots(&mut self) -> Result<(), OcctError> {
+        let status = unsafe { super::sys::mmforge_iges_reader_transfer_roots(self.ptr) };
+        status_to_result(status)
+    }
+
+    pub fn root_count(&self) -> usize {
+        unsafe { super::sys::mmforge_iges_reader_root_count(self.ptr) as usize }
+    }
+
+    pub fn get_root(&self, index: usize) -> Result<IgesShapeHandle<'_>, OcctError> {
+        let ptr =
+            unsafe { super::sys::mmforge_iges_reader_get_root(self.ptr, index as std::ffi::c_int) };
+        if ptr.is_null() {
+            return Err(OcctError::ShapeError(format!(
+                "root shape index {index} out of bounds"
+            )));
+        }
+        Ok(IgesShapeHandle {
+            reader_ptr: self.ptr,
+            ptr,
+            _lifetime: std::marker::PhantomData,
+        })
+    }
+
+    pub fn warnings(&self) -> Vec<String> {
+        let count = unsafe { super::sys::mmforge_iges_reader_warning_count(self.ptr) as usize };
+        let mut out = Vec::with_capacity(count);
+        for i in 0..count {
+            let ptr = unsafe {
+                super::sys::mmforge_iges_reader_get_warning(self.ptr, i as std::ffi::c_int)
+            };
+            if !ptr.is_null() {
+                let msg = unsafe { CStr::from_ptr(ptr) }
+                    .to_string_lossy()
+                    .into_owned();
+                out.push(msg);
+            }
+        }
+        out
+    }
+
+    /// Raw pointer for tessellation (cast to StepControlReader* since
+    /// mmforge_tessellate_shape ignores the reader parameter).
+    fn as_step_ptr(&self) -> *const super::sys::StepControlReader {
+        self.ptr as *const super::sys::StepControlReader
+    }
+}
+
+#[cfg(not(occt_found))]
+impl IgesReaderAdapter {
+    pub fn new() -> Result<Self, OcctError> {
+        Err(occt_not_available())
+    }
+    pub fn read_file(&mut self, _path: &Path) -> Result<(), OcctError> {
+        Err(occt_not_available())
+    }
+    pub fn transfer_roots(&mut self) -> Result<(), OcctError> {
+        Err(occt_not_available())
+    }
+    pub fn root_count(&self) -> usize {
+        0
+    }
+    pub fn get_root(&self, _index: usize) -> Result<IgesShapeHandle<'_>, OcctError> {
+        Err(occt_not_available())
+    }
+    pub fn warnings(&self) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+impl Drop for IgesReaderAdapter {
+    fn drop(&mut self) {
+        #[cfg(occt_found)]
+        if !self.ptr.is_null() {
+            unsafe { super::sys::mmforge_iges_reader_free(self.ptr) };
+        }
+    }
+}
+
+#[cfg(occt_found)]
+impl<'a> IgesShapeHandle<'a> {
+    pub fn shape_type(&self) -> ShapeType {
+        let raw = unsafe { super::sys::mmforge_iges_shape_type(self.reader_ptr, self.ptr) };
+        occt_to_shape_type(raw)
+    }
+
+    pub fn bbox(&self) -> Result<BoundingBox, OcctError> {
+        let mut raw = super::sys::OcctBBox {
+            min_x: 0.0,
+            min_y: 0.0,
+            min_z: 0.0,
+            max_x: 0.0,
+            max_y: 0.0,
+            max_z: 0.0,
+        };
+        let status =
+            unsafe { super::sys::mmforge_iges_shape_bbox(self.reader_ptr, self.ptr, &mut raw) };
+        status_to_result(status)?;
+        Ok(BoundingBox::new(
+            glam::Vec3::new(raw.min_x as f32, raw.min_y as f32, raw.min_z as f32),
+            glam::Vec3::new(raw.max_x as f32, raw.max_y as f32, raw.max_z as f32),
+        ))
+    }
+
+    pub fn label(&self) -> Option<String> {
+        let ptr = unsafe { super::sys::mmforge_iges_shape_label(self.reader_ptr, self.ptr) };
+        if ptr.is_null() {
+            return None;
+        }
+        Some(
+            unsafe { CStr::from_ptr(ptr) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+
+    pub fn to_handle(&self, fallback_label: &str) -> Result<OcctShapeHandle, OcctError> {
+        let bounds = self.bbox().unwrap_or(BoundingBox::EMPTY);
+        let label = self.label().unwrap_or_else(|| fallback_label.to_string());
+        Ok(OcctShapeHandle {
+            label,
+            bounds,
+            shape_type: self.shape_type(),
+        })
+    }
+}
 
 #[cfg(occt_found)]
 impl StepReaderAdapter {
@@ -451,6 +635,96 @@ impl TessellatedMesh {
     pub fn bounds(&self) -> mmforge_core::math::BoundingBox {
         self.bounds
     }
+
+    /// Tessellate using an IGES reader.  The underlying C function
+    /// `mmforge_tessellate_shape` ignores the reader parameter, so we
+    /// cast the IGES reader pointer to `StepControlReader*`.
+    pub fn tessellate_iges(
+        reader: &IgesReaderAdapter,
+        shape: &IgesShapeHandle<'_>,
+        linear_deflection: f64,
+    ) -> Result<Self, OcctError> {
+        let mut mesh_ptr: *mut super::sys::MmfMesh = std::ptr::null_mut();
+        let status = unsafe {
+            super::sys::mmforge_tessellate_shape(
+                reader.as_step_ptr(),
+                shape.ptr,
+                linear_deflection,
+                &mut mesh_ptr,
+            )
+        };
+        status_to_result(status)?;
+
+        if mesh_ptr.is_null() {
+            return Err(OcctError::ShapeError(
+                "tessellation returned null mesh".to_string(),
+            ));
+        }
+
+        let vertex_count = unsafe { super::sys::mmforge_mesh_vertex_count(mesh_ptr) } as usize;
+        let triangle_count = unsafe { super::sys::mmforge_mesh_triangle_count(mesh_ptr) } as usize;
+
+        let positions = {
+            let src = unsafe { super::sys::mmforge_mesh_positions(mesh_ptr) };
+            if src.is_null() || vertex_count == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(src, vertex_count * 3).to_vec() }
+            }
+        };
+
+        let normals = {
+            let src = unsafe { super::sys::mmforge_mesh_normals(mesh_ptr) };
+            if src.is_null() || vertex_count == 0 {
+                vec![0.0f32; vertex_count * 3]
+            } else {
+                unsafe { std::slice::from_raw_parts(src, vertex_count * 3).to_vec() }
+            }
+        };
+
+        let indices = {
+            let src = unsafe { super::sys::mmforge_mesh_indices(mesh_ptr) };
+            if src.is_null() || triangle_count == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(src, triangle_count * 3).to_vec() }
+            }
+        };
+
+        let mut raw_bbox = super::sys::OcctBBox {
+            min_x: 0.0,
+            min_y: 0.0,
+            min_z: 0.0,
+            max_x: 0.0,
+            max_y: 0.0,
+            max_z: 0.0,
+        };
+        let bbox_status = unsafe { super::sys::mmforge_mesh_bbox(mesh_ptr, &mut raw_bbox) };
+        let bounds = if bbox_status == super::sys::OcctStatus::Ok {
+            mmforge_core::math::BoundingBox::new(
+                glam::Vec3::new(
+                    raw_bbox.min_x as f32,
+                    raw_bbox.min_y as f32,
+                    raw_bbox.min_z as f32,
+                ),
+                glam::Vec3::new(
+                    raw_bbox.max_x as f32,
+                    raw_bbox.max_y as f32,
+                    raw_bbox.max_z as f32,
+                ),
+            )
+        } else {
+            mmforge_core::math::BoundingBox::EMPTY
+        };
+
+        Ok(Self {
+            positions,
+            normals,
+            indices,
+            bounds,
+            mesh_ptr,
+        })
+    }
 }
 
 #[cfg(occt_found)]
@@ -565,6 +839,18 @@ mod tests {
             crate::occt::sys::mmforge_step_reader_warning_count as *const () as usize,
             crate::occt::sys::mmforge_step_reader_get_warning as *const () as usize,
             crate::occt::sys::mmforge_step_reader_free as *const () as usize,
+            // IGESControl_Reader
+            crate::occt::sys::mmforge_iges_reader_new as *const () as usize,
+            crate::occt::sys::mmforge_iges_reader_read_file as *const () as usize,
+            crate::occt::sys::mmforge_iges_reader_transfer_roots as *const () as usize,
+            crate::occt::sys::mmforge_iges_reader_root_count as *const () as usize,
+            crate::occt::sys::mmforge_iges_reader_get_root as *const () as usize,
+            crate::occt::sys::mmforge_iges_reader_warning_count as *const () as usize,
+            crate::occt::sys::mmforge_iges_reader_get_warning as *const () as usize,
+            crate::occt::sys::mmforge_iges_reader_free as *const () as usize,
+            crate::occt::sys::mmforge_iges_shape_type as *const () as usize,
+            crate::occt::sys::mmforge_iges_shape_bbox as *const () as usize,
+            crate::occt::sys::mmforge_iges_shape_label as *const () as usize,
             // TopoDS_Shape
             crate::occt::sys::mmforge_shape_type as *const () as usize,
             crate::occt::sys::mmforge_shape_bbox as *const () as usize,

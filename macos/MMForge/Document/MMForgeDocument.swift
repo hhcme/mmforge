@@ -9,8 +9,7 @@ extension UTType {
     static let stl  = UTType("com.mmforge.stl")!
     static let gltf = UTType("com.mmforge.gltf")!
     static let glb  = UTType("com.mmforge.glb")!
-    // IGES (com.mmforge.iges) — planned, not yet openable.
-    // Requires OCCT IGESControl_Reader adapter (C++ shim + Rust FFI).
+    static let iges = UTType("com.mmforge.iges")!
 }
 
 // MARK: - App preferences (persisted via UserDefaults)
@@ -44,7 +43,7 @@ struct Measurement: Identifiable {
 /// The document type for MMForge model files.
 struct MMForgeDocument: FileDocument {
     static var readableContentTypes: [UTType] {
-        [.step, .stl, .gltf, .glb]
+        [.step, .stl, .gltf, .glb, .iges]
     }
 
     /// Raw file data (passed to Rust bridge for parsing).

@@ -221,7 +221,7 @@ fn locate_occt() -> Option<OcctInfo> {
 #[cfg(feature = "occt")]
 fn parse_occt_libs() -> Vec<String> {
     let raw = std::env::var("OCCT_LIBS").unwrap_or_else(|_| {
-        "TKernel;TKMath;TKG3d;TKBRep;TKTopAlgo;TKGeomAlgo;TKGeomBase;TKShHealing;TKMesh;TKBO;TKBool;TKXSBase;TKDESTEP;TKXCAF;TKCAF;TKCDF;TKLCAF;TKStd;TKStdL;TKXmlXCAF;TKService".to_string()
+        "TKernel;TKMath;TKG3d;TKBRep;TKTopAlgo;TKGeomAlgo;TKGeomBase;TKShHealing;TKMesh;TKBO;TKBool;TKXSBase;TKDESTEP;TKDEIGES;TKXCAF;TKCAF;TKCDF;TKLCAF;TKStd;TKStdL;TKXmlXCAF;TKService".to_string()
     });
     raw.split(';')
         .map(|s| s.trim().to_string())
@@ -321,6 +321,18 @@ const REQUIRED_SHIM_SYMBOLS: &[&str] = &[
     "mmforge_step_reader_warning_count",
     "mmforge_step_reader_get_warning",
     "mmforge_step_reader_free",
+    // IGESControl_Reader
+    "mmforge_iges_reader_new",
+    "mmforge_iges_reader_read_file",
+    "mmforge_iges_reader_transfer_roots",
+    "mmforge_iges_reader_root_count",
+    "mmforge_iges_reader_get_root",
+    "mmforge_iges_reader_warning_count",
+    "mmforge_iges_reader_get_warning",
+    "mmforge_iges_reader_free",
+    "mmforge_iges_shape_type",
+    "mmforge_iges_shape_bbox",
+    "mmforge_iges_shape_label",
     // TopoDS_Shape
     "mmforge_shape_type",
     "mmforge_shape_bbox",

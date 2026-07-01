@@ -36,7 +36,7 @@ extern "C" {
 /* ------------------------------------------------------------------ */
 
 /** Current C ABI version.  Bump when function signatures change. */
-#define MMFORGE_SHIM_ABI_VERSION 2
+#define MMFORGE_SHIM_ABI_VERSION 3
 
 /* ------------------------------------------------------------------ */
 /*  Opaque handle types                                                */
@@ -45,6 +45,10 @@ extern "C" {
 /** Opaque handle to a STEP reader session (wraps STEPCAFControl_Reader
     + XCAF document). */
 typedef struct MmfStepReader MmfStepReader;
+
+/** Opaque handle to an IGES reader session (wraps IGESCAFControl_Reader
+    + XCAF document). */
+typedef struct MmfIgesReader MmfIgesReader;
 
 /** Opaque handle to a TopoDS_Shape (borrowed from the reader). */
 typedef struct MmfShape MmfShape;
@@ -166,6 +170,51 @@ const char* mmforge_step_reader_get_warning(const MmfStepReader* reader,
  * Passing NULL is a no-op.
  */
 void mmforge_step_reader_free(MmfStepReader* reader);
+
+/* ------------------------------------------------------------------ */
+/*  IGES reader functions                                              */
+/* ------------------------------------------------------------------ */
+
+/** Create a new IGES reader session.  Returns NULL on failure. */
+MmfIgesReader* mmforge_iges_reader_new(void);
+
+/** Read an IGES file.  Returns MMF_OK on success. */
+MmfOcctError mmforge_iges_reader_read_file(MmfIgesReader* reader,
+                                            const char* path);
+
+/** Transfer all roots from the IGES file into the XDE document. */
+MmfOcctError mmforge_iges_reader_transfer_roots(MmfIgesReader* reader);
+
+/** Get the number of transferred root shapes. */
+int mmforge_iges_reader_root_count(const MmfIgesReader* reader);
+
+/** Get a root shape by index (borrowed pointer). */
+const MmfShape* mmforge_iges_reader_get_root(const MmfIgesReader* reader,
+                                              int index);
+
+/** Get the number of transfer warnings. */
+int mmforge_iges_reader_warning_count(const MmfIgesReader* reader);
+
+/** Get a transfer warning by index (borrowed string). */
+const char* mmforge_iges_reader_get_warning(const MmfIgesReader* reader,
+                                             int index);
+
+/** Free an IGES reader.  NULL is a no-op. */
+void mmforge_iges_reader_free(MmfIgesReader* reader);
+
+/* ------------------------------------------------------------------ */
+/*  IGES shape functions (same logic as STEP, different reader type)   */
+/* ------------------------------------------------------------------ */
+
+MmfOcctShapeType mmforge_iges_shape_type(const MmfIgesReader* reader,
+                                          const MmfShape* shape);
+
+MmfOcctError mmforge_iges_shape_bbox(const MmfIgesReader* reader,
+                                      const MmfShape* shape,
+                                      MmfOcctBBox* out_bbox);
+
+const char* mmforge_iges_shape_label(const MmfIgesReader* reader,
+                                      const MmfShape* shape);
 
 /* ------------------------------------------------------------------ */
 /*  Shape functions (require owning reader for context)                */
