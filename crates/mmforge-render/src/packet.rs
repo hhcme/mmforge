@@ -60,6 +60,14 @@ pub struct RenderStats {
     pub instance_count: usize,
     pub triangle_count: usize,
     pub batch_count: usize,
+    /// Total number of vertices across all meshes.
+    pub total_vertices: usize,
+    /// Total number of indices across all meshes.
+    pub total_indices: usize,
+    /// Approximate GPU memory footprint in bytes (positions + normals + indices).
+    pub memory_bytes: usize,
+    /// Wall-clock time for the build_render_packet call, in milliseconds.
+    pub build_duration_ms: f64,
 }
 
 impl RenderPacket {

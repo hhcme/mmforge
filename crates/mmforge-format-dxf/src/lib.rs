@@ -13,3 +13,4 @@ pub mod tables_parser;
 pub mod tokenizer;
 
 pub use parser::{DxfParser, parse_dxf};
+pub use tokenizer::DxfTokenizer;

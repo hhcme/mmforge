@@ -3,12 +3,14 @@
 //! This crate is the bottom of the dependency graph. It must not depend on
 //! any platform, UI, GPU, or OCCT types.
 
+pub mod cancel;
 pub mod drawing;
 pub mod error;
 pub mod ids;
 pub mod math;
 pub mod model;
 pub mod parser;
+pub mod progress;
 pub mod version;
 
 pub use error::{Error, Result};

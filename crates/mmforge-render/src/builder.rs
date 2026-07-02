@@ -16,10 +16,13 @@ use crate::packet::{RenderBatch, RenderMaterial, RenderMesh, RenderPacket, Rende
 /// default `RenderMaterial`, one `RenderInstance` per mesh, and one
 /// `RenderBatch`.
 pub fn build_render_packet(mesh_data: &HashMap<GeometryId, TessellatedMeshData>) -> RenderPacket {
+    let start = std::time::Instant::now();
     let mut meshes = Vec::with_capacity(mesh_data.len());
     let mut instances = Vec::with_capacity(mesh_data.len());
     let mut scene_bounds = BoundingBox::EMPTY;
     let mut total_triangles = 0usize;
+    let mut total_vertices = 0usize;
+    let mut total_indices = 0usize;
 
     // Default material (steel-grey).
     let materials = vec![RenderMaterial {
@@ -44,6 +47,8 @@ pub fn build_render_packet(mesh_data: &HashMap<GeometryId, TessellatedMeshData>)
         let indices: Vec<u32> = mesh.indices.clone();
 
         total_triangles += indices.len() / 3;
+        total_vertices += positions.len();
+        total_indices += indices.len();
 
         if mesh.bounds.is_valid() {
             scene_bounds.extend(mesh.bounds);
@@ -88,6 +93,11 @@ pub fn build_render_packet(mesh_data: &HashMap<GeometryId, TessellatedMeshData>)
             instance_count: mesh_data.len(),
             triangle_count: total_triangles,
             batch_count: 1,
+            total_vertices,
+            total_indices,
+            memory_bytes: total_vertices * std::mem::size_of::<[f32; 3]>() * 2
+                + total_indices * std::mem::size_of::<u32>(),
+            build_duration_ms: start.elapsed().as_secs_f64() * 1000.0,
         },
     }
 }

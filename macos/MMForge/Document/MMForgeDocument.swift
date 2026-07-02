@@ -123,6 +123,13 @@ final class DocumentViewModel: ObservableObject {
     /// Text content for text annotation tool.
     @Published var annotationToolText: String = ""
 
+    /// Error message for failed export (shown as alert in UI).
+    @Published var exportError: String?
+
+    // Parse progress (stage + fraction)
+    @Published var parseStage: String = ""
+    @Published var parseProgress: Double = 0  // 0..1
+
     // Color override state
     @Published var nodeColorOverrides: [Int: simd_float4] = [:]
 
@@ -130,12 +137,16 @@ final class DocumentViewModel: ObservableObject {
     @Published var layerVisibility: [String: Bool] = [:]
     @Published var layerColors: [String: Int] = [:]
 
-    private(set) var rustDoc: OpaquePointer?
-    private var renderer: MetalRenderer?
+    fileprivate(set) var rustDoc: OpaquePointer?
+    fileprivate var renderer: MetalRenderer?
+    /// Active background parse job (for cancellation).
+    fileprivate var currentJob: OpaquePointer?
+    /// Active cancellation token.
+    fileprivate var currentCancelToken: UnsafeMutableRawPointer?
     /// Stores DTO from async parse when renderer isn't ready yet.
-    private var pendingDTO: RenderPacketDTO?
+    fileprivate var pendingDTO: RenderPacketDTO?
     /// Increments on each parseFile call; stale async results are discarded.
-    private var parseGeneration: UInt64 = 0
+    fileprivate var parseGeneration: UInt64 = 0
 
     /// Whether the current document is a 2D drawing (DXF).
     var is2DDrawing: Bool {
@@ -174,6 +185,16 @@ final class DocumentViewModel: ObservableObject {
 
     /// Free the current MmfDocument and clear associated state.
     private func freeCurrentDocument() {
+        // Cancel any in-flight background parse.
+        if let token = currentCancelToken {
+            mmf_cancel_token_cancel(token)
+            mmf_cancel_token_free(token)
+            currentCancelToken = nil
+        }
+        if let job = currentJob {
+            mmf_open_job_free(job)
+            currentJob = nil
+        }
         if let doc = rustDoc {
             RustBridge.shared.freeDocument(doc)
             rustDoc = nil
@@ -202,8 +223,7 @@ final class DocumentViewModel: ObservableObject {
     }
 
     func parseFile(data: Data, fileExtension: String = "step") {
-        // Increment generation FIRST — any in-flight async parse from a
-        // previous call will see a mismatch and discard its result.
+        // Increment generation — stale results are discarded.
         parseGeneration += 1
         let generation = parseGeneration
 
@@ -216,6 +236,8 @@ final class DocumentViewModel: ObservableObject {
         }
 
         state = .loading
+        parseStage = ""
+        parseProgress = 0
 
         // Write to temp file with the ORIGINAL extension so Rust format
         // detection works correctly (STL requires .stl, etc.).
@@ -229,53 +251,100 @@ final class DocumentViewModel: ObservableObject {
             return
         }
 
-        // Parse on background thread.
         let path = tmpURL.path
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = Result { try RustBridge.shared.parseFile(at: path) }
+        // Create cancellation token for this parse.
+        let cancelToken: UnsafeMutableRawPointer? = mmf_cancel_token_new()
+        currentCancelToken = cancelToken
 
-            // Clean up temp file.
-            try? FileManager.default.removeItem(at: tmpURL)
+        // Build a context object that the C callbacks can access via user_data.
+        // Uses Unmanaged to pass a reference through C void*.
+        let ctx = ParseCallbackContext(viewModel: self, generation: generation, tmpURL: tmpURL)
+        let ctxPtr = Unmanaged.passRetained(ctx).toOpaque()
 
-            DispatchQueue.main.async {
-                guard let self else { return }
-                // Discard stale result if a newer parse was started.
-                guard generation == self.parseGeneration else {
-                    // Free the document we just parsed — it's been superseded.
-                    if case .success(let (doc, _)) = result {
-                        RustBridge.shared.freeDocument(doc)
-                    }
-                    return
-                }
-                switch result {
-                case .success(let (doc, dto)):
-                    // Free any previous document (should already be nil,
-                    // but guard against edge cases).
-                    if let oldDoc = self.rustDoc {
-                        RustBridge.shared.freeDocument(oldDoc)
-                    }
-                    self.rustDoc = doc
-                    self.uploadToRenderer(dto: dto)
-                    self.nodeNames = dto.nodeNames
-                    self.nodes = dto.nodes
-                    self.stats = dto.stats
-                    self.initLayerState()
-                    // Expand root by default.
-                    self.expandedIndices = [0]
-                    self.state = .loaded(
-                        triangleCount: dto.triangleCount,
-                        meshCount: dto.meshes.count,
-                        nodeCount: dto.nodeNames.count
-                    )
-                case .failure(let error):
-                    self.state = .error(error.localizedDescription)
-                }
-            }
-        }
+        let job = mmf_open_async(path, UnsafeRawPointer(cancelToken),
+                                 parseProgressCallback, parseCompletionCallback, ctxPtr)
+
+        currentJob = job
     }
 
-    private func uploadToRenderer(dto: RenderPacketDTO) {
+    deinit {
+        if let doc = rustDoc {
+            RustBridge.shared.freeDocument(doc)
+        }
+    }
+}
+
+// MARK: - Async Parse Callbacks (outside DocumentViewModel)
+
+/// Holds context for the async parse C callbacks.
+private class ParseCallbackContext {
+    weak var viewModel: DocumentViewModel?
+    let generation: UInt64
+    let tmpURL: URL
+    init(viewModel: DocumentViewModel, generation: UInt64, tmpURL: URL) {
+        self.viewModel = viewModel
+        self.generation = generation
+        self.tmpURL = tmpURL
+    }
+}
+
+private func parseProgressCallback(
+    stage: UnsafePointer<CChar>?, current: UInt32, total: UInt32, user_data: UnsafeMutableRawPointer?
+) {
+    guard let user_data else { return }
+    let ctx = Unmanaged<ParseCallbackContext>.fromOpaque(user_data).takeUnretainedValue()
+    DispatchQueue.main.async {
+        guard let vm = ctx.viewModel, ctx.generation == vm.parseGeneration else { return }
+        vm.parseStage = stage.map { String(cString: $0) } ?? ""
+        vm.parseProgress = total > 0 ? Double(current) / Double(total) : 0
+    }
+}
+
+private func parseCompletionCallback(
+    doc: OpaquePointer?, user_data: UnsafeMutableRawPointer?
+) {
+    guard let user_data else { return }
+    let ctx = Unmanaged<ParseCallbackContext>.fromOpaque(user_data).takeRetainedValue()
+    try? FileManager.default.removeItem(at: ctx.tmpURL)
+    DispatchQueue.main.async {
+        guard let vm = ctx.viewModel else {
+            if let doc = doc { mmf_document_free(doc) }
+            return
+        }
+        guard ctx.generation == vm.parseGeneration else {
+            if let doc = doc { mmf_document_free(doc) }
+            return
+        }
+        if let doc = doc {
+            if let oldDoc = vm.rustDoc { RustBridge.shared.freeDocument(oldDoc) }
+            vm.rustDoc = doc
+            let dto = RustBridge.shared.buildDTO(from: doc)
+            vm.uploadToRenderer(dto: dto)
+            vm.nodeNames = dto.nodeNames
+            vm.nodes = dto.nodes
+            vm.stats = dto.stats
+            vm.initLayerState()
+            vm.expandedIndices = [0]
+            vm.parseStage = ""
+            vm.parseProgress = 1
+            vm.state = .loaded(
+                triangleCount: dto.triangleCount, meshCount: dto.meshes.count,
+                nodeCount: dto.nodeNames.count)
+        } else {
+            let msg = mmf_last_error().map { String(cString: $0) } ?? "unknown error"
+            vm.state = .error(msg)
+        }
+        vm.currentJob = nil
+    }
+}
+
+// uploadToRenderer is in an extension because the class body was split
+// during refactoring.  `internal` visibility allows access from the class
+// body and from the free-function completion callback.
+
+extension DocumentViewModel {
+    func uploadToRenderer(dto: RenderPacketDTO) {
         guard let renderer else {
             pendingDTO = dto
             return
@@ -599,9 +668,6 @@ final class DocumentViewModel: ObservableObject {
 
     // MARK: - Export
 
-    /// Error message for failed export (shown as alert in UI).
-    @Published var exportError: String?
-
     /// Capture the current viewport and present NSSavePanel for export.
     func exportImage() {
         guard let renderer else {
@@ -894,12 +960,6 @@ final class DocumentViewModel: ObservableObject {
         }
     }
 
-    deinit {
-        // Nonisolated cleanup — safe because deinit runs on the owning thread.
-        if let doc = rustDoc {
-            RustBridge.shared.freeDocument(doc)
-        }
-    }
 }
 
 // MARK: - Drawing2D Annotation Delegate

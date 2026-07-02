@@ -4,6 +4,8 @@ mod dxf_detector;
 mod gltf_parser;
 mod stl_parser;
 
+pub mod job;
+
 mod iges_detector;
 
 use std::cell::RefCell;
@@ -160,6 +162,47 @@ fn build_document(output: ParseOutput, registry: TessellationRegistry) -> MmfDoc
         draw_linetype_cstrings,
         layer_line_type_cstrings,
         spatial_index,
+    }
+}
+
+/// Shared parse logic used by both `mmf_parse_file` and `job::run_open_pipeline`.
+///
+/// Detects the format from `header` and runs the appropriate parser.
+/// Returns a boxed `MmfDocument` on success.
+pub(crate) fn parse_with_detection(
+    path: &std::path::Path,
+    header: &[u8],
+    progress: Option<&mmforge_core::progress::ProgressCallback>,
+    cancel: &mmforge_core::cancel::CancellationToken,
+) -> mmforge_core::Result<Box<MmfDocument>> {
+    if cancel.is_cancelled() {
+        return Err(mmforge_core::error::Error::Cancelled);
+    }
+
+    // Detection cascade: DXF → STL → glTF → IGES → STEP (fallback).
+    let result = if dxf_detector::detect_dxf(header, path) {
+        mmforge_format_dxf::parse_dxf(path)
+            .map(|(output, _drawing)| (output, TessellationRegistry::new()))
+    } else if stl_parser::detect_stl(header, path) {
+        stl_parser::parse_stl(path)
+    } else if gltf_parser::detect_gltf(header, path) {
+        gltf_parser::parse_gltf(path)
+    } else if iges_detector::detect_iges(header, path) {
+        mmforge_format_iges::parse_iges_with_tessellation(path)
+    } else {
+        // Default: try STEP (most flexible detection).
+        mmforge_format_step::parse_step_with_tessellation(path)
+    };
+
+    if let Some(cb) = progress {
+        cb(&mmforge_core::progress::ParseProgress::new(
+            "building", 0, 1,
+        ));
+    }
+
+    match result {
+        Ok((output, registry)) => Ok(Box::new(build_document(output, registry))),
+        Err(e) => Err(e),
     }
 }
 
@@ -584,6 +627,38 @@ pub extern "C" fn mmf_geometry_count(doc: *const MmfDocument) -> u32 {
         return 0;
     }
     unsafe { &*doc }.model.geometries.len() as u32
+}
+
+/// Render statistics.  All outputs are optional (pass NULL to skip).
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_render_stats(
+    doc: *const MmfDocument,
+    out_mesh_count: *mut u32,
+    out_vertex_count: *mut u32,
+    out_triangle_count: *mut u32,
+    out_memory_bytes: *mut u64,
+    out_build_ms: *mut f64,
+) {
+    if doc.is_null() {
+        return;
+    }
+    let doc = unsafe { &*doc };
+    let s = &doc.packet.stats;
+    if !out_mesh_count.is_null() {
+        unsafe { *out_mesh_count = s.mesh_count as u32 };
+    }
+    if !out_vertex_count.is_null() {
+        unsafe { *out_vertex_count = s.total_vertices as u32 };
+    }
+    if !out_triangle_count.is_null() {
+        unsafe { *out_triangle_count = s.triangle_count as u32 };
+    }
+    if !out_memory_bytes.is_null() {
+        unsafe { *out_memory_bytes = s.memory_bytes as u64 };
+    }
+    if !out_build_ms.is_null() {
+        unsafe { *out_build_ms = s.build_duration_ms };
+    }
 }
 
 // --- 2D Drawing data ---

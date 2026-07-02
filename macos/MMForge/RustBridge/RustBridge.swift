@@ -58,8 +58,13 @@ final class RustBridge {
             throw NSError(domain: "MMForge", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: msg])
         }
+        let dto = buildDTO(from: doc)
+        return (doc, dto)
+    }
 
-        // Meshes
+    /// Build a RenderPacketDTO from an already-parsed document pointer.
+    /// Used by both `parseFile` (synchronous) and the async job callback.
+    func buildDTO(from doc: OpaquePointer) -> RenderPacketDTO {
         let meshCount = Int(mmf_mesh_count(doc))
         var meshes: [RenderPacketDTO.Mesh] = []
         meshes.reserveCapacity(meshCount)
@@ -78,7 +83,6 @@ final class RustBridge {
             ))
         }
 
-        // Scene bounds
         var bmin: [Float] = [0, 0, 0]
         var bmax: [Float] = [0, 0, 0]
         bmin.withUnsafeMutableBufferPointer { minPtr in
@@ -87,7 +91,6 @@ final class RustBridge {
             }
         }
 
-        // Node info
         let nodeCount = Int(mmf_node_count(doc))
         var nodes: [RenderPacketDTO.NodeInfo] = []
         var names: [String] = []
@@ -140,7 +143,6 @@ final class RustBridge {
             ))
         }
 
-        // Stats
         let stats = RenderPacketDTO.ModelStats(
             nodeCount: nodeCount,
             geometryCount: Int(mmf_geometry_count(doc)),
@@ -149,7 +151,7 @@ final class RustBridge {
             meshCount: meshCount
         )
 
-        let dto = RenderPacketDTO(
+        return RenderPacketDTO(
             meshes: meshes,
             sceneBoundsMin: simd_float3(bmin[0], bmin[1], bmin[2]),
             sceneBoundsMax: simd_float3(bmax[0], bmax[1], bmax[2]),
@@ -158,13 +160,36 @@ final class RustBridge {
             nodes: nodes,
             stats: stats
         )
-
-        return (doc, dto)
     }
 
     /// Free a document returned by `parseFile`.
     func freeDocument(_ doc: OpaquePointer) {
         mmf_document_free(doc)
+    }
+
+    /// Render statistics for a parsed document.
+    struct RenderStatsDTO {
+        let meshCount: Int
+        let vertexCount: Int
+        let triangleCount: Int
+        let memoryBytes: Int
+        let buildDurationMs: Double
+    }
+
+    func renderStats(_ doc: OpaquePointer) -> RenderStatsDTO {
+        var meshCount: UInt32 = 0
+        var vertexCount: UInt32 = 0
+        var triangleCount: UInt32 = 0
+        var memoryBytes: UInt64 = 0
+        var buildMs: Double = 0
+        mmf_render_stats(doc, &meshCount, &vertexCount, &triangleCount, &memoryBytes, &buildMs)
+        return RenderStatsDTO(
+            meshCount: Int(meshCount),
+            vertexCount: Int(vertexCount),
+            triangleCount: Int(triangleCount),
+            memoryBytes: Int(memoryBytes),
+            buildDurationMs: buildMs
+        )
     }
 
     /// Check if the document is a 2D drawing (DXF).

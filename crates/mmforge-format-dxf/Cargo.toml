@@ -14,3 +14,8 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 mmforge-render = { workspace = true }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "dxf_bench"
+harness = false

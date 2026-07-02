@@ -28,6 +28,10 @@ pub enum Error {
     #[error("geometry error: {message}")]
     Geometry { message: String },
 
+    /// The operation was cancelled by the user.
+    #[error("operation cancelled")]
+    Cancelled,
+
     /// Generic catch-all for early prototyping; should shrink over time.
     #[error("{message}")]
     Other { message: String },

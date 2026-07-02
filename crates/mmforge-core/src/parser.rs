@@ -1,7 +1,9 @@
 //! Format-agnostic parser trait.
 
+use crate::cancel::CancellationToken;
 use crate::error::Result;
 use crate::model::ParseOutput;
+use crate::progress::ProgressCallback;
 use std::path::Path;
 
 /// Describes the confidence of a format detection.
@@ -40,6 +42,31 @@ pub trait FormatParser: Send + Sync {
     /// * Return `Err` for fatal errors.
     /// * Collect recoverable issues in `ParseOutput::warnings`.
     fn parse(&self, path: &Path) -> Result<ParseOutput>;
+
+    /// Parse with progress reporting and cancellation support.
+    ///
+    /// The default implementation delegates to [`parse`] after checking
+    /// the cancellation token once.  Parsers that support incremental
+    /// progress should override this method to report progress via the
+    /// callback and check the token in their inner loops.
+    fn parse_with_progress(
+        &self,
+        path: &Path,
+        progress: Option<&ProgressCallback>,
+        cancel: &CancellationToken,
+    ) -> Result<ParseOutput> {
+        if cancel.is_cancelled() {
+            return Err(crate::error::Error::Cancelled);
+        }
+        if let Some(cb) = progress {
+            cb(&crate::progress::ParseProgress::new("parsing", 0, 0));
+        }
+        let result = self.parse(path);
+        if let Some(cb) = progress {
+            cb(&crate::progress::ParseProgress::new("parsing", 1, 1));
+        }
+        result
+    }
 
     /// Whether this parser can handle the given path based on extension
     /// (quick pre-filter before reading bytes).

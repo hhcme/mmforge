@@ -1,0 +1,20 @@
+[package]
+name = "mmforge-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mmforge-format-dxf = { path = "../crates/mmforge-format-dxf" }
+
+[[bin]]
+name = "fuzz_dxf_tokenizer"
+path = "fuzz_targets/fuzz_dxf_tokenizer.rs"
+
+[[bin]]
+name = "fuzz_dxf_parser"
+path = "fuzz_targets/fuzz_dxf_parser.rs"

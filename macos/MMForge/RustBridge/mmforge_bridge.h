@@ -141,6 +141,62 @@ uint32_t mmf_material_count(const MmfDocument* doc);
 /** Number of geometries in the model. */
 uint32_t mmf_geometry_count(const MmfDocument* doc);
 
+/**
+ * Render statistics.  All outputs are optional (pass NULL to skip).
+ */
+void mmf_render_stats(const MmfDocument* doc,
+                      uint32_t* out_mesh_count,
+                      uint32_t* out_vertex_count,
+                      uint32_t* out_triangle_count,
+                      uint64_t* out_memory_bytes,
+                      double*   out_build_ms);
+
+/* ------------------------------------------------------------------ */
+/*  Background parsing / progress / cancellation                       */
+/* ------------------------------------------------------------------ */
+
+/** Opaque handle to a background open job. */
+typedef struct OpenDocumentJob OpenDocumentJob;
+
+/** Create a new cancellation token. */
+void* mmf_cancel_token_new(void);
+
+/** Cancel the token (safe from any thread). */
+void mmf_cancel_token_cancel(const void* token);
+
+/** Free the cancellation token. */
+void mmf_cancel_token_free(void* token);
+
+/**
+ * Progress callback.  `stage` is valid only for the duration of the call.
+ * `user_data` is passed through from mmf_open_async.
+ */
+typedef void (*mmf_progress_fn)(const char* stage, uint32_t current,
+                                uint32_t total, void* user_data);
+
+/**
+ * Completion callback.  `doc` is non-null on success, null on error.
+ * `user_data` is passed through from mmf_open_async.
+ */
+typedef void (*mmf_completion_fn)(MmfDocument* doc, void* user_data);
+
+/**
+ * Start an async document open.  Returns a job handle.
+ * The completion callback is called from a background thread.
+ * On success, the caller takes ownership of the MmfDocument pointer.
+ */
+OpenDocumentJob* mmf_open_async(const char* path,
+                                const void* cancel_token,
+                                mmf_progress_fn progress_cb,
+                                mmf_completion_fn completion_cb,
+                                void* user_data);
+
+/** Cancel a running job. */
+void mmf_open_job_cancel(const OpenDocumentJob* job);
+
+/** Free the job handle (cancels if still running). */
+void mmf_open_job_free(OpenDocumentJob* job);
+
 /* ------------------------------------------------------------------ */
 /*  2D Drawing data                                                    */
 /* ------------------------------------------------------------------ */
