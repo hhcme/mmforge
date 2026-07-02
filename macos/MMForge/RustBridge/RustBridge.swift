@@ -474,7 +474,7 @@ extension RustBridge {
     }
 
     /// Upload all meshes of a single chunk into the Metal renderer.
-    /// Returns the number of meshes uploaded (0 if chunk invalid).
+    /// Returns the number of meshes actually uploaded (0 if chunk invalid).
     func uploadChunk(
         from docPtr: OpaquePointer,
         chunkIndex: UInt32,
@@ -485,6 +485,7 @@ extension RustBridge {
         let meshCount = Int(mmf_chunk_mesh_count(docPtr, chunkIndex))
         guard meshCount > 0 else { return 0 }
 
+        var uploaded = 0
         for mi in 0..<UInt32(meshCount) {
             let geomId = Int(mmf_chunk_mesh_geometry_id(docPtr, chunkIndex, mi))
             let vc = Int(mmf_chunk_mesh_vertex_count(docPtr, chunkIndex, mi))
@@ -504,8 +505,9 @@ extension RustBridge {
                 boundsMin: node?.boundsMin ?? .zero,
                 boundsMax: node?.boundsMax ?? .zero
             )
+            uploaded += 1
         }
-        return meshCount
+        return uploaded
     }
 
     /// Rebuild streaming packet with a different budget (clears then rebuilds).

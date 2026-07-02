@@ -195,4 +195,56 @@ final class AsyncParseTests: XCTestCase {
         XCTAssertNotNil(capturedStage, "parseStage should capture non-empty stage during parsing")
         cancellable.cancel()
     }
+
+    // MARK: - Streaming Path
+
+    /// Verify that `shouldStream` returns false for models below the threshold.
+    @MainActor
+    func testShouldStream_falseForSmallModel() {
+        let vm = DocumentViewModel()
+        // A single-triangle DTO is far below 100k threshold.
+        let dto = RenderPacketDTO(
+            meshes: [], sceneBoundsMin: .zero, sceneBoundsMax: .zero,
+            triangleCount: 1, nodeNames: [], nodes: [],
+            stats: RenderPacketDTO.ModelStats(nodeCount: 0, geometryCount: 0, materialCount: 0, triangleCount: 1, meshCount: 0)
+        )
+        XCTAssertFalse(vm.shouldStream(dto))
+    }
+
+    /// Verify that `shouldStream` returns true for models above the threshold.
+    @MainActor
+    func testShouldStream_trueForLargeModel() {
+        let vm = DocumentViewModel()
+        let dto = RenderPacketDTO(
+            meshes: [], sceneBoundsMin: .zero, sceneBoundsMax: .zero,
+            triangleCount: 200_000, nodeNames: [], nodes: [],
+            stats: RenderPacketDTO.ModelStats(nodeCount: 0, geometryCount: 0, materialCount: 0, triangleCount: 200_000, meshCount: 0)
+        )
+        XCTAssertTrue(vm.shouldStream(dto))
+    }
+
+    /// Verify that small models still use the full upload path (existing behaviour).
+    @MainActor
+    func testSmallModelUsesFullUploadPath() {
+        let vm = DocumentViewModel()
+        let expectation = expectation(description: "parse completes")
+        var loadedStateReached = false
+        let cancellable = vm.$state
+            .filter { state in
+                if case .loaded = state { return true }
+                if case .error = state { return true }
+                return false
+            }
+            .first()
+            .sink { state in
+                if case .loaded = state { loadedStateReached = true }
+                expectation.fulfill()
+            }
+
+        vm.parseFile(data: validSTLData, fileExtension: "stl")
+
+        wait(for: [expectation], timeout: 10.0)
+        XCTAssertTrue(loadedStateReached, "small model should load via full upload path")
+        cancellable.cancel()
+    }
 }

@@ -349,17 +349,22 @@ private func parseCompletionCallback(
             if let oldDoc = vm.rustDoc { RustBridge.shared.freeDocument(oldDoc) }
             vm.rustDoc = doc
             let dto = RustBridge.shared.buildDTO(from: doc)
-            vm.uploadToRenderer(dto: dto)
             vm.nodeNames = dto.nodeNames
             vm.nodes = dto.nodes
             vm.stats = dto.stats
             vm.initLayerState()
             vm.expandedIndices = [0]
-            vm.parseStage = ""
-            vm.parseProgress = 1
-            vm.state = .loaded(
-                triangleCount: dto.triangleCount, meshCount: dto.meshes.count,
-                nodeCount: dto.nodeNames.count)
+
+            if vm.shouldStream(dto) {
+                vm.uploadStreaming(dto: dto)
+            } else {
+                vm.uploadToRenderer(dto: dto)
+                vm.parseStage = ""
+                vm.parseProgress = 1
+                vm.state = .loaded(
+                    triangleCount: dto.triangleCount, meshCount: dto.meshes.count,
+                    nodeCount: dto.nodeNames.count)
+            }
         } else {
             vm.state = .error(errorCopy ?? "unknown error")
         }
@@ -409,6 +414,67 @@ extension DocumentViewModel {
         if clipEnabled {
             renderer.updateSectionFill()
         }
+    }
+
+    // MARK: - Streaming / progressive loading
+
+    /// Default chunk budget: 64 MB per chunk.
+    static let defaultChunkBudget: UInt32 = 64 * 1024 * 1024
+
+    /// Threshold for switching to streaming mode: models with over 100k
+    /// triangles use progressive chunk upload.
+    static let streamingTriangleThreshold = 100_000
+
+    /// Whether the model qualifies for streaming (progressive) upload.
+    func shouldStream(_ dto: RenderPacketDTO) -> Bool {
+        return dto.triangleCount > Self.streamingTriangleThreshold
+    }
+
+    /// Progressive chunk-based upload.
+    ///
+    /// Builds streaming chunks, clears the renderer, then uploads chunks
+    /// sequentially on the main thread.  Each chunk advances `parseStage`
+    /// and `parseProgress`.  When all chunks are done, state → `.loaded`.
+    func uploadStreaming(dto: RenderPacketDTO) {
+        guard let renderer, let doc = rustDoc else { return }
+
+        var geomIdToNodeIdx = [Int: Int]()
+        for (nodeIdx, node) in dto.nodes.enumerated() where node.geometryId >= 0 {
+            geomIdToNodeIdx[node.geometryId] = nodeIdx
+        }
+
+        let totalChunks = Int(buildChunks(budgetBytes: Self.defaultChunkBudget))
+        guard totalChunks > 0 else {
+            uploadToRenderer(dto: dto)
+            return
+        }
+
+        renderer.clearMeshes()
+        parseStage = "Uploading meshes..."
+
+        var uploadedMeshes = 0
+        for ci in 0..<UInt32(totalChunks) {
+            parseStage = "Uploading meshes (chunk \(ci + 1)/\(totalChunks))..."
+            parseProgress = Double(ci) / Double(totalChunks)
+
+            let count = RustBridge.shared.uploadChunk(
+                from: doc, chunkIndex: ci,
+                nodeMap: geomIdToNodeIdx, nodeInfos: dto.nodes,
+                into: renderer
+            )
+            uploadedMeshes += count
+        }
+
+        renderer.setSceneBounds(min: dto.sceneBoundsMin, max: dto.sceneBoundsMax)
+        if clipEnabled { renderer.updateSectionFill() }
+
+        parseStage = ""
+        parseProgress = 1
+        state = .loaded(
+            triangleCount: dto.triangleCount,
+            meshCount: uploadedMeshes,
+            nodeCount: dto.nodeNames.count
+        )
     }
 
     /// Upload a single streaming chunk into the renderer (progressive loading).
