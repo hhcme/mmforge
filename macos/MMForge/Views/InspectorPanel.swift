@@ -5,6 +5,7 @@ import simd
 struct InspectorPanel: View {
     @ObservedObject var viewModel: DocumentViewModel
     @State private var selectedTab = 0
+    @State private var annotationText: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -255,11 +256,68 @@ struct InspectorPanel: View {
                                 .font(.caption)
                                 .foregroundStyle(.orange)
                         }
+                        if viewModel.measurementType == .area && !viewModel.pendingPolygonPoints.isEmpty {
+                            Text("\(viewModel.pendingPolygonPoints.count) vertices. Click near first to close.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
                     } else if viewModel.pendingPoint != nil {
                         Text("First point set. Click second point.")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
+                }
+
+                // Annotation creation tools (2D only)
+                if viewModel.is2DDrawing {
+                    Divider()
+
+                    Text("Annotations")
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+
+                    HStack {
+                        TextField("Label text", text: $annotationText)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Add Text") {
+                            guard !annotationText.isEmpty else { return }
+                            let center = CGPoint(x: 0, y: 0) // Will be placed at click
+                            viewModel.addTextAnnotation(
+                                position: viewModel.pendingAnnotationPoint ?? center,
+                                text: annotationText)
+                            annotationText = ""
+                        }
+                        .disabled(annotationText.isEmpty)
+                    }
+
+                    Button("Add Dimension (from last 2 points)") {
+                        if viewModel.pendingPolygonPoints.count >= 2 {
+                            let pts = viewModel.pendingPolygonPoints
+                            viewModel.addDimensionAnnotation(
+                                start: pts[pts.count - 2],
+                                end: pts[pts.count - 1])
+                        } else if let p = viewModel.pendingAnnotationPoint {
+                            // Use pending point as one end, prompt for second
+                            viewModel.addDimensionAnnotation(
+                                start: p, end: CGPoint(x: p.x + 50, y: p.y))
+                        }
+                    }
+                    .disabled(viewModel.pendingAnnotationPoint == nil
+                              && viewModel.pendingPolygonPoints.count < 2)
+
+                    Button("Add Arrow (from last 2 points)") {
+                        if viewModel.pendingPolygonPoints.count >= 2 {
+                            let pts = viewModel.pendingPolygonPoints
+                            viewModel.addArrowAnnotation(
+                                tail: pts[pts.count - 2],
+                                head: pts[pts.count - 1])
+                        } else if let p = viewModel.pendingAnnotationPoint {
+                            viewModel.addArrowAnnotation(
+                                tail: p, head: CGPoint(x: p.x + 50, y: p.y))
+                        }
+                    }
+                    .disabled(viewModel.pendingAnnotationPoint == nil
+                              && viewModel.pendingPolygonPoints.count < 2)
                 }
 
                 Divider()

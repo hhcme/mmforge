@@ -182,51 +182,38 @@ class Drawing2DView: NSView {
             super.rightMouseDown(with: event)
             return
         }
-        // Cancel pending measurement.
-        pendingAnnotationPoint = nil
-        pendingPolygonPoints = []
+        annotationDelegate?.didCancelPending()
     }
 
     private func handleDistanceClick(_ worldPt: CGPoint) {
         if let pending = pendingAnnotationPoint {
             annotationDelegate?.didCompleteMeasurement(start: pending, end: worldPt)
-            pendingAnnotationPoint = nil
         } else {
-            pendingAnnotationPoint = worldPt
+            annotationDelegate?.didSetPendingPoint(worldPt)
         }
     }
 
     private func handleAngleClick(_ worldPt: CGPoint) {
         if pendingPolygonPoints.isEmpty {
-            // First click: vertex.
-            pendingPolygonPoints = [worldPt]
-            pendingAnnotationPoint = worldPt
+            annotationDelegate?.didSetPendingAngleVertex(worldPt)
         } else if pendingPolygonPoints.count == 1 {
-            // Second click: first ray point.
-            pendingPolygonPoints.append(worldPt)
+            annotationDelegate?.didSetPendingAngleRay(worldPt)
         } else {
-            // Third click: second ray point → complete angle.
             let vertex = pendingPolygonPoints[0]
             let p1 = pendingPolygonPoints[1]
             annotationDelegate?.didCompleteAngleMeasurement(vertex: vertex, p1: p1, p2: worldPt)
-            pendingPolygonPoints = []
-            pendingAnnotationPoint = nil
         }
     }
 
     private func handleAreaClick(_ worldPt: CGPoint) {
-        // Check if clicking near the first point to close the polygon.
         if pendingPolygonPoints.count >= 3 {
             let closeRadius = 8.0 / (zoomLevel * fitScale(screenBounds: bounds, worldRect: worldBounds))
             if Geometry2D.distance(worldPt, pendingPolygonPoints[0]) < closeRadius {
                 annotationDelegate?.didCompleteAreaMeasurement(points: pendingPolygonPoints)
-                pendingPolygonPoints = []
-                pendingAnnotationPoint = nil
                 return
             }
         }
-        pendingPolygonPoints.append(worldPt)
-        pendingAnnotationPoint = worldPt
+        annotationDelegate?.didAddPolygonPoint(worldPt)
     }
 
     // MARK: - Drawing
@@ -434,7 +421,7 @@ class Drawing2DView: NSView {
         }
     }
 
-    private func drawCommand(ctx: CGContext, cmd: DrawCommandDTO, scale: CGFloat) {
+    func drawCommand(ctx: CGContext, cmd: DrawCommandDTO, scale: CGFloat) {
         // Extract layer name and visibility from command.
         let layerName: String
         let visible: Bool
@@ -536,7 +523,7 @@ class Drawing2DView: NSView {
 
     // MARK: - Annotation Overlay
 
-    private func drawAnnotations(ctx: CGContext, scale: CGFloat) {
+    func drawAnnotations(ctx: CGContext, scale: CGFloat) {
         // Draw completed annotations.
         for ann in annotations {
             drawAnnotation(ctx: ctx, annotation: ann, scale: scale)
@@ -873,66 +860,58 @@ class Drawing2DView: NSView {
         nsString.draw(at: point, withAttributes: attrs)
     }
 
-    // MARK: - PDF Export
+    // MARK: - PDF Rendering (static, reused by DocumentViewModel)
 
-    /// Export the current 2D view as a PDF.
-    func exportPDF(annotations: [Annotation]) -> Data? {
-        let wb = worldBounds
-        guard wb.width > 0, wb.height > 0 else { return nil }
-
-        // Page size: fit drawing to A4 landscape with margin.
-        let pageW: CGFloat = 842  // A4 landscape width in points
-        let pageH: CGFloat = 595  // A4 landscape height in points
-        let margin: CGFloat = 36
-        let drawW = pageW - margin * 2
-        let drawH = pageH - margin * 2
-
-        let scaleX = drawW / wb.width
-        let scaleY = drawH / wb.height
+    /// Render draw commands and annotations into a PDF CGContext.
+    /// Uses the same `drawCommand` and `drawAnnotations` pipeline as screen
+    /// rendering, ensuring pixel-identical output.
+    static func renderPDF(
+        ctx: CGContext,
+        commands: [DrawCommandDTO],
+        annotations: [Annotation],
+        layerVisibility: [String: Bool],
+        worldBounds wb: CGRect,
+        pageWidth: CGFloat,
+        pageHeight: CGFloat,
+        margin: CGFloat
+    ) {
+        let drawW = pageWidth - margin * 2
+        let drawH = pageHeight - margin * 2
+        let scaleX = drawW / max(wb.width, 0.001)
+        let scaleY = drawH / max(wb.height, 0.001)
         let pdfScale = min(scaleX, scaleY)
 
-        let pdfBounds = CGRect(x: 0, y: 0, width: pageW, height: pageH)
-        let rendererBounds = CGRect(
-            x: margin + (drawW - wb.width * pdfScale) / 2,
-            y: margin + (drawH - wb.height * pdfScale) / 2,
-            width: wb.width * pdfScale,
-            height: wb.height * pdfScale)
+        let originX = margin + (drawW - wb.width * pdfScale) / 2
+        let originY = margin + (drawH - wb.height * pdfScale) / 2
 
-        let tmpURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mmforge_export_\(UUID().uuidString).pdf")
-        let pdfData = NSMutableData()
-        guard let consumer = CGDataConsumer(data: pdfData as CFMutableData) else { return nil }
-        var mediaBox = CGRect(x: 0, y: 0, width: pageW, height: pageH)
-        guard let pdfCtx = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else { return nil }
+        ctx.beginPDFPage(nil)
+        ctx.saveGState()
 
-        pdfCtx.beginPDFPage(nil)
-        pdfCtx.saveGState()
+        // PDF origin is bottom-left; flip to top-left.
+        ctx.translateBy(x: 0, y: pageHeight)
+        ctx.scaleBy(x: 1, y: -1)
 
-        // Translate to flip Y for PDF (origin top-left).
-        pdfCtx.translateBy(x: 0, y: pageH)
-        pdfCtx.scaleBy(x: 1, y: -1)
+        // Position and scale the drawing.
+        ctx.translateBy(x: originX, y: originY)
+        ctx.scaleBy(x: pdfScale, y: pdfScale)
+        ctx.translateBy(x: -wb.origin.x, y: -wb.origin.y)
 
-        // Apply drawing transform.
-        pdfCtx.translateBy(x: rendererBounds.origin.x, y: rendererBounds.origin.y)
-        pdfCtx.scaleBy(x: pdfScale, y: pdfScale)
-        pdfCtx.translateBy(x: -wb.origin.x, y: -wb.origin.y)
+        // Draw entities — use the same drawCommand method as screen rendering,
+        // which respects layer visibility, line types, line weights, and dash patterns.
+        // We create a temporary view instance to call the instance method.
+        let tmpView = Drawing2DView()
+        tmpView.layerVisibilityOverrides = layerVisibility
 
-        // Draw entities.
-        for cmd in drawCommands {
-            drawCommand(ctx: pdfCtx, cmd: cmd, scale: pdfScale)
+        for cmd in commands {
+            tmpView.drawCommand(ctx: ctx, cmd: cmd, scale: pdfScale)
         }
 
-        // Draw annotations.
-        let savedAnnotations = self.annotations
-        self.annotations = annotations
-        drawAnnotations(ctx: pdfCtx, scale: pdfScale)
-        self.annotations = savedAnnotations
+        // Draw annotations — reuse the same overlay pipeline.
+        tmpView.annotations = annotations
+        tmpView.drawAnnotations(ctx: ctx, scale: pdfScale)
 
-        pdfCtx.restoreGState()
-        pdfCtx.endPDFPage()
-        pdfCtx.closePDF()
-
-        return try? Data(contentsOf: tmpURL)
+        ctx.restoreGState()
+        ctx.endPDFPage()
     }
 
     // MARK: - Gestures
@@ -971,6 +950,11 @@ protocol Drawing2DAnnotationDelegate: AnyObject {
     func didCompleteMeasurement(start: CGPoint, end: CGPoint)
     func didCompleteAngleMeasurement(vertex: CGPoint, p1: CGPoint, p2: CGPoint)
     func didCompleteAreaMeasurement(points: [CGPoint])
+    func didSetPendingPoint(_ point: CGPoint)
+    func didSetPendingAngleVertex(_ point: CGPoint)
+    func didSetPendingAngleRay(_ point: CGPoint)
+    func didAddPolygonPoint(_ point: CGPoint)
+    func didCancelPending()
 }
 
 // MARK: - NSViewRepresentable wrapper

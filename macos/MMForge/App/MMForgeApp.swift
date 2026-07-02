@@ -97,6 +97,12 @@ struct ExportCommandsView: View {
             }
             .keyboardShortcut("e", modifiers: .command)
             .disabled(!(viewModel?.isLoaded ?? false))
+
+            Button("Export PDF…") {
+                viewModel?.exportPDF()
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .disabled(!(viewModel?.isLoaded ?? false))
         }
     }
 }

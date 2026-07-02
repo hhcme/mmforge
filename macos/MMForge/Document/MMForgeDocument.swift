@@ -668,7 +668,6 @@ final class DocumentViewModel: ObservableObject {
     }
 
     private func exportPDFToFile(url: URL) {
-        // Build PDF data using Core Graphics PDF context.
         guard let doc = rustDoc else {
             exportError = "No document loaded."
             return
@@ -687,18 +686,9 @@ final class DocumentViewModel: ObservableObject {
             width: info.boundsMaxX - info.boundsMinX,
             height: info.boundsMaxY - info.boundsMinY)
 
-        // A4 landscape.
-        let pageW: CGFloat = 842
+        let pageW: CGFloat = 842  // A4 landscape
         let pageH: CGFloat = 595
         let margin: CGFloat = 36
-        let drawW = pageW - margin * 2
-        let drawH = pageH - margin * 2
-        let scaleX = drawW / wb.width
-        let scaleY = drawH / wb.height
-        let pdfScale = min(scaleX, scaleY)
-
-        let originX = margin + (drawW - wb.width * pdfScale) / 2
-        let originY = margin + (drawH - wb.height * pdfScale) / 2
 
         guard let consumer = CGDataConsumer(url: url as CFURL) else {
             exportError = "Failed to create PDF data consumer."
@@ -710,211 +700,18 @@ final class DocumentViewModel: ObservableObject {
             return
         }
 
-        pdfCtx.beginPDFPage(nil)
-        pdfCtx.saveGState()
+        // Reuse the same rendering pipeline as the screen view.
+        Drawing2DView.renderPDF(
+            ctx: pdfCtx,
+            commands: drawCommands,
+            annotations: annotations,
+            layerVisibility: layerVisibility,
+            worldBounds: wb,
+            pageWidth: pageW,
+            pageHeight: pageH,
+            margin: margin)
 
-        // PDF origin is bottom-left; flip to top-left.
-        pdfCtx.translateBy(x: 0, y: pageH)
-        pdfCtx.scaleBy(x: 1, y: -1)
-
-        // Position and scale the drawing.
-        pdfCtx.translateBy(x: originX, y: originY)
-        pdfCtx.scaleBy(x: pdfScale, y: pdfScale)
-        pdfCtx.translateBy(x: -wb.origin.x, y: -wb.origin.y)
-
-        // Draw all commands.
-        let commands = drawCommands
-        for cmd in commands {
-            drawPDFCommand(ctx: pdfCtx, cmd: cmd, scale: pdfScale)
-        }
-
-        // Draw annotations.
-        for ann in annotations {
-            drawPDFAnnotation(ctx: pdfCtx, annotation: ann, scale: pdfScale)
-        }
-
-        pdfCtx.restoreGState()
-        pdfCtx.endPDFPage()
         pdfCtx.closePDF()
-    }
-
-    /// Draw a single draw command for PDF export (Core Graphics).
-    private func drawPDFCommand(ctx: CGContext, cmd: DrawCommandDTO, scale: CGFloat) {
-        let colorIdx: Int
-        // line(x0,y0,x1,y1, layerIdx,layerName,colorIdx,visible, lineType,lineWeight,lineDash)
-        // circle(cx,cy,r, layerIdx,layerName,colorIdx,visible, lineType,lineWeight,lineDash)
-        // arc(cx,cy,r,start,end,ccw, layerIdx,layerName,colorIdx,visible, lineType,lineWeight,lineDash)
-        // polyline(pts,closed, layerIdx,layerName,colorIdx,visible, lineType,lineWeight,lineDash)
-        // text(x,y,content,h,rot, layerIdx,layerName,colorIdx,visible)
-        switch cmd {
-        case .line(_, _, _, _, _, _, let ci, _, _, _, _): colorIdx = ci
-        case .circle(_, _, _, _, _, let ci, _, _, _, _): colorIdx = ci
-        case .arc(_, _, _, _, _, _, _, _, let ci, _, _, _, _): colorIdx = ci
-        case .polyline(_, _, _, _, let ci, _, _, _, _): colorIdx = ci
-        case .text(_, _, _, _, _, _, _, let ci, _): colorIdx = ci
-        }
-
-        let aciColor: CGColor
-        switch colorIdx {
-        case 1: aciColor = CGColor(red: 1, green: 0, blue: 0, alpha: 1)
-        case 2: aciColor = CGColor(red: 1, green: 1, blue: 0, alpha: 1)
-        case 3: aciColor = CGColor(red: 0, green: 1, blue: 0, alpha: 1)
-        case 4: aciColor = CGColor(red: 0, green: 1, blue: 1, alpha: 1)
-        case 5: aciColor = CGColor(red: 0, green: 0, blue: 1, alpha: 1)
-        case 6: aciColor = CGColor(red: 1, green: 0, blue: 1, alpha: 1)
-        default: aciColor = CGColor(red: 0, green: 0, blue: 0, alpha: 1)
-        }
-
-        ctx.setStrokeColor(aciColor)
-        ctx.setLineWidth(0.5)
-        ctx.setLineDash(phase: 0, lengths: [])
-
-        switch cmd {
-        case .line(let x0, let y0, let x1, let y1, _, _, _, _, _, _, _):
-            ctx.beginPath()
-            ctx.move(to: CGPoint(x: x0, y: y0))
-            ctx.addLine(to: CGPoint(x: x1, y: y1))
-            ctx.strokePath()
-
-        case .circle(let cx, let cy, let r, _, _, _, _, _, _, _):
-            ctx.strokeEllipse(in: CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2))
-
-        case .arc(let cx, let cy, let r, let startAngle, let endAngle, let ccw,
-                  _, _, _, _, _, _, _):
-            ctx.beginPath()
-            ctx.addArc(center: CGPoint(x: cx, y: cy), radius: r,
-                       startAngle: startAngle, endAngle: endAngle, clockwise: !ccw)
-            ctx.strokePath()
-
-        case .polyline(let points, let closed, _, _, _, _, _, _, _):
-            guard !points.isEmpty else { return }
-            ctx.beginPath()
-            ctx.move(to: CGPoint(x: points[0].0, y: points[0].1))
-            for i in 1..<points.count {
-                ctx.addLine(to: CGPoint(x: points[i].0, y: points[i].1))
-            }
-            if closed { ctx.closePath() }
-            ctx.strokePath()
-
-        case .text(let x, let y, let content, let height, let rotation, _, _, _, _):
-            guard !content.isEmpty else { return }
-            let font = NSFont.systemFont(ofSize: max(1, height))
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: font, .foregroundColor: aciColor]
-            ctx.saveGState()
-            ctx.translateBy(x: x, y: y)
-            ctx.rotate(by: rotation * .pi / 180)
-            ctx.scaleBy(x: 1, y: -1)
-            (content as NSString).draw(at: .zero, withAttributes: attrs)
-            ctx.restoreGState()
-        }
-    }
-
-    /// Draw an annotation for PDF export.
-    private func drawPDFAnnotation(ctx: CGContext, annotation: Annotation, scale: CGFloat) {
-        let color = annotation.color.cgColor
-        ctx.setStrokeColor(color)
-        ctx.setFillColor(color)
-        ctx.setLineWidth(0.75)
-
-        switch annotation.kind {
-        case .measurement(let start, let end):
-            ctx.setLineDash(phase: 0, lengths: [3, 2])
-            ctx.beginPath()
-            ctx.move(to: start)
-            ctx.addLine(to: end)
-            ctx.strokePath()
-            ctx.setLineDash(phase: 0, lengths: [])
-            let dist = Geometry2D.distance(start, end)
-            let mid = CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
-            let font = NSFont.systemFont(ofSize: 8)
-            (String(format: "%.2f", dist) as NSString).draw(
-                at: CGPoint(x: mid.x + 2, y: mid.y + 2),
-                withAttributes: [.font: font, .foregroundColor: color])
-
-        case .angleMeasurement(let vertex, let p1, let p2):
-            ctx.beginPath()
-            ctx.move(to: vertex); ctx.addLine(to: p1)
-            ctx.move(to: vertex); ctx.addLine(to: p2)
-            ctx.strokePath()
-            let angle = Geometry2D.angleDegrees(vertex: vertex, p1: p1, p2: p2)
-            let font = NSFont.systemFont(ofSize: 8)
-            (String(format: "%.1f°", angle) as NSString).draw(
-                at: CGPoint(x: vertex.x + 5, y: vertex.y + 5),
-                withAttributes: [.font: font, .foregroundColor: color])
-
-        case .areaMeasurement(let points):
-            guard points.count >= 3 else { return }
-            ctx.setFillColor(color.copy(alpha: 0.1) ?? color)
-            ctx.beginPath()
-            ctx.move(to: points[0])
-            for i in 1..<points.count { ctx.addLine(to: points[i]) }
-            ctx.closePath()
-            ctx.fillPath()
-            ctx.strokePath()
-            if let centroid = Geometry2D.centroid(points) {
-                let area = Geometry2D.area(points)
-                let font = NSFont.systemFont(ofSize: 8)
-                (String(format: "%.2f", area) as NSString).draw(
-                    at: centroid,
-                    withAttributes: [.font: font, .foregroundColor: color])
-            }
-
-        case .dimension(let start, let end, let offset):
-            let dx = end.x - start.x
-            let dy = end.y - start.y
-            let len = sqrt(dx * dx + dy * dy)
-            guard len > 1e-10 else { return }
-            let nx = -dy / len * offset
-            let ny = dx / len * offset
-            let dStart = CGPoint(x: start.x + nx, y: start.y + ny)
-            let dEnd = CGPoint(x: end.x + nx, y: end.y + ny)
-            ctx.beginPath()
-            ctx.move(to: start); ctx.addLine(to: dStart)
-            ctx.move(to: end); ctx.addLine(to: dEnd)
-            ctx.move(to: dStart); ctx.addLine(to: dEnd)
-            ctx.strokePath()
-            let dist = Geometry2D.distance(start, end)
-            let mid = CGPoint(x: (dStart.x + dEnd.x) / 2, y: (dStart.y + dEnd.y) / 2)
-            let font = NSFont.systemFont(ofSize: 8)
-            (String(format: "%.2f", dist) as NSString).draw(
-                at: mid, withAttributes: [.font: font, .foregroundColor: color])
-
-        case .textAnnotation(let position, let text, let fontSize):
-            let font = NSFont.systemFont(ofSize: max(6, fontSize))
-            (text as NSString).draw(
-                at: position,
-                withAttributes: [.font: font, .foregroundColor: color])
-
-        case .arrowAnnotation(let tail, let head, let text):
-            ctx.beginPath()
-            ctx.move(to: tail)
-            ctx.addLine(to: head)
-            ctx.strokePath()
-            // Arrowhead.
-            let dx = head.x - tail.x
-            let dy = head.y - tail.y
-            let len = sqrt(dx * dx + dy * dy)
-            if len > 1e-10 {
-                let ux = dx / len, uy = dy / len
-                let px = -uy, py = ux
-                let s: CGFloat = 4
-                ctx.beginPath()
-                ctx.move(to: head)
-                ctx.addLine(to: CGPoint(x: head.x - ux * s + px * s * 0.4,
-                                        y: head.y - uy * s + py * s * 0.4))
-                ctx.addLine(to: CGPoint(x: head.x - ux * s - px * s * 0.4,
-                                        y: head.y - uy * s - py * s * 0.4))
-                ctx.closePath()
-                ctx.fillPath()
-            }
-            if let text, !text.isEmpty {
-                let font = NSFont.systemFont(ofSize: 8)
-                (text as NSString).draw(
-                    at: CGPoint(x: tail.x - 10, y: tail.y - 10),
-                    withAttributes: [.font: font, .foregroundColor: color])
-            }
-        }
     }
 
     // MARK: - Tree expand/collapse
@@ -1065,5 +862,28 @@ extension DocumentViewModel: Drawing2DAnnotationDelegate {
 
     func didCompleteAreaMeasurement(points: [CGPoint]) {
         add2DAreaMeasurement(points: points)
+    }
+
+    func didSetPendingPoint(_ point: CGPoint) {
+        pendingAnnotationPoint = point
+    }
+
+    func didSetPendingAngleVertex(_ point: CGPoint) {
+        pendingPolygonPoints = [point]
+        pendingAnnotationPoint = point
+    }
+
+    func didSetPendingAngleRay(_ point: CGPoint) {
+        pendingPolygonPoints.append(point)
+    }
+
+    func didAddPolygonPoint(_ point: CGPoint) {
+        pendingPolygonPoints.append(point)
+        pendingAnnotationPoint = point
+    }
+
+    func didCancelPending() {
+        pendingAnnotationPoint = nil
+        pendingPolygonPoints = []
     }
 }
