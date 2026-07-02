@@ -6,10 +6,30 @@
 //! is not available.
 
 use crate::detect::detect_step;
+use mmforge_core::cancel::CancellationToken;
 use mmforge_core::error::Error;
 use mmforge_core::model::ParseOutput;
 use mmforge_core::parser::{DetectionResult, FormatParser};
+use mmforge_core::progress::{ParseProgress, ProgressCallback};
 use std::path::Path;
+
+fn report_progress(
+    progress: Option<&ProgressCallback>,
+    stage: &'static str,
+    current: u32,
+    total: u32,
+) {
+    if let Some(cb) = progress {
+        cb(&ParseProgress::new(stage, current, total));
+    }
+}
+
+fn check_cancel(cancel: Option<&CancellationToken>) -> mmforge_core::error::Result<()> {
+    if cancel.is_some_and(|c| c.is_cancelled()) {
+        return Err(Error::Cancelled);
+    }
+    Ok(())
+}
 
 /// STEP file parser.
 ///
@@ -42,7 +62,18 @@ impl FormatParser for StepParser {
     }
 
     fn parse(&self, path: &Path) -> mmforge_core::error::Result<ParseOutput> {
-        // Read the file header for detection validation.
+        let never_cancel = CancellationToken::new();
+        self.parse_with_progress(path, None, &never_cancel)
+    }
+
+    fn parse_with_progress(
+        &self,
+        path: &Path,
+        progress: Option<&ProgressCallback>,
+        cancel: &CancellationToken,
+    ) -> mmforge_core::error::Result<ParseOutput> {
+        check_cancel(Some(cancel))?;
+        report_progress(progress, "reading", 0, 0);
         let header_bytes = read_header(path)?;
 
         // Verify this is actually a STEP file.
@@ -58,11 +89,12 @@ impl FormatParser for StepParser {
         // Delegate to OCCT if available.
         #[cfg(feature = "occt")]
         {
-            occt_parse(path)
+            occt_parse_with_progress(path, progress, cancel)
         }
 
         #[cfg(not(feature = "occt"))]
         {
+            let _ = (progress, cancel);
             Err(Error::parse(
                 "STEP",
                 "OCCT feature not enabled — compile with --features occt to enable STEP parsing",
@@ -81,15 +113,27 @@ fn read_header(path: &Path) -> mmforge_core::error::Result<Vec<u8>> {
     Ok(buf)
 }
 
-/// OCCT-backed parsing.  Only compiled when `occt` feature is enabled.
+/// OCCT-backed parsing with progress and cancellation.
+///
+/// Cancellation is checked before the expensive OCCT read/tessellation
+/// operation.  OCCT itself does not support mid-operation cancellation, so
+/// this is a best-effort boundary check.
 #[cfg(feature = "occt")]
-fn occt_parse(path: &Path) -> mmforge_core::error::Result<ParseOutput> {
+fn occt_parse_with_progress(
+    path: &Path,
+    progress: Option<&ProgressCallback>,
+    cancel: &CancellationToken,
+) -> mmforge_core::error::Result<ParseOutput> {
     use mmforge_core::ids::{GeometryId, NodeId};
     use mmforge_core::model::{LsmModel, Node, ParseWarning};
 
+    check_cancel(Some(cancel))?;
+    report_progress(progress, "parsing", 0, 1);
     let step_data = mmforge_geometry::occt::step_reader::read_step_file(path)
         .map_err(|e| Error::parse("STEP", format!("OCCT read failed: {e}")))?;
 
+    check_cancel(Some(cancel))?;
+    report_progress(progress, "building", 0, 1);
     // Convert OCCT transfer messages to parse warnings.
     let mut warnings: Vec<ParseWarning> = step_data
         .transfer_messages
@@ -123,6 +167,7 @@ fn occt_parse(path: &Path) -> mmforge_core::error::Result<ParseOutput> {
 
     // Add each shape as a child of the root assembly node.
     for (i, shape) in shapes.iter().enumerate() {
+        check_cancel(Some(cancel))?;
         let child_id = NodeId::new(i as u32 + 1); // +1 because root is 0
         let geom_id = GeometryId::new(i as u32);
         let bounds = shape.bounds;
@@ -197,11 +242,57 @@ pub fn parse_step_with_tessellation(
     ParseOutput,
     mmforge_geometry::tessellation::TessellationRegistry,
 )> {
-    // Read STEP + tessellate in one pass (reader alive during tessellation).
-    let (step_data, registry) =
-        mmforge_geometry::occt::step_reader::read_step_file_with_tessellation(path)
-            .map_err(|e| Error::parse("STEP", format!("OCCT read/tessellate failed: {e}")))?;
+    parse_step_with_tessellation_with_progress(path, None, &CancellationToken::new())
+}
 
+/// Parse a STEP file with optional progress reporting and cancellation.
+///
+/// Cancellation is checked before the expensive OCCT read/tessellation
+/// and between shapes.  OCCT does not support mid-operation cancellation,
+/// so this is a best-effort boundary check.
+pub fn parse_step_with_tessellation_with_progress(
+    path: &Path,
+    progress: Option<&ProgressCallback>,
+    cancel: &CancellationToken,
+) -> mmforge_core::error::Result<(
+    ParseOutput,
+    mmforge_geometry::tessellation::TessellationRegistry,
+)> {
+    #[cfg(feature = "occt")]
+    {
+        check_cancel(Some(cancel))?;
+        report_progress(progress, "parsing", 0, 1);
+        // Read STEP + tessellate in one pass (reader alive during tessellation).
+        let (step_data, registry) =
+            mmforge_geometry::occt::step_reader::read_step_file_with_tessellation(path)
+                .map_err(|e| Error::parse("STEP", format!("OCCT read/tessellate failed: {e}")))?;
+
+        check_cancel(Some(cancel))?;
+        report_progress(progress, "building", 0, 1);
+        build_step_model_from_data(path, step_data, registry, cancel)
+    }
+
+    #[cfg(not(feature = "occt"))]
+    {
+        let _ = (progress, cancel);
+        let _path = path;
+        Err(Error::parse(
+            "STEP",
+            "OCCT feature not enabled — compile with --features occt to enable STEP parsing",
+        ))
+    }
+}
+
+#[cfg(feature = "occt")]
+fn build_step_model_from_data(
+    path: &Path,
+    step_data: mmforge_geometry::occt::step_reader::StepData,
+    registry: mmforge_geometry::tessellation::TessellationRegistry,
+    cancel: &CancellationToken,
+) -> mmforge_core::error::Result<(
+    ParseOutput,
+    mmforge_geometry::tessellation::TessellationRegistry,
+)> {
     // Convert transfer messages to warnings.
     let mut warnings: Vec<mmforge_core::model::ParseWarning> = step_data
         .transfer_messages
@@ -232,6 +323,7 @@ pub fn parse_step_with_tessellation(
     });
 
     for (i, shape) in shapes.iter().enumerate() {
+        check_cancel(Some(cancel))?;
         let child_id = mmforge_core::ids::NodeId::new(i as u32 + 1);
         let geom_id = mmforge_core::ids::GeometryId::new(i as u32);
         let display_label = format!("{} [{:?}]", shape.label, shape.shape_type);

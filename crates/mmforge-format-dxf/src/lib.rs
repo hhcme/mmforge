@@ -12,5 +12,5 @@ pub mod section_parser;
 pub mod tables_parser;
 pub mod tokenizer;
 
-pub use parser::{DxfParser, parse_dxf};
+pub use parser::{DxfParser, parse_dxf, parse_dxf_with_progress};
 pub use tokenizer::DxfTokenizer;

@@ -48,8 +48,6 @@ fn bench_tokenizer(c: &mut Criterion) {
 }
 
 fn bench_build_draw_list(c: &mut Criterion) {
-    use mmforge_core::drawing::Drawing2DGeometry;
-
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("testdata")
         .join("test.dxf");

@@ -181,18 +181,23 @@ pub(crate) fn parse_with_detection(
 
     // Detection cascade: DXF → STL → glTF → IGES → STEP (fallback).
     let result = if dxf_detector::detect_dxf(header, path) {
-        mmforge_format_dxf::parse_dxf(path)
+        mmforge_format_dxf::parse_dxf_with_progress(path, progress, Some(cancel))
             .map(|(output, _drawing)| (output, TessellationRegistry::new()))
     } else if stl_parser::detect_stl(header, path) {
-        stl_parser::parse_stl(path)
+        stl_parser::parse_stl_with_progress(path, progress, Some(cancel))
     } else if gltf_parser::detect_gltf(header, path) {
-        gltf_parser::parse_gltf(path)
+        gltf_parser::parse_gltf_with_progress(path, progress, Some(cancel))
     } else if iges_detector::detect_iges(header, path) {
-        mmforge_format_iges::parse_iges_with_tessellation(path)
+        mmforge_format_iges::parse_iges_with_tessellation_with_progress(path, progress, cancel)
     } else {
         // Default: try STEP (most flexible detection).
-        mmforge_format_step::parse_step_with_tessellation(path)
+        mmforge_format_step::parse_step_with_tessellation_with_progress(path, progress, cancel)
     };
+
+    // Check cancellation before the expensive build step.
+    if cancel.is_cancelled() {
+        return Err(mmforge_core::error::Error::Cancelled);
+    }
 
     if let Some(cb) = progress {
         cb(&mmforge_core::progress::ParseProgress::new(

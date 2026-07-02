@@ -168,17 +168,27 @@ void mmf_cancel_token_cancel(const void* token);
 void mmf_cancel_token_free(void* token);
 
 /**
- * Progress callback.  `stage` is valid only for the duration of the call.
+ * Progress callback.  `stage` is valid only for the duration of the call —
+ * copy it before dispatching to another thread.
  * `user_data` is passed through from mmf_open_async.
  */
 typedef void (*mmf_progress_fn)(const char* stage, uint32_t current,
                                 uint32_t total, void* user_data);
 
 /**
- * Completion callback.  `doc` is non-null on success, null on error.
+ * Completion callback.  Called from a background thread.
+ *
+ * On success: `doc` is non-null, `error` is NULL.  Caller takes ownership
+ * of `doc` via mmf_document_free().
+ *
+ * On failure: `doc` is NULL, `error` points to a UTF-8 error message
+ * valid only for the duration of this callback.
+ *
  * `user_data` is passed through from mmf_open_async.
  */
-typedef void (*mmf_completion_fn)(MmfDocument* doc, void* user_data);
+typedef void (*mmf_completion_fn)(MmfDocument* doc,
+                                  const char* error,
+                                  void* user_data);
 
 /**
  * Start an async document open.  Returns a job handle.
@@ -194,7 +204,10 @@ OpenDocumentJob* mmf_open_async(const char* path,
 /** Cancel a running job. */
 void mmf_open_job_cancel(const OpenDocumentJob* job);
 
-/** Free the job handle (cancels if still running). */
+/**
+ * Free the job handle.  Cancels the token and detaches the background
+ * thread (non-blocking).  The completion callback may still fire.
+ */
 void mmf_open_job_free(OpenDocumentJob* job);
 
 /* ------------------------------------------------------------------ */

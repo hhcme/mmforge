@@ -3,12 +3,14 @@
 
 use std::path::Path;
 
+use mmforge_core::cancel::CancellationToken;
 use mmforge_core::drawing::Drawing2DGeometry;
 use mmforge_core::error::{Error, Result};
 use mmforge_core::ids::{GeometryId, NodeId};
 use mmforge_core::math::BoundingBox;
 use mmforge_core::model::{Geometry, LsmModel, Node, ParseOutput, ParseStats, ParseWarning};
 use mmforge_core::parser::{DetectionResult, FormatParser};
+use mmforge_core::progress::{ParseProgress, ProgressCallback};
 
 use crate::blocks_parser::parse_blocks;
 use crate::detect::detect_dxf;
@@ -46,18 +48,65 @@ impl FormatParser for DxfParser {
     }
 
     fn parse(&self, path: &Path) -> Result<ParseOutput> {
-        parse_dxf(path).map(|(output, _drawing)| output)
+        parse_dxf_with_progress(path, None, None).map(|(output, _)| output)
     }
+
+    fn parse_with_progress(
+        &self,
+        path: &Path,
+        progress: Option<&ProgressCallback>,
+        cancel: &CancellationToken,
+    ) -> Result<ParseOutput> {
+        parse_dxf_with_progress(path, progress, Some(cancel)).map(|(output, _)| output)
+    }
+}
+
+fn report_progress(
+    progress: Option<&ProgressCallback>,
+    stage: &'static str,
+    current: u32,
+    total: u32,
+) {
+    if let Some(cb) = progress {
+        cb(&ParseProgress::new(stage, current, total));
+    }
+}
+
+fn check_cancel(cancel: Option<&CancellationToken>) -> Result<()> {
+    if cancel.is_some_and(|c| c.is_cancelled()) {
+        return Err(Error::Cancelled);
+    }
+    Ok(())
 }
 
 /// Parse a DXF file into an [`ParseOutput`] and the raw drawing geometry.
 ///
 /// Returns both the LSM model (for the scene tree / bridge) and the
 /// [`Drawing2DGeometry`] (for the 2D draw list pipeline).
+///
+/// This is the legacy entry point without cancellation.  New callers should
+/// use [`parse_dxf_with_progress`].
 pub fn parse_dxf(path: &Path) -> Result<(ParseOutput, Drawing2DGeometry)> {
+    parse_dxf_with_progress(path, None, None)
+}
+
+/// Parse a DXF file with optional progress reporting and cancellation.
+///
+/// The cancellation token is checked between major stages: file read,
+/// tokenization, section parsing, block/entity parsing, and model building.
+/// This keeps the per-check overhead negligible while still allowing the
+/// user to abort a long parse.
+pub fn parse_dxf_with_progress(
+    path: &Path,
+    progress: Option<&ProgressCallback>,
+    cancel: Option<&CancellationToken>,
+) -> Result<(ParseOutput, Drawing2DGeometry)> {
+    check_cancel(cancel)?;
+    report_progress(progress, "reading", 0, 0);
     let content = std::fs::read_to_string(path).map_err(Error::Io)?;
 
-    // Step 1: Tokenize.
+    check_cancel(cancel)?;
+    report_progress(progress, "tokenizing", 0, 1);
     let mut tokenizer = DxfTokenizer::new(&content);
     let pairs = tokenizer.collect_all();
 
@@ -68,14 +117,16 @@ pub fn parse_dxf(path: &Path) -> Result<(ParseOutput, Drawing2DGeometry)> {
         ));
     }
 
-    // Step 2: Parse sections.
+    check_cancel(cancel)?;
+    report_progress(progress, "parsing", 0, 1);
     let sections = parse_sections(&pairs);
     let mut warnings = Vec::new();
 
-    // Step 3: Parse TABLES → layers and line types.
+    // Parse TABLES → layers and line types.
     let mut layers = Vec::new();
     let mut line_types = Vec::new();
     for section in &sections {
+        check_cancel(cancel)?;
         if section.name == "TABLES" {
             layers = parse_layers(&section.pairs);
             line_types = parse_line_types(&section.pairs);
@@ -92,17 +143,19 @@ pub fn parse_dxf(path: &Path) -> Result<(ParseOutput, Drawing2DGeometry)> {
         });
     }
 
-    // Step 4: Parse BLOCKS.
+    // Parse BLOCKS.
     let mut blocks = Vec::new();
     for section in &sections {
+        check_cancel(cancel)?;
         if section.name == "BLOCKS" {
             blocks = parse_blocks(&section.pairs);
         }
     }
 
-    // Step 5: Parse ENTITIES.
+    // Parse ENTITIES.
     let mut entities = Vec::new();
     for section in &sections {
+        check_cancel(cancel)?;
         if section.name == "ENTITIES" {
             entities = parse_entities(&section.pairs);
         }
@@ -122,6 +175,8 @@ pub fn parse_dxf(path: &Path) -> Result<(ParseOutput, Drawing2DGeometry)> {
         });
     }
 
+    check_cancel(cancel)?;
+    report_progress(progress, "building", 0, 1);
     // Build Drawing2DGeometry and expand INSERTs.
     let mut drawing = Drawing2DGeometry {
         entities,

@@ -8,6 +8,7 @@ use std::path::Path;
 use base64::Engine;
 
 use glam::{Mat4, Quat, Vec3};
+use mmforge_core::cancel::CancellationToken;
 use mmforge_core::error::{Error, Result};
 use mmforge_core::ids::{GeometryId, MaterialId, NodeId};
 use mmforge_core::math::BoundingBox;
@@ -15,6 +16,7 @@ use mmforge_core::model::{
     Geometry, LsmModel, Material as LsmMaterial, MeshGeometry, Node as LsmNode, ParseOutput,
     ParseStats, ParseWarning,
 };
+use mmforge_core::progress::{ParseProgress, ProgressCallback};
 use mmforge_geometry::tessellation::{TessellatedMeshData, TessellationRegistry};
 
 /// Detect if a file is glTF/GLB.
@@ -38,9 +40,45 @@ pub fn detect_gltf(header: &[u8], path: &Path) -> bool {
     false
 }
 
+fn report_progress(
+    progress: Option<&ProgressCallback>,
+    stage: &'static str,
+    current: u32,
+    total: u32,
+) {
+    if let Some(cb) = progress {
+        cb(&ParseProgress::new(stage, current, total));
+    }
+}
+
+fn check_cancel(cancel: Option<&CancellationToken>) -> Result<()> {
+    if cancel.is_some_and(|c| c.is_cancelled()) {
+        return Err(Error::Cancelled);
+    }
+    Ok(())
+}
+
 /// Parse a glTF/GLB file into a model + tessellation registry.
 pub fn parse_gltf(path: &Path) -> Result<(ParseOutput, TessellationRegistry)> {
+    parse_gltf_with_progress(path, None, None)
+}
+
+/// Parse a glTF/GLB file with optional progress reporting and cancellation.
+///
+/// Cancellation is checked at file read, during buffer loading, during
+/// scene/material processing, and inside `extract_primitive` for large
+/// meshes.
+pub fn parse_gltf_with_progress(
+    path: &Path,
+    progress: Option<&ProgressCallback>,
+    cancel: Option<&CancellationToken>,
+) -> Result<(ParseOutput, TessellationRegistry)> {
+    check_cancel(cancel)?;
+    report_progress(progress, "reading", 0, 0);
     let gltf_data = std::fs::read(path).map_err(Error::Io)?;
+
+    check_cancel(cancel)?;
+    report_progress(progress, "parsing", 0, 1);
     let gltf = gltf::Gltf::from_slice(&gltf_data)
         .map_err(|e| Error::parse("glTF", format!("failed to parse: {e}")))?;
 
@@ -57,6 +95,7 @@ pub fn parse_gltf(path: &Path) -> Result<(ParseOutput, TessellationRegistry)> {
     let mut warnings: Vec<ParseWarning> = Vec::new();
     let base_dir = path.parent().unwrap_or(Path::new("."));
     for buf in gltf.buffers() {
+        check_cancel(cancel)?;
         match buf.source() {
             gltf::buffer::Source::Uri(uri) => {
                 if uri.starts_with("data:") {
@@ -110,6 +149,7 @@ pub fn parse_gltf(path: &Path) -> Result<(ParseOutput, TessellationRegistry)> {
     // Collect materials.
     let mut materials = Vec::new();
     for mat in gltf.materials() {
+        check_cancel(cancel)?;
         let pbr = mat.pbr_metallic_roughness();
         let base = pbr.base_color_factor();
         let name = mat.name().unwrap_or("Material").to_string();
@@ -129,6 +169,7 @@ pub fn parse_gltf(path: &Path) -> Result<(ParseOutput, TessellationRegistry)> {
 
     for scene in gltf.scenes() {
         for node in scene.nodes() {
+            check_cancel(cancel)?;
             process_gltf_node(
                 &node,
                 Mat4::IDENTITY,
@@ -141,9 +182,13 @@ pub fn parse_gltf(path: &Path) -> Result<(ParseOutput, TessellationRegistry)> {
                 &mut total_triangles,
                 &mut warnings,
                 None,
+                cancel,
             );
         }
     }
+
+    check_cancel(cancel)?;
+    report_progress(progress, "building", 0, 1);
 
     // --- Fix multi-root: create synthetic assembly root if needed ---
     let orphan_root_ids: Vec<NodeId> = model
@@ -228,6 +273,7 @@ fn process_gltf_node(
     total_triangles: &mut usize,
     warnings: &mut Vec<ParseWarning>,
     parent_id: Option<NodeId>,
+    cancel: Option<&CancellationToken>,
 ) {
     let node_id = NodeId::new(*next_node_id);
     *next_node_id += 1;
@@ -262,7 +308,7 @@ fn process_gltf_node(
             let geom_id = GeometryId::new(*next_geom_id);
             *next_geom_id += 1;
 
-            match extract_primitive(&primitive, buffers, world_transform) {
+            match extract_primitive(&primitive, buffers, world_transform, cancel) {
                 Ok((positions, normals, indices, bounds)) => {
                     let tri_count = indices.len() / 3;
                     *total_triangles += tri_count;
@@ -363,6 +409,7 @@ fn process_gltf_node(
             total_triangles,
             warnings,
             Some(node_id),
+            cancel,
         );
     }
 }
@@ -399,6 +446,7 @@ fn extract_primitive(
     primitive: &gltf::Primitive,
     buffers: &[Vec<u8>],
     transform: Mat4,
+    cancel: Option<&CancellationToken>,
 ) -> Result<(Vec<f32>, Vec<f32>, Vec<u32>, BoundingBox)> {
     let reader = primitive.reader(|buffer| buffers.get(buffer.index()).map(|b| b.as_slice()));
 
@@ -411,7 +459,11 @@ fn extract_primitive(
     // Transform positions.
     let mut positions = Vec::with_capacity(raw_positions.len() * 3);
     let mut bounds = BoundingBox::EMPTY;
-    for p in &raw_positions {
+    for (idx, p) in raw_positions.iter().enumerate() {
+        // Check cancellation every 1024 vertices to keep overhead low.
+        if idx % 1024 == 0 {
+            check_cancel(cancel)?;
+        }
         let v = transform.transform_point3(Vec3::new(p[0], p[1], p[2]));
         positions.extend_from_slice(&[v.x, v.y, v.z]);
         bounds.extend_point(v);
@@ -420,7 +472,10 @@ fn extract_primitive(
     // Read normals (optional).
     let normals = if let Some(normals_iter) = reader.read_normals() {
         let mut norms = Vec::with_capacity(raw_positions.len() * 3);
-        for n in normals_iter {
+        for (idx, n) in normals_iter.enumerate() {
+            if idx % 1024 == 0 {
+                check_cancel(cancel)?;
+            }
             let v = transform.transform_vector3(Vec3::new(n[0], n[1], n[2]));
             norms.extend_from_slice(&[v.x, v.y, v.z]);
         }
@@ -581,6 +636,16 @@ mod tests {
         let mesh_data = registry.get(&geom_id).unwrap();
         assert_eq!(mesh_data.indices.len(), 3); // 1 triangle
         assert_eq!(mesh_data.positions.len(), 3); // 3 vertices
+    }
+
+    #[test]
+    fn parse_gltf_cancellation_returns_error() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let json = minimal_triangle_gltf();
+        let tmp = write_temp_gltf(&json);
+        let result = parse_gltf_with_progress(tmp.path(), None, Some(&token));
+        assert!(matches!(result, Err(Error::Cancelled)));
     }
 
     #[test]

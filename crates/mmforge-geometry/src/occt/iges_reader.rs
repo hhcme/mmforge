@@ -70,10 +70,10 @@ pub fn read_iges_file_with_tessellation(
 }
 
 // ---------------------------------------------------------------------------
-// OCCT-backed implementation
+// OCCT-backed implementation (only when real shim is linked)
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "occt")]
+#[cfg(occt_found)]
 fn occt_read_iges(path: &Path) -> Result<IgesData, OcctError> {
     let mut reader = super::adapter::IgesReaderAdapter::new()?;
     reader.read_file(path)?;
@@ -95,7 +95,7 @@ fn occt_read_iges(path: &Path) -> Result<IgesData, OcctError> {
     })
 }
 
-#[cfg(feature = "occt")]
+#[cfg(occt_found)]
 fn occt_read_iges_with_tessellation(
     path: &Path,
 ) -> Result<(IgesData, crate::tessellation::TessellationRegistry), OcctError> {
@@ -153,9 +153,37 @@ fn occt_read_iges_with_tessellation(
     ))
 }
 
+// ---------------------------------------------------------------------------
+// Stub implementation (occt feature requested, but no verified shim found)
+// ---------------------------------------------------------------------------
+
+#[cfg(all(feature = "occt", not(occt_found)))]
+fn occt_read_iges(_path: &Path) -> Result<IgesData, OcctError> {
+    Err(OcctError::NotAvailable(
+        "OCCT shim not linked — set MMFORGE_SHIM_DIR to the pre-built shim \
+         library, with OCCT_INCLUDE_DIR + OCCT_LIB_DIR for OCCT headers/libs"
+            .to_string(),
+    ))
+}
+
+#[cfg(all(feature = "occt", not(occt_found)))]
+fn occt_read_iges_with_tessellation(
+    _path: &Path,
+) -> Result<(IgesData, crate::tessellation::TessellationRegistry), OcctError> {
+    Err(OcctError::NotAvailable(
+        "OCCT shim not linked — set MMFORGE_SHIM_DIR to the pre-built shim \
+         library, with OCCT_INCLUDE_DIR + OCCT_LIB_DIR for OCCT headers/libs"
+            .to_string(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // `read_iges_file` is only used by tests that run with OCCT available.
+    // Gate the import so it does not trigger an unused-import warning in the
+    // `feature = "occt"` but `occt_found` not set configuration.
+    #[cfg(any(not(feature = "occt"), occt_found))]
+    use super::read_iges_file;
 
     /// Without OCCT, read_iges_file returns NotAvailable.
     #[cfg(not(feature = "occt"))]

@@ -186,14 +186,16 @@ final class DocumentViewModel: ObservableObject {
     /// Free the current MmfDocument and clear associated state.
     private func freeCurrentDocument() {
         // Cancel any in-flight background parse.
-        if let token = currentCancelToken {
-            mmf_cancel_token_cancel(token)
-            mmf_cancel_token_free(token)
-            currentCancelToken = nil
-        }
+        // mmf_open_job_free detaches the thread (non-blocking), so the
+        // completion callback may still fire.  The generation counter
+        // ensures stale callbacks are discarded.
         if let job = currentJob {
             mmf_open_job_free(job)
             currentJob = nil
+        }
+        if let token = currentCancelToken {
+            mmf_cancel_token_free(token)
+            currentCancelToken = nil
         }
         if let doc = rustDoc {
             RustBridge.shared.freeDocument(doc)
@@ -269,6 +271,14 @@ final class DocumentViewModel: ObservableObject {
     }
 
     deinit {
+        // Release background job resources.  mmf_open_job_free is
+        // non-blocking (detaches the thread), so this is safe in deinit.
+        if let job = currentJob {
+            mmf_open_job_free(job)
+        }
+        if let token = currentCancelToken {
+            mmf_cancel_token_free(token)
+        }
         if let doc = rustDoc {
             RustBridge.shared.freeDocument(doc)
         }
@@ -294,19 +304,27 @@ private func parseProgressCallback(
 ) {
     guard let user_data else { return }
     let ctx = Unmanaged<ParseCallbackContext>.fromOpaque(user_data).takeUnretainedValue()
+    // Copy the stage string immediately — the pointer is only valid for
+    // the duration of this C callback and may be freed before the main
+    // thread dispatch block executes.
+    let stageCopy = stage.map { String(cString: $0) } ?? ""
+    let progress = total > 0 ? Double(current) / Double(total) : 0.0
     DispatchQueue.main.async {
         guard let vm = ctx.viewModel, ctx.generation == vm.parseGeneration else { return }
-        vm.parseStage = stage.map { String(cString: $0) } ?? ""
-        vm.parseProgress = total > 0 ? Double(current) / Double(total) : 0
+        vm.parseStage = stageCopy
+        vm.parseProgress = progress
     }
 }
 
 private func parseCompletionCallback(
-    doc: OpaquePointer?, user_data: UnsafeMutableRawPointer?
+    doc: OpaquePointer?, error: UnsafePointer<CChar>?, user_data: UnsafeMutableRawPointer?
 ) {
     guard let user_data else { return }
     let ctx = Unmanaged<ParseCallbackContext>.fromOpaque(user_data).takeRetainedValue()
     try? FileManager.default.removeItem(at: ctx.tmpURL)
+    // Copy the error string immediately — the pointer is only valid for
+    // the duration of this C callback.
+    let errorCopy = error.map { String(cString: $0) }
     DispatchQueue.main.async {
         guard let vm = ctx.viewModel else {
             if let doc = doc { mmf_document_free(doc) }
@@ -315,6 +333,17 @@ private func parseCompletionCallback(
         guard ctx.generation == vm.parseGeneration else {
             if let doc = doc { mmf_document_free(doc) }
             return
+        }
+        // Release background job resources.  The job has finished, but we
+        // must still call mmf_open_job_free to release the Rust-side
+        // OpenDocumentJob allocation before clearing the Swift handle.
+        if let job = vm.currentJob {
+            mmf_open_job_free(job)
+            vm.currentJob = nil
+        }
+        if let token = vm.currentCancelToken {
+            mmf_cancel_token_free(token)
+            vm.currentCancelToken = nil
         }
         if let doc = doc {
             if let oldDoc = vm.rustDoc { RustBridge.shared.freeDocument(oldDoc) }
@@ -332,10 +361,8 @@ private func parseCompletionCallback(
                 triangleCount: dto.triangleCount, meshCount: dto.meshes.count,
                 nodeCount: dto.nodeNames.count)
         } else {
-            let msg = mmf_last_error().map { String(cString: $0) } ?? "unknown error"
-            vm.state = .error(msg)
+            vm.state = .error(errorCopy ?? "unknown error")
         }
-        vm.currentJob = nil
     }
 }
 

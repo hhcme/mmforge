@@ -7,10 +7,12 @@
 use std::path::Path;
 
 use glam::Vec3;
+use mmforge_core::cancel::CancellationToken;
 use mmforge_core::error::{Error, Result};
 use mmforge_core::ids::{GeometryId, NodeId};
 use mmforge_core::math::BoundingBox;
 use mmforge_core::model::{Geometry, LsmModel, MeshGeometry, Node, ParseOutput, ParseStats};
+use mmforge_core::progress::{ParseProgress, ProgressCallback};
 use mmforge_geometry::tessellation::{TessellatedMeshData, TessellationRegistry};
 
 /// Detect if a file is STL by extension and header bytes.
@@ -44,6 +46,24 @@ pub fn detect_stl(header: &[u8], path: &Path) -> bool {
     starts_with_solid || reasonable_tri
 }
 
+fn report_progress(
+    progress: Option<&ProgressCallback>,
+    stage: &'static str,
+    current: u32,
+    total: u32,
+) {
+    if let Some(cb) = progress {
+        cb(&ParseProgress::new(stage, current, total));
+    }
+}
+
+fn check_cancel(cancel: Option<&CancellationToken>) -> Result<()> {
+    if cancel.is_some_and(|c| c.is_cancelled()) {
+        return Err(Error::Cancelled);
+    }
+    Ok(())
+}
+
 /// Parse an STL file (binary or ASCII) into a model + tessellation registry.
 ///
 /// Disambiguation strategy for files starting with "solid":
@@ -52,20 +72,36 @@ pub fn detect_stl(header: &[u8], path: &Path) -> bool {
 ///    for "facet" text bytes, which can appear coincidentally in binary data.
 /// 2. Otherwise → try ASCII parse.
 /// 3. If ASCII fails (UTF-8 error, structural error, 0 triangles) → return
-///    the error (file is neither valid binary nor valid ASCII).
+///    the error (file is neither valid binary nor ASCII).
 pub fn parse_stl(path: &Path) -> Result<(ParseOutput, TessellationRegistry)> {
+    parse_stl_with_progress(path, None, None)
+}
+
+/// Parse an STL file with optional progress reporting and cancellation.
+///
+/// Cancellation is checked at file read, during the binary/ASCII parse
+/// loops (every 1024 triangles), and before building the model.
+pub fn parse_stl_with_progress(
+    path: &Path,
+    progress: Option<&ProgressCallback>,
+    cancel: Option<&CancellationToken>,
+) -> Result<(ParseOutput, TessellationRegistry)> {
+    check_cancel(cancel)?;
+    report_progress(progress, "reading", 0, 0);
     let data = std::fs::read(path).map_err(Error::Io)?;
 
     if data.len() < 84 {
         return Err(Error::parse("STL", "file too small"));
     }
 
+    check_cancel(cancel)?;
+    report_progress(progress, "parsing", 0, 1);
     let (positions, normals) = if binary_length_valid(&data) {
         // File structure matches binary STL exactly → parse as binary.
-        parse_binary_stl(&data)?
+        parse_binary_stl_with_progress(&data, cancel)?
     } else if is_probably_ascii(&data) {
         // "solid" prefix present but binary validation fails → try ASCII.
-        parse_ascii_stl(&data)?
+        parse_ascii_stl_with_progress(&data, cancel)?
     } else {
         return Err(Error::parse(
             "STL",
@@ -77,6 +113,8 @@ pub fn parse_stl(path: &Path) -> Result<(ParseOutput, TessellationRegistry)> {
         return Err(Error::parse("STL", "no triangles found"));
     }
 
+    check_cancel(cancel)?;
+    report_progress(progress, "building", 0, 1);
     let vertex_count = positions.len() / 3;
     let triangle_count = vertex_count / 3;
 
@@ -206,12 +244,18 @@ fn is_probably_ascii(data: &[u8]) -> bool {
 }
 
 /// Parse a binary STL file.
-///
-/// Validates:
-/// - Triangle count is reasonable (> 0, < 100M).
-/// - File length matches `84 + tri_count * 50` exactly, allowing up to
-///   80 bytes of trailing padding (some tools append nulls/newlines).
+#[allow(dead_code)]
 fn parse_binary_stl(data: &[u8]) -> Result<(Vec<f32>, Vec<f32>)> {
+    parse_binary_stl_with_progress(data, None)
+}
+
+/// Parse a binary STL file with optional cancellation.
+///
+/// Checks the cancellation token every 1024 triangles to keep overhead low.
+fn parse_binary_stl_with_progress(
+    data: &[u8],
+    cancel: Option<&CancellationToken>,
+) -> Result<(Vec<f32>, Vec<f32>)> {
     let tri_count = u32::from_le_bytes([data[80], data[81], data[82], data[83]]) as usize;
 
     if tri_count == 0 {
@@ -244,43 +288,10 @@ fn parse_binary_stl(data: &[u8]) -> Result<(Vec<f32>, Vec<f32>)> {
     let mut normals = Vec::with_capacity(tri_count * 9);
 
     for i in 0..tri_count {
-        let base = 84 + i * 50;
-        // Normal (3 floats).
-        for j in 0..3 {
-            let offset = base + j * 4;
-            let val = f32::from_le_bytes([
-                data[offset],
-                data[offset + 1],
-                data[offset + 2],
-                data[offset + 3],
-            ]);
-            normals.push(val);
+        // Check cancellation periodically (every 1024 triangles).
+        if i % 1024 == 0 {
+            check_cancel(cancel)?;
         }
-        // 3 vertices (9 floats).
-        for v in 0..3 {
-            let vbase = base + 12 + v * 12;
-            for j in 0..3 {
-                let offset = vbase + j * 4;
-                let val = f32::from_le_bytes([
-                    data[offset],
-                    data[offset + 1],
-                    data[offset + 2],
-                    data[offset + 3],
-                ]);
-                positions.push(val);
-                // Duplicate normal per vertex.
-                normals.push(normals[normals.len() - 3 + j % 3]);
-            }
-        }
-    }
-
-    // Fix normals: each triangle has 1 normal, duplicated for 3 vertices.
-    // Rebuild: normal was pushed once per triangle, then once per vertex.
-    // Actually, let me redo this properly.
-    positions.clear();
-    normals.clear();
-
-    for i in 0..tri_count {
         let base = 84 + i * 50;
         let nx = f32::from_le_bytes([data[base], data[base + 1], data[base + 2], data[base + 3]]);
         let ny = f32::from_le_bytes([
@@ -324,7 +335,18 @@ fn parse_binary_stl(data: &[u8]) -> Result<(Vec<f32>, Vec<f32>)> {
     Ok((positions, normals))
 }
 
+#[allow(dead_code)]
 fn parse_ascii_stl(data: &[u8]) -> Result<(Vec<f32>, Vec<f32>)> {
+    parse_ascii_stl_with_progress(data, None)
+}
+
+/// Parse an ASCII STL file with optional cancellation.
+///
+/// Checks the cancellation token every 1024 lines.
+fn parse_ascii_stl_with_progress(
+    data: &[u8],
+    cancel: Option<&CancellationToken>,
+) -> Result<(Vec<f32>, Vec<f32>)> {
     let text =
         std::str::from_utf8(data).map_err(|_| Error::parse("STL", "invalid UTF-8 in ASCII STL"))?;
 
@@ -332,7 +354,11 @@ fn parse_ascii_stl(data: &[u8]) -> Result<(Vec<f32>, Vec<f32>)> {
     let mut normals = Vec::new();
     let mut current_normal = [0.0f32; 3];
 
-    for line in text.lines() {
+    for (idx, line) in text.lines().enumerate() {
+        // Check cancellation periodically (every 1024 lines).
+        if idx % 1024 == 0 {
+            check_cancel(cancel)?;
+        }
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("facet normal") {
             let parts: Vec<&str> = rest.split_whitespace().collect();
@@ -473,6 +499,16 @@ endsolid test
         for chunk in normals.chunks(3) {
             assert!((chunk[2] - 1.0).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn parse_stl_cancellation_returns_error() {
+        let token = CancellationToken::new();
+        token.cancel();
+        // Use a synthetic ASCII STL that is valid and would otherwise succeed.
+        let data = b"solid test\nfacet normal 0 0 1\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendfacet\nendsolid test\n";
+        let result = parse_ascii_stl_with_progress(data, Some(&token));
+        assert!(matches!(result, Err(Error::Cancelled)));
     }
 
     /// Helper: write bytes to a temp file and return the path.

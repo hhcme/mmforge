@@ -18,4 +18,6 @@
 pub mod detect;
 pub mod parser;
 
-pub use parser::{StepParser, parse_step_with_tessellation};
+pub use parser::{
+    StepParser, parse_step_with_tessellation, parse_step_with_tessellation_with_progress,
+};

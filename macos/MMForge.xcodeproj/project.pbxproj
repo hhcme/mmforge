@@ -26,6 +26,7 @@
 		A10017 /* TransformTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10020; };
 		A10018 /* Annotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10021; };
 		A10019 /* AnnotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10022; };
+		A10020 /* AsyncParseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10023; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -50,6 +51,7 @@
 		B10020 /* TransformTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransformTests.swift; sourceTree = "<group>"; };
 		B10021 /* Annotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Annotation.swift; sourceTree = "<group>"; };
 		B10022 /* AnnotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationTests.swift; sourceTree = "<group>"; };
+		B10023 /* AsyncParseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AsyncParseTests.swift; sourceTree = "<group>"; };
 		B10015 /* mmforge_bridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = mmforge_bridge.h; sourceTree = "<group>"; };
 		C10001 /* MMForge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MMForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C10002 /* MMForgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MMForgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -172,6 +174,7 @@
 				B10017 /* PickingTests.swift */,
 				B10020 /* TransformTests.swift */,
 				B10022 /* AnnotationTests.swift */,
+				B10023 /* AsyncParseTests.swift */,
 			);
 			path = MMForgeTests;
 			sourceTree = "<group>";
@@ -276,6 +279,7 @@
 				A10014 /* PickingTests.swift in Sources */,
 				A10017 /* TransformTests.swift in Sources */,
 				A10019 /* AnnotationTests.swift in Sources */,
+				A10020 /* AsyncParseTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

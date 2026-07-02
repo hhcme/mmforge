@@ -8,4 +8,6 @@
 pub mod detect;
 pub mod parser;
 
-pub use parser::{IgesParser, parse_iges_with_tessellation};
+pub use parser::{
+    IgesParser, parse_iges_with_tessellation, parse_iges_with_tessellation_with_progress,
+};
