@@ -24,6 +24,8 @@
 		A10015 /* SectionFill.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10018; };
 		A10016 /* DrawingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10019; };
 		A10017 /* TransformTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10020; };
+		A10018 /* Annotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10021; };
+		A10019 /* AnnotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10022; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -46,6 +48,8 @@
 		B10018 /* SectionFill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionFill.swift; sourceTree = "<group>"; };
 		B10019 /* DrawingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawingView.swift; sourceTree = "<group>"; };
 		B10020 /* TransformTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransformTests.swift; sourceTree = "<group>"; };
+		B10021 /* Annotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Annotation.swift; sourceTree = "<group>"; };
+		B10022 /* AnnotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationTests.swift; sourceTree = "<group>"; };
 		B10015 /* mmforge_bridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = mmforge_bridge.h; sourceTree = "<group>"; };
 		C10001 /* MMForge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MMForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C10002 /* MMForgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MMForgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -110,6 +114,7 @@
 			isa = PBXGroup;
 			children = (
 				B10003 /* MMForgeDocument.swift */,
+				B10021 /* Annotation.swift */,
 			);
 			path = Document;
 			sourceTree = "<group>";
@@ -166,6 +171,7 @@
 			children = (
 				B10017 /* PickingTests.swift */,
 				B10020 /* TransformTests.swift */,
+				B10022 /* AnnotationTests.swift */,
 			);
 			path = MMForgeTests;
 			sourceTree = "<group>";
@@ -256,6 +262,7 @@
 				A10012 /* Shaders.metal in Sources */,
 				A10013 /* Picking.swift in Sources */,
 				A10015 /* SectionFill.swift in Sources */,
+				A10018 /* Annotation.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -268,6 +275,7 @@
 			files = (
 				A10014 /* PickingTests.swift in Sources */,
 				A10017 /* TransformTests.swift in Sources */,
+				A10019 /* AnnotationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

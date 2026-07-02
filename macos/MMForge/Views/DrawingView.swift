@@ -39,6 +39,33 @@ class Drawing2DView: NSView {
     /// Document pointer for spatial queries (borrowed from DocumentViewModel).
     var documentPointer: OpaquePointer?
 
+    /// Annotations to render as overlay.
+    var annotations: [Annotation] = [] {
+        didSet { needsDisplay = true }
+    }
+
+    /// Whether measurement mode is active.
+    var measurementMode: Bool = false
+
+    /// The type of measurement being performed.
+    var measurementType: MeasurementType = .distance
+
+    /// Whether snap-to-entity is enabled.
+    var snapEnabled: Bool = true
+
+    /// First-click point for 2D measurement (world coords).
+    var pendingAnnotationPoint: CGPoint? {
+        didSet { needsDisplay = true }
+    }
+
+    /// Accumulated polygon points for area measurement.
+    var pendingPolygonPoints: [CGPoint] = [] {
+        didSet { needsDisplay = true }
+    }
+
+    /// Delegate for annotation events.
+    weak var annotationDelegate: Drawing2DAnnotationDelegate?
+
     /// Viewport state: pan offset and zoom level.
     /// Internal for testing — use gestures to modify in production.
     var panOffset: CGPoint = .zero
@@ -107,6 +134,101 @@ class Drawing2DView: NSView {
                   .concatenating(t3).concatenating(t2).concatenating(t1)
     }
 
+    // MARK: - Coordinate Conversion
+
+    /// Convert a screen point to world coordinates.
+    func screenToWorld(_ screenPoint: CGPoint) -> CGPoint {
+        let xform = worldToScreenTransform(viewBounds: bounds)
+        return screenPoint.applying(xform.inverted())
+    }
+
+    /// Convert a world point to screen coordinates.
+    func worldToScreen(_ worldPoint: CGPoint) -> CGPoint {
+        worldPoint.applying(worldToScreenTransform(viewBounds: bounds))
+    }
+
+    // MARK: - Click Handling
+
+    override func mouseDown(with event: NSEvent) {
+        guard measurementMode else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        let screenPt = convert(event.locationInWindow, from: nil)
+        var worldPt = screenToWorld(screenPt)
+
+        // Snap to nearest entity if enabled.
+        if snapEnabled {
+            let snapRadius = 8.0 / (zoomLevel * fitScale(screenBounds: bounds, worldRect: worldBounds))
+            if let snapped = Geometry2D.findSnapTarget(
+                worldPoint: worldPt, commands: drawCommands, snapRadius: snapRadius) {
+                worldPt = snapped
+            }
+        }
+
+        switch measurementType {
+        case .distance:
+            handleDistanceClick(worldPt)
+        case .angle:
+            handleAngleClick(worldPt)
+        case .area:
+            handleAreaClick(worldPt)
+        }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard measurementMode else {
+            super.rightMouseDown(with: event)
+            return
+        }
+        // Cancel pending measurement.
+        pendingAnnotationPoint = nil
+        pendingPolygonPoints = []
+    }
+
+    private func handleDistanceClick(_ worldPt: CGPoint) {
+        if let pending = pendingAnnotationPoint {
+            annotationDelegate?.didCompleteMeasurement(start: pending, end: worldPt)
+            pendingAnnotationPoint = nil
+        } else {
+            pendingAnnotationPoint = worldPt
+        }
+    }
+
+    private func handleAngleClick(_ worldPt: CGPoint) {
+        if pendingPolygonPoints.isEmpty {
+            // First click: vertex.
+            pendingPolygonPoints = [worldPt]
+            pendingAnnotationPoint = worldPt
+        } else if pendingPolygonPoints.count == 1 {
+            // Second click: first ray point.
+            pendingPolygonPoints.append(worldPt)
+        } else {
+            // Third click: second ray point → complete angle.
+            let vertex = pendingPolygonPoints[0]
+            let p1 = pendingPolygonPoints[1]
+            annotationDelegate?.didCompleteAngleMeasurement(vertex: vertex, p1: p1, p2: worldPt)
+            pendingPolygonPoints = []
+            pendingAnnotationPoint = nil
+        }
+    }
+
+    private func handleAreaClick(_ worldPt: CGPoint) {
+        // Check if clicking near the first point to close the polygon.
+        if pendingPolygonPoints.count >= 3 {
+            let closeRadius = 8.0 / (zoomLevel * fitScale(screenBounds: bounds, worldRect: worldBounds))
+            if Geometry2D.distance(worldPt, pendingPolygonPoints[0]) < closeRadius {
+                annotationDelegate?.didCompleteAreaMeasurement(points: pendingPolygonPoints)
+                pendingPolygonPoints = []
+                pendingAnnotationPoint = nil
+                return
+            }
+        }
+        pendingPolygonPoints.append(worldPt)
+        pendingAnnotationPoint = worldPt
+    }
+
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
@@ -135,6 +257,9 @@ class Drawing2DView: NSView {
         for cmd in visibleCommands {
             drawCommand(ctx: ctx, cmd: cmd, scale: scale)
         }
+
+        // Draw annotation overlay.
+        drawAnnotations(ctx: ctx, scale: scale)
 
         ctx.restoreGState()
     }
@@ -409,6 +534,407 @@ class Drawing2DView: NSView {
         ctx.setLineDash(phase: 0, lengths: [])
     }
 
+    // MARK: - Annotation Overlay
+
+    private func drawAnnotations(ctx: CGContext, scale: CGFloat) {
+        // Draw completed annotations.
+        for ann in annotations {
+            drawAnnotation(ctx: ctx, annotation: ann, scale: scale)
+        }
+
+        // Draw pending measurement preview.
+        if measurementMode {
+            drawPendingAnnotation(ctx: ctx, scale: scale)
+        }
+    }
+
+    private func drawAnnotation(ctx: CGContext, annotation: Annotation, scale: CGFloat) {
+        let color = annotation.color.cgColor
+
+        switch annotation.kind {
+        case .measurement(let start, let end):
+            drawMeasurementLine(ctx: ctx, start: start, end: end,
+                                color: color, scale: scale)
+
+        case .angleMeasurement(let vertex, let p1, let p2):
+            drawAngleAnnotation(ctx: ctx, vertex: vertex, p1: p1, p2: p2,
+                                color: color, scale: scale)
+
+        case .areaMeasurement(let points):
+            drawAreaAnnotation(ctx: ctx, points: points,
+                               color: color, scale: scale)
+
+        case .dimension(let start, let end, let offset):
+            drawDimension(ctx: ctx, start: start, end: end, offset: offset,
+                          color: color, scale: scale)
+
+        case .textAnnotation(let position, let text, let fontSize):
+            drawTextAnnotation(ctx: ctx, position: position, text: text,
+                               fontSize: fontSize, color: color, scale: scale)
+
+        case .arrowAnnotation(let tail, let head, let text):
+            drawArrowAnnotation(ctx: ctx, tail: tail, head: head, text: text,
+                                color: color, scale: scale)
+        }
+    }
+
+    private func drawPendingAnnotation(ctx: CGContext, scale: CGFloat) {
+        let lineW = 1.5 / scale
+        let markerR = 4.0 / scale
+
+        // Draw pending point marker.
+        if let pending = pendingAnnotationPoint {
+            ctx.setStrokeColor(NSColor.systemCyan.cgColor)
+            ctx.setFillColor(NSColor.systemCyan.cgColor)
+            ctx.setLineWidth(lineW)
+            ctx.setLineDash(phase: 0, lengths: [])
+
+            // Cross marker.
+            ctx.beginPath()
+            ctx.move(to: CGPoint(x: pending.x - markerR, y: pending.y))
+            ctx.addLine(to: CGPoint(x: pending.x + markerR, y: pending.y))
+            ctx.move(to: CGPoint(x: pending.x, y: pending.y - markerR))
+            ctx.addLine(to: CGPoint(x: pending.x, y: pending.y + markerR))
+            ctx.strokePath()
+        }
+
+        // Draw pending polygon preview for area measurement.
+        if measurementType == .area && pendingPolygonPoints.count >= 2 {
+            ctx.setStrokeColor(NSColor.systemCyan.cgColor)
+            ctx.setLineWidth(lineW)
+            ctx.setLineDash(phase: 0, lengths: [4 / scale, 4 / scale])
+            ctx.beginPath()
+            ctx.move(to: pendingPolygonPoints[0])
+            for i in 1..<pendingPolygonPoints.count {
+                ctx.addLine(to: pendingPolygonPoints[i])
+            }
+            ctx.strokePath()
+            ctx.setLineDash(phase: 0, lengths: [])
+        }
+
+        // Draw pending angle preview.
+        if measurementType == .angle && pendingPolygonPoints.count == 2 {
+            let vertex = pendingPolygonPoints[0]
+            let p1 = pendingPolygonPoints[1]
+            ctx.setStrokeColor(NSColor.systemCyan.cgColor)
+            ctx.setLineWidth(lineW)
+            ctx.setLineDash(phase: 0, lengths: [4 / scale, 4 / scale])
+            ctx.beginPath()
+            ctx.move(to: vertex)
+            ctx.addLine(to: p1)
+            ctx.strokePath()
+            ctx.setLineDash(phase: 0, lengths: [])
+        }
+    }
+
+    private func drawMeasurementLine(ctx: CGContext, start: CGPoint, end: CGPoint,
+                                     color: CGColor, scale: CGFloat) {
+        let lineW = 1.5 / scale
+        let markerR = 4.0 / scale
+
+        ctx.setStrokeColor(color)
+        ctx.setFillColor(color)
+        ctx.setLineWidth(lineW)
+        ctx.setLineDash(phase: 0, lengths: [6 / scale, 3 / scale])
+
+        // Measurement line.
+        ctx.beginPath()
+        ctx.move(to: start)
+        ctx.addLine(to: end)
+        ctx.strokePath()
+        ctx.setLineDash(phase: 0, lengths: [])
+
+        // Endpoint markers.
+        for pt in [start, end] {
+            ctx.beginPath()
+            ctx.move(to: CGPoint(x: pt.x - markerR, y: pt.y - markerR))
+            ctx.addLine(to: CGPoint(x: pt.x + markerR, y: pt.y + markerR))
+            ctx.move(to: CGPoint(x: pt.x - markerR, y: pt.y + markerR))
+            ctx.addLine(to: CGPoint(x: pt.x + markerR, y: pt.y - markerR))
+            ctx.strokePath()
+        }
+
+        // Distance label at midpoint.
+        let mid = CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
+        let dist = Geometry2D.distance(start, end)
+        let label = String(format: "%.2f", dist)
+        drawLabel(ctx: ctx, text: label, at: mid, color: color, scale: scale)
+    }
+
+    private func drawAngleAnnotation(ctx: CGContext, vertex: CGPoint,
+                                     p1: CGPoint, p2: CGPoint,
+                                     color: CGColor, scale: CGFloat) {
+        let lineW = 1.5 / scale
+        let markerR = 4.0 / scale
+
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(lineW)
+        ctx.setLineDash(phase: 0, lengths: [])
+
+        // Draw rays.
+        ctx.beginPath()
+        ctx.move(to: vertex)
+        ctx.addLine(to: p1)
+        ctx.move(to: vertex)
+        ctx.addLine(to: p2)
+        ctx.strokePath()
+
+        // Vertex marker.
+        ctx.setFillColor(color)
+        ctx.fillEllipse(in: CGRect(
+            x: vertex.x - markerR, y: vertex.y - markerR,
+            width: markerR * 2, height: markerR * 2))
+
+        // Angle arc.
+        let v1 = CGVector(dx: p1.x - vertex.x, dy: p1.y - vertex.y)
+        let v2 = CGVector(dx: p2.x - vertex.x, dy: p2.y - vertex.y)
+        let a1 = atan2(v1.dy, v1.dx)
+        let a2 = atan2(v2.dy, v2.dx)
+        let arcR = min(Geometry2D.distance(vertex, p1), Geometry2D.distance(vertex, p2)) * 0.3
+
+        ctx.beginPath()
+        ctx.addArc(center: vertex, radius: arcR,
+                   startAngle: a1, endAngle: a2, clockwise: false)
+        ctx.strokePath()
+
+        // Angle label.
+        let angleDeg = Geometry2D.angleDegrees(vertex: vertex, p1: p1, p2: p2)
+        let midAngle = (a1 + a2) / 2
+        let labelPos = CGPoint(
+            x: vertex.x + arcR * 1.3 * cos(midAngle),
+            y: vertex.y + arcR * 1.3 * sin(midAngle))
+        drawLabel(ctx: ctx, text: String(format: "%.1f°", angleDeg),
+                  at: labelPos, color: color, scale: scale)
+    }
+
+    private func drawAreaAnnotation(ctx: CGContext, points: [CGPoint],
+                                    color: CGColor, scale: CGFloat) {
+        guard points.count >= 3 else { return }
+        let lineW = 1.5 / scale
+
+        // Semi-transparent fill.
+        ctx.setFillColor(color.copy(alpha: 0.15) ?? color)
+        ctx.beginPath()
+        ctx.move(to: points[0])
+        for i in 1..<points.count {
+            ctx.addLine(to: points[i])
+        }
+        ctx.closePath()
+        ctx.fillPath()
+
+        // Outline.
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(lineW)
+        ctx.setLineDash(phase: 0, lengths: [])
+        ctx.beginPath()
+        ctx.move(to: points[0])
+        for i in 1..<points.count {
+            ctx.addLine(to: points[i])
+        }
+        ctx.closePath()
+        ctx.strokePath()
+
+        // Area label at centroid.
+        let area = Geometry2D.area(points)
+        if let centroid = Geometry2D.centroid(points) {
+            let label = String(format: "%.2f", area)
+            drawLabel(ctx: ctx, text: label, at: centroid, color: color, scale: scale)
+        }
+    }
+
+    private func drawDimension(ctx: CGContext, start: CGPoint, end: CGPoint,
+                               offset: CGFloat, color: CGColor, scale: CGFloat) {
+        let lineW = 1.5 / scale
+        let dist = Geometry2D.distance(start, end)
+        let label = String(format: "%.2f", dist)
+
+        // Compute dimension line direction (perpendicular to measurement direction).
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        let len = sqrt(dx * dx + dy * dy)
+        guard len > 1e-10 else { return }
+        let nx = -dy / len * offset
+        let ny = dx / len * offset
+
+        let dStart = CGPoint(x: start.x + nx, y: start.y + ny)
+        let dEnd = CGPoint(x: end.x + nx, y: end.y + ny)
+
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(lineW)
+        ctx.setLineDash(phase: 0, lengths: [])
+
+        // Extension lines.
+        ctx.beginPath()
+        ctx.move(to: start); ctx.addLine(to: dStart)
+        ctx.move(to: end); ctx.addLine(to: dEnd)
+        ctx.strokePath()
+
+        // Dimension line with arrowheads.
+        ctx.beginPath()
+        ctx.move(to: dStart)
+        ctx.addLine(to: dEnd)
+        ctx.strokePath()
+
+        // Arrowheads.
+        drawArrowhead(ctx: ctx, from: dStart, to: dEnd, size: 8 / scale, color: color)
+        drawArrowhead(ctx: ctx, from: dEnd, to: dStart, size: 8 / scale, color: color)
+
+        // Label at midpoint of dimension line.
+        let mid = CGPoint(x: (dStart.x + dEnd.x) / 2, y: (dStart.y + dEnd.y) / 2)
+        drawLabel(ctx: ctx, text: label, at: mid, color: color, scale: scale)
+    }
+
+    private func drawTextAnnotation(ctx: CGContext, position: CGPoint,
+                                    text: String, fontSize: CGFloat,
+                                    color: CGColor, scale: CGFloat) {
+        let font = NSFont.systemFont(ofSize: max(8, fontSize) / scale)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: color,
+        ]
+        let nsString = text as NSString
+        let size = nsString.size(withAttributes: attrs)
+
+        // Background rect.
+        let pad: CGFloat = 2 / scale
+        let bgRect = CGRect(
+            x: position.x - pad, y: position.y - pad,
+            width: size.width + pad * 2, height: size.height + pad * 2)
+        ctx.setFillColor(CGColor(red: 0.12, green: 0.12, blue: 0.14, alpha: 0.8))
+        ctx.fill(bgRect)
+
+        nsString.draw(at: position, withAttributes: attrs)
+    }
+
+    private func drawArrowAnnotation(ctx: CGContext, tail: CGPoint, head: CGPoint,
+                                     text: String?, color: CGColor, scale: CGFloat) {
+        let lineW = 1.5 / scale
+
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(lineW)
+        ctx.setLineDash(phase: 0, lengths: [])
+
+        // Arrow shaft.
+        ctx.beginPath()
+        ctx.move(to: tail)
+        ctx.addLine(to: head)
+        ctx.strokePath()
+
+        // Arrowhead.
+        drawArrowhead(ctx: ctx, from: tail, to: head, size: 10 / scale, color: color)
+
+        // Optional label.
+        if let text, !text.isEmpty {
+            let labelPos = CGPoint(x: tail.x - 10 / scale, y: tail.y - 10 / scale)
+            drawLabel(ctx: ctx, text: text, at: labelPos, color: color, scale: scale)
+        }
+    }
+
+    private func drawArrowhead(ctx: CGContext, from: CGPoint, to: CGPoint,
+                               size: CGFloat, color: CGColor) {
+        let dx = to.x - from.x
+        let dy = to.y - from.y
+        let len = sqrt(dx * dx + dy * dy)
+        guard len > 1e-10 else { return }
+        let ux = dx / len
+        let uy = dy / len
+        let px = -uy  // perpendicular
+        let py = ux
+
+        ctx.setFillColor(color)
+        ctx.beginPath()
+        ctx.move(to: to)
+        ctx.addLine(to: CGPoint(x: to.x - ux * size + px * size * 0.4,
+                                y: to.y - uy * size + py * size * 0.4))
+        ctx.addLine(to: CGPoint(x: to.x - ux * size - px * size * 0.4,
+                                y: to.y - uy * size - py * size * 0.4))
+        ctx.closePath()
+        ctx.fillPath()
+    }
+
+    private func drawLabel(ctx: CGContext, text: String, at point: CGPoint,
+                           color: CGColor, scale: CGFloat) {
+        let font = NSFont.systemFont(ofSize: max(8, 11.0) / scale)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: color,
+        ]
+        let nsString = text as NSString
+        let size = nsString.size(withAttributes: attrs)
+        let pad: CGFloat = 2 / scale
+
+        // Background.
+        let bgRect = CGRect(
+            x: point.x - pad, y: point.y - pad,
+            width: size.width + pad * 2, height: size.height + pad * 2)
+        ctx.setFillColor(CGColor(red: 0.12, green: 0.12, blue: 0.14, alpha: 0.85))
+        ctx.fill(bgRect)
+
+        nsString.draw(at: point, withAttributes: attrs)
+    }
+
+    // MARK: - PDF Export
+
+    /// Export the current 2D view as a PDF.
+    func exportPDF(annotations: [Annotation]) -> Data? {
+        let wb = worldBounds
+        guard wb.width > 0, wb.height > 0 else { return nil }
+
+        // Page size: fit drawing to A4 landscape with margin.
+        let pageW: CGFloat = 842  // A4 landscape width in points
+        let pageH: CGFloat = 595  // A4 landscape height in points
+        let margin: CGFloat = 36
+        let drawW = pageW - margin * 2
+        let drawH = pageH - margin * 2
+
+        let scaleX = drawW / wb.width
+        let scaleY = drawH / wb.height
+        let pdfScale = min(scaleX, scaleY)
+
+        let pdfBounds = CGRect(x: 0, y: 0, width: pageW, height: pageH)
+        let rendererBounds = CGRect(
+            x: margin + (drawW - wb.width * pdfScale) / 2,
+            y: margin + (drawH - wb.height * pdfScale) / 2,
+            width: wb.width * pdfScale,
+            height: wb.height * pdfScale)
+
+        let tmpURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mmforge_export_\(UUID().uuidString).pdf")
+        let pdfData = NSMutableData()
+        guard let consumer = CGDataConsumer(data: pdfData as CFMutableData) else { return nil }
+        var mediaBox = CGRect(x: 0, y: 0, width: pageW, height: pageH)
+        guard let pdfCtx = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else { return nil }
+
+        pdfCtx.beginPDFPage(nil)
+        pdfCtx.saveGState()
+
+        // Translate to flip Y for PDF (origin top-left).
+        pdfCtx.translateBy(x: 0, y: pageH)
+        pdfCtx.scaleBy(x: 1, y: -1)
+
+        // Apply drawing transform.
+        pdfCtx.translateBy(x: rendererBounds.origin.x, y: rendererBounds.origin.y)
+        pdfCtx.scaleBy(x: pdfScale, y: pdfScale)
+        pdfCtx.translateBy(x: -wb.origin.x, y: -wb.origin.y)
+
+        // Draw entities.
+        for cmd in drawCommands {
+            drawCommand(ctx: pdfCtx, cmd: cmd, scale: pdfScale)
+        }
+
+        // Draw annotations.
+        let savedAnnotations = self.annotations
+        self.annotations = annotations
+        drawAnnotations(ctx: pdfCtx, scale: pdfScale)
+        self.annotations = savedAnnotations
+
+        pdfCtx.restoreGState()
+        pdfCtx.endPDFPage()
+        pdfCtx.closePDF()
+
+        return try? Data(contentsOf: tmpURL)
+    }
+
     // MARK: - Gestures
 
     override var acceptsFirstResponder: Bool { true }
@@ -439,6 +965,14 @@ class Drawing2DView: NSView {
     }
 }
 
+// MARK: - Annotation Delegate
+
+protocol Drawing2DAnnotationDelegate: AnyObject {
+    func didCompleteMeasurement(start: CGPoint, end: CGPoint)
+    func didCompleteAngleMeasurement(vertex: CGPoint, p1: CGPoint, p2: CGPoint)
+    func didCompleteAreaMeasurement(points: [CGPoint])
+}
+
 // MARK: - NSViewRepresentable wrapper
 
 struct Drawing2DViewRepresentable: NSViewRepresentable {
@@ -446,6 +980,13 @@ struct Drawing2DViewRepresentable: NSViewRepresentable {
     let drawingInfo: Drawing2DInfo?
     let layerVisibilityOverrides: [String: Bool]
     let documentPointer: OpaquePointer?
+    let annotations: [Annotation]
+    let measurementMode: Bool
+    let measurementType: MeasurementType
+    let snapEnabled: Bool
+    let pendingAnnotationPoint: CGPoint?
+    let pendingPolygonPoints: [CGPoint]
+    let annotationDelegate: Drawing2DAnnotationDelegate?
 
     func makeNSView(context: Context) -> Drawing2DView {
         let view = Drawing2DView()
@@ -458,5 +999,12 @@ struct Drawing2DViewRepresentable: NSViewRepresentable {
         nsView.drawingInfo = drawingInfo
         nsView.layerVisibilityOverrides = layerVisibilityOverrides
         nsView.documentPointer = documentPointer
+        nsView.annotations = annotations
+        nsView.measurementMode = measurementMode
+        nsView.measurementType = measurementType
+        nsView.snapEnabled = snapEnabled
+        nsView.pendingAnnotationPoint = pendingAnnotationPoint
+        nsView.pendingPolygonPoints = pendingPolygonPoints
+        nsView.annotationDelegate = annotationDelegate
     }
 }

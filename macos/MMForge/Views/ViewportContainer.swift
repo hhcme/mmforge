@@ -23,7 +23,14 @@ struct ViewportContainer: View {
                         drawCommands: viewModel.drawCommands,
                         drawingInfo: viewModel.drawing2DInfo,
                         layerVisibilityOverrides: viewModel.layerVisibility,
-                        documentPointer: viewModel.rustDoc
+                        documentPointer: viewModel.rustDoc,
+                        annotations: viewModel.annotations,
+                        measurementMode: viewModel.measurementMode,
+                        measurementType: viewModel.measurementType,
+                        snapEnabled: viewModel.snapEnabled,
+                        pendingAnnotationPoint: viewModel.pendingAnnotationPoint,
+                        pendingPolygonPoints: viewModel.pendingPolygonPoints,
+                        annotationDelegate: viewModel
                     )
                 } else {
                     MetalViewWrapper(viewModel: viewModel)

@@ -215,53 +215,91 @@ struct InspectorPanel: View {
     // MARK: - Measure
 
     private var measureView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Measurement mode toggle
-            HStack {
-                Text("Point-to-Point")
-                    .font(.headline)
-                Spacer()
-                Toggle("", isOn: Binding(
-                    get: { viewModel.measurementMode },
-                    set: { _ in viewModel.toggleMeasurementMode() }
-                ))
-                .labelsHidden()
-                .accessibilityLabel("Measurement mode")
-            }
-
-            if viewModel.measurementMode {
-                Text("Click two points in the viewport to measure distance.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if viewModel.pendingPoint != nil {
-                    Text("First point set. Click second point.")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-            }
-
-            Divider()
-
-            // Selected node bounding box
-            if let index = viewModel.selectedIndex,
-               index < viewModel.nodes.count {
-                let node = viewModel.nodes[index]
-                if let bmin = node.boundsMin, let bmax = node.boundsMax {
-                    Text("Selection Bounds")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                // Measurement mode toggle
+                HStack {
+                    Text("Measurement")
                         .font(.headline)
-                        .accessibilityAddTraits(.isHeader)
-                    let size = bmax - bmin
-                    LabeledContent("Size X", value: String(format: "%.2f", size.x))
-                    LabeledContent("Size Y", value: String(format: "%.2f", size.y))
-                    LabeledContent("Size Z", value: String(format: "%.2f", size.z))
-                    let diag = computeDiagonal(size)
-                    LabeledContent("Diagonal", value: String(format: "%.2f", diag))
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { viewModel.measurementMode },
+                        set: { _ in viewModel.toggleMeasurementMode() }
+                    ))
+                    .labelsHidden()
+                    .accessibilityLabel("Measurement mode")
+                }
+
+                if viewModel.measurementMode {
+                    // Measurement type picker (2D only).
+                    if viewModel.is2DDrawing {
+                        Picker("Type", selection: $viewModel.measurementType) {
+                            ForEach(MeasurementType.allCases, id: \.self) { type in
+                                Text(type.rawValue).tag(type)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityLabel("Measurement type")
+
+                        Toggle("Snap to entity", isOn: $viewModel.snapEnabled)
+                            .font(.caption)
+                    }
+
+                    Text(viewModel.measurementType.instruction)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if viewModel.is2DDrawing {
+                        if viewModel.pendingAnnotationPoint != nil {
+                            Text("First point set. Click second point.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    } else if viewModel.pendingPoint != nil {
+                        Text("First point set. Click second point.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+
+                Divider()
+
+                // Selected node bounding box (3D only)
+                if !viewModel.is2DDrawing,
+                   let index = viewModel.selectedIndex,
+                   index < viewModel.nodes.count {
+                    let node = viewModel.nodes[index]
+                    if let bmin = node.boundsMin, let bmax = node.boundsMax {
+                        Text("Selection Bounds")
+                            .font(.headline)
+                            .accessibilityAddTraits(.isHeader)
+                        let size = bmax - bmin
+                        LabeledContent("Size X", value: String(format: "%.2f", size.x))
+                        LabeledContent("Size Y", value: String(format: "%.2f", size.y))
+                        LabeledContent("Size Z", value: String(format: "%.2f", size.z))
+                        let diag = computeDiagonal(size)
+                        LabeledContent("Diagonal", value: String(format: "%.2f", diag))
+                    }
+                }
+
+                Divider()
+
+                // 3D Measurement results
+                if !viewModel.is2DDrawing {
+                    measurementResultsSection
+                }
+
+                // 2D Annotations
+                if viewModel.is2DDrawing {
+                    annotationResultsSection
                 }
             }
+            .padding(12)
+        }
+    }
 
-            Divider()
-
-            // Measurement results
+    private var measurementResultsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Measurements")
                     .font(.headline)
@@ -309,7 +347,77 @@ struct InspectorPanel: View {
                 }
             }
         }
-        .padding(12)
+    }
+
+    private var annotationResultsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Annotations")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                if !viewModel.annotations.isEmpty {
+                    Button("Clear All") { viewModel.clearAnnotations() }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                        .accessibilityLabel("Clear all annotations")
+                }
+            }
+
+            if viewModel.annotations.isEmpty {
+                Text("No annotations yet.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else {
+                ForEach(viewModel.annotations) { ann in
+                    HStack {
+                        Circle()
+                            .fill(Color(ann.color))
+                            .frame(width: 8, height: 8)
+                        annotationLabel(ann)
+                            .font(.system(.body, design: .monospaced))
+                        Spacer()
+                        Button(action: { viewModel.removeAnnotation(ann.id) }) {
+                            Image(systemName: "trash")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove annotation")
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func annotationLabel(_ ann: Annotation) -> some View {
+        switch ann.kind {
+        case .measurement(let start, let end):
+            let dist = Geometry2D.distance(start, end)
+            Text(String(format: "↔ %.2f", dist))
+                .foregroundStyle(.primary)
+        case .angleMeasurement(let vertex, let p1, let p2):
+            let angle = Geometry2D.angleDegrees(vertex: vertex, p1: p1, p2: p2)
+            Text(String(format: "∠ %.1f°", angle))
+                .foregroundStyle(.primary)
+        case .areaMeasurement(let points):
+            let area = Geometry2D.area(points)
+            Text(String(format: "⌂ %.2f", area))
+                .foregroundStyle(.primary)
+        case .dimension(let start, let end, _):
+            let dist = Geometry2D.distance(start, end)
+            Text(String(format: "⊞ %.2f", dist))
+                .foregroundStyle(.primary)
+        case .textAnnotation(_, let text, _):
+            Text("Aa \(text)")
+                .foregroundStyle(.primary)
+        case .arrowAnnotation(_, _, let text):
+            Text("→ \(text ?? "")")
+                .foregroundStyle(.primary)
+        }
     }
 
     private var noSelectionSection: some View {
