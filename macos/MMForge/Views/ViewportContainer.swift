@@ -22,7 +22,8 @@ struct ViewportContainer: View {
                     Drawing2DViewRepresentable(
                         drawCommands: viewModel.drawCommands,
                         drawingInfo: viewModel.drawing2DInfo,
-                        layerVisibilityOverrides: viewModel.layerVisibility
+                        layerVisibilityOverrides: viewModel.layerVisibility,
+                        documentPointer: viewModel.rustDoc
                     )
                 } else {
                     MetalViewWrapper(viewModel: viewModel)

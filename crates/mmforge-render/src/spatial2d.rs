@@ -158,6 +158,7 @@ mod tests {
             },
             line_type: None,
             line_weight: None,
+            line_dash: None,
         }
     }
 

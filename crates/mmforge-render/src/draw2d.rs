@@ -4,7 +4,7 @@
 //! DXF ARC entities (which use degrees) are converted during draw-list
 //! construction.  Bulge-to-arc conversion also produces radians.
 
-use mmforge_core::drawing::{BBox2D, Drawing2DGeometry, Entity2D, PolylineVertex};
+use mmforge_core::drawing::{BBox2D, Drawing2DGeometry, Entity2D, LineType, PolylineVertex};
 
 /// Top-level draw list for a 2D drawing.
 #[derive(Debug, Clone)]
@@ -68,10 +68,12 @@ pub struct FlatDrawCommand {
     pub layer_index: u32,
     pub layer_name: String,
     pub cmd: DrawCommand2D,
-    /// Line type name (e.g., "Continuous", "DASHED").  None = Continuous.
+    /// Resolved line type name (e.g., "Continuous", "DASHED").  None = Continuous.
     pub line_type: Option<String>,
     /// Line weight in mm.  None = default (0).
     pub line_weight: Option<f64>,
+    /// Resolved dash pattern from LTYPE table.  None = solid (Continuous).
+    pub line_dash: Option<Vec<f64>>,
 }
 
 /// Result of bulge-to-arc conversion.
@@ -186,10 +188,49 @@ fn expand_polyline(vertices: &[PolylineVertex], closed: bool) -> Vec<DrawCommand
     commands
 }
 
+/// Resolve the effective line type name for an entity.
+///
+/// Resolution order:
+/// 1. Entity-level line type (group 6), unless it is "ByLayer" or "ByBlock".
+/// 2. Layer's default line type (from LAYER table group 6).
+/// 3. "Continuous" (solid line).
+///
+/// Special values (all case-insensitive):
+/// - "ByLayer" → use layer's line type.
+/// - "ByBlock" → use layer's line type (block context already resolved).
+/// - "Continuous" → solid line (no dash pattern).
+fn resolve_line_type(
+    entity_line_type: Option<&str>,
+    layer_line_type: Option<&str>,
+) -> Option<String> {
+    let resolved = match entity_line_type {
+        Some(lt) if lt.eq_ignore_ascii_case("ByLayer") => layer_line_type.unwrap_or("Continuous"),
+        Some(lt) if lt.eq_ignore_ascii_case("ByBlock") => layer_line_type.unwrap_or("Continuous"),
+        Some(lt) => lt,
+        None => layer_line_type.unwrap_or("Continuous"),
+    };
+    if resolved.eq_ignore_ascii_case("Continuous") || resolved.is_empty() {
+        None
+    } else {
+        Some(resolved.to_string())
+    }
+}
+
+/// Look up the dash pattern for a line type name from the LTYPE table.
+fn lookup_dash_pattern(line_type: Option<&str>, line_types: &[LineType]) -> Option<Vec<f64>> {
+    let name = line_type?;
+    line_types
+        .iter()
+        .find(|lt| lt.name.eq_ignore_ascii_case(name))
+        .filter(|lt| !lt.dashes.is_empty())
+        .map(|lt| lt.dashes.clone())
+}
+
 /// Build a [`DrawingDrawList`] from parsed drawing geometry.
 ///
 /// Groups entities by layer, resolves polyline bulge to arc segments,
-/// converts DXF degrees to radians, and computes the overall bounding box.
+/// converts DXF degrees to radians, resolves line types against layer
+/// defaults and LTYPE table, and computes the overall bounding box.
 pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
     // Group entities by layer.
     let mut layer_map: std::collections::HashMap<String, Vec<&Entity2D>> =
@@ -221,6 +262,7 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
         let layer_meta = drawing.layers.iter().find(|l| &l.name == name);
         let visible = layer_meta.is_none_or(|l| l.visible);
         let color_index = layer_meta.map_or(7, |l| l.color_index);
+        let layer_line_type = layer_meta.and_then(|l| l.line_type.as_deref());
 
         let mut commands = Vec::new();
         for entity in entities {
@@ -236,13 +278,16 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
                         start: *start,
                         end: *end,
                     };
+                    let resolved = resolve_line_type(line_type.as_deref(), layer_line_type);
+                    let dash = lookup_dash_pattern(resolved.as_deref(), &drawing.line_types);
                     commands.push(cmd.clone());
                     flat_commands.push(FlatDrawCommand {
                         layer_index: layer_idx as u32,
                         layer_name: name.clone(),
                         cmd,
-                        line_type: line_type.clone(),
+                        line_type: resolved,
                         line_weight: *line_weight,
+                        line_dash: dash,
                     });
                 }
                 Entity2D::Circle {
@@ -256,13 +301,16 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
                         center: *center,
                         radius: *radius,
                     };
+                    let resolved = resolve_line_type(line_type.as_deref(), layer_line_type);
+                    let dash = lookup_dash_pattern(resolved.as_deref(), &drawing.line_types);
                     commands.push(cmd.clone());
                     flat_commands.push(FlatDrawCommand {
                         layer_index: layer_idx as u32,
                         layer_name: name.clone(),
                         cmd,
-                        line_type: line_type.clone(),
+                        line_type: resolved,
                         line_weight: *line_weight,
+                        line_dash: dash,
                     });
                 }
                 Entity2D::Arc {
@@ -282,13 +330,16 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
                         end_angle: deg_to_rad(*end_angle),
                         ccw: true, // DXF ARC is always CCW in DXF convention.
                     };
+                    let resolved = resolve_line_type(line_type.as_deref(), layer_line_type);
+                    let dash = lookup_dash_pattern(resolved.as_deref(), &drawing.line_types);
                     commands.push(cmd.clone());
                     flat_commands.push(FlatDrawCommand {
                         layer_index: layer_idx as u32,
                         layer_name: name.clone(),
                         cmd,
-                        line_type: line_type.clone(),
+                        line_type: resolved,
                         line_weight: *line_weight,
+                        line_dash: dash,
                     });
                 }
                 Entity2D::Polyline {
@@ -299,14 +350,17 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
                     ..
                 } => {
                     let expanded = expand_polyline(vertices, *closed);
+                    let resolved = resolve_line_type(line_type.as_deref(), layer_line_type);
+                    let dash = lookup_dash_pattern(resolved.as_deref(), &drawing.line_types);
                     for cmd in expanded {
                         commands.push(cmd.clone());
                         flat_commands.push(FlatDrawCommand {
                             layer_index: layer_idx as u32,
                             layer_name: name.clone(),
                             cmd,
-                            line_type: line_type.clone(),
+                            line_type: resolved.clone(),
                             line_weight: *line_weight,
+                            line_dash: dash.clone(),
                         });
                     }
                 }
@@ -330,6 +384,7 @@ pub fn build_draw_list(drawing: &Drawing2DGeometry) -> DrawingDrawList {
                         cmd,
                         line_type: None,
                         line_weight: None,
+                        line_dash: None,
                     });
                 }
                 Entity2D::Insert { .. } => {
@@ -381,11 +436,13 @@ mod tests {
             name: "walls".to_string(),
             color_index: 1,
             visible: true,
+            line_type: None,
         });
         drawing.layers.push(Layer {
             name: "text".to_string(),
             color_index: 7,
             visible: true,
+            line_type: None,
         });
         drawing.entities.push(Entity2D::Line {
             start: [0.0, 0.0],
@@ -428,6 +485,7 @@ mod tests {
             name: "hidden".to_string(),
             color_index: 7,
             visible: false,
+            line_type: None,
         });
         drawing.entities.push(Entity2D::Circle {
             center: [0.0, 0.0],
@@ -770,6 +828,7 @@ mod tests {
             name: "L1".to_string(),
             color_index: 1,
             visible: true,
+            line_type: None,
         });
         drawing.entities.push(Entity2D::Line {
             start: [0.0, 0.0],
@@ -845,5 +904,171 @@ mod tests {
         // Opposite direction.
         assert!(arc_pos.ccw);
         assert!(!arc_neg.ccw);
+    }
+
+    // ---------------------------------------------------------------
+    // Line type resolution tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn resolve_bylayer_case_insensitive() {
+        // "bylayer" (lowercase) should resolve the same as "ByLayer".
+        assert_eq!(
+            resolve_line_type(Some("bylayer"), Some("DASHED")),
+            Some("DASHED".to_string())
+        );
+        assert_eq!(
+            resolve_line_type(Some("BYLAYER"), Some("DASHED")),
+            Some("DASHED".to_string())
+        );
+        assert_eq!(
+            resolve_line_type(Some("ByLayer"), Some("DASHED")),
+            Some("DASHED".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_byblock_case_insensitive() {
+        assert_eq!(
+            resolve_line_type(Some("byblock"), Some("DOTTED")),
+            Some("DOTTED".to_string())
+        );
+        assert_eq!(
+            resolve_line_type(Some("BYBLOCK"), Some("DOTTED")),
+            Some("DOTTED".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_bylayer_fallback_to_continuous() {
+        // ByLayer with no layer line type → Continuous → None.
+        assert_eq!(resolve_line_type(Some("ByLayer"), None), None);
+    }
+
+    #[test]
+    fn resolve_entity_overrides_layer() {
+        // Entity has explicit line type → use it, ignore layer.
+        assert_eq!(
+            resolve_line_type(Some("DASHDOT"), Some("DASHED")),
+            Some("DASHDOT".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_no_entity_uses_layer() {
+        // No entity line type → inherit from layer.
+        assert_eq!(
+            resolve_line_type(None, Some("DASHED")),
+            Some("DASHED".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_no_entity_no_layer_is_continuous() {
+        assert_eq!(resolve_line_type(None, None), None);
+    }
+
+    // ---------------------------------------------------------------
+    // LTYPE dash pattern tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn ltype_dot_pattern_preserved() {
+        // DOTTED: [0.0, -4.0] — zero-length dash (dot) + gap.
+        let mut drawing = Drawing2DGeometry::new();
+        drawing.line_types.push(mmforge_core::drawing::LineType {
+            name: "DOTTED".to_string(),
+            description: "Dotted".to_string(),
+            dashes: vec![0.0, -4.0],
+            total_length: 4.0,
+        });
+        drawing.layers.push(mmforge_core::drawing::Layer {
+            name: "0".to_string(),
+            color_index: 7,
+            visible: true,
+            line_type: Some("DOTTED".to_string()),
+        });
+        drawing.entities.push(Entity2D::Line {
+            start: [0.0, 0.0],
+            end: [10.0, 0.0],
+            layer: "0".to_string(),
+            line_type: None,
+            line_weight: None,
+        });
+
+        let dl = build_draw_list(&drawing);
+        assert_eq!(dl.flat_commands.len(), 1);
+        assert_eq!(dl.flat_commands[0].line_type.as_deref(), Some("DOTTED"));
+        let dash = dl.flat_commands[0].line_dash.as_ref().unwrap();
+        assert_eq!(dash.len(), 2);
+        assert!((dash[0] - 0.0).abs() < 1e-10); // dot preserved as 0.0
+        assert!((dash[1] - (-4.0)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn layer_line_type_inherited_by_entity() {
+        let mut drawing = Drawing2DGeometry::new();
+        drawing.line_types.push(mmforge_core::drawing::LineType {
+            name: "DASHED".to_string(),
+            description: "Dashed".to_string(),
+            dashes: vec![6.0, -6.0],
+            total_length: 12.0,
+        });
+        drawing.layers.push(mmforge_core::drawing::Layer {
+            name: "walls".to_string(),
+            color_index: 1,
+            visible: true,
+            line_type: Some("DASHED".to_string()),
+        });
+        // Entity has no line_type → inherits from layer.
+        drawing.entities.push(Entity2D::Circle {
+            center: [5.0, 5.0],
+            radius: 2.0,
+            layer: "walls".to_string(),
+            line_type: None,
+            line_weight: None,
+        });
+
+        let dl = build_draw_list(&drawing);
+        assert_eq!(dl.flat_commands.len(), 1);
+        assert_eq!(dl.flat_commands[0].line_type.as_deref(), Some("DASHED"));
+        let dash = dl.flat_commands[0].line_dash.as_ref().unwrap();
+        assert_eq!(dash, &vec![6.0, -6.0]);
+    }
+
+    #[test]
+    fn entity_level_overrides_layer_line_type() {
+        let mut drawing = Drawing2DGeometry::new();
+        drawing.line_types.push(mmforge_core::drawing::LineType {
+            name: "DASHED".to_string(),
+            description: "Dashed".to_string(),
+            dashes: vec![6.0, -6.0],
+            total_length: 12.0,
+        });
+        drawing.line_types.push(mmforge_core::drawing::LineType {
+            name: "DASHDOT".to_string(),
+            description: "Dash dot".to_string(),
+            dashes: vec![6.0, -3.0, 1.0, -3.0],
+            total_length: 13.0,
+        });
+        drawing.layers.push(mmforge_core::drawing::Layer {
+            name: "0".to_string(),
+            color_index: 7,
+            visible: true,
+            line_type: Some("DASHED".to_string()),
+        });
+        // Entity explicitly uses DASHDOT → overrides layer's DASHED.
+        drawing.entities.push(Entity2D::Line {
+            start: [0.0, 0.0],
+            end: [10.0, 0.0],
+            layer: "0".to_string(),
+            line_type: Some("DASHDOT".to_string()),
+            line_weight: None,
+        });
+
+        let dl = build_draw_list(&drawing);
+        assert_eq!(dl.flat_commands[0].line_type.as_deref(), Some("DASHDOT"));
+        let dash = dl.flat_commands[0].line_dash.as_ref().unwrap();
+        assert_eq!(dash, &vec![6.0, -3.0, 1.0, -3.0]);
     }
 }

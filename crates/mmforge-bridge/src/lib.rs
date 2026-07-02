@@ -40,6 +40,8 @@ pub struct MmfDocument {
     draw_layer_cstrings: Vec<CString>,
     /// Pre-computed CStrings for line type names per draw command.
     draw_linetype_cstrings: Vec<CString>,
+    /// Pre-computed CStrings for layer line type names.
+    layer_line_type_cstrings: Vec<Option<CString>>,
     /// Spatial index for 2D viewport culling.
     spatial_index: Option<mmforge_render::spatial2d::SpatialIndex2D>,
 }
@@ -116,6 +118,26 @@ fn build_document(output: ParseOutput, registry: TessellationRegistry) -> MmfDoc
         })
         .collect();
 
+    // Build layer line type CStrings for C ABI access.
+    let layer_line_type_cstrings: Vec<Option<CString>> = output
+        .model
+        .geometries
+        .iter()
+        .find_map(|g| {
+            if let Geometry::Drawing2D { drawing, .. } = g {
+                Some(
+                    drawing
+                        .layers
+                        .iter()
+                        .map(|l| l.line_type.as_deref().and_then(|s| CString::new(s).ok()))
+                        .collect(),
+                )
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
     // Build spatial index for 2D viewport culling.
     let spatial_index = if draw_list.flat_commands.is_empty() {
         None
@@ -136,6 +158,7 @@ fn build_document(output: ParseOutput, registry: TessellationRegistry) -> MmfDoc
         draw_text_cstrings,
         draw_layer_cstrings,
         draw_linetype_cstrings,
+        layer_line_type_cstrings,
         spatial_index,
     }
 }
@@ -698,6 +721,40 @@ pub extern "C" fn mmf_drawing_layer_visible(
     0
 }
 
+/// Get the default line type name for a layer.  Returns NULL if Continuous.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_drawing_layer_line_type(
+    doc: *const MmfDocument,
+    index: u32,
+) -> *const c_char {
+    if doc.is_null() {
+        return ptr::null();
+    }
+    let doc = unsafe { &*doc };
+    match doc.layer_line_type_cstrings.get(index as usize) {
+        Some(Some(cs)) if !cs.is_empty() => cs.as_ptr(),
+        _ => ptr::null(),
+    }
+}
+
+/// Get the ACI color index for a layer.  Returns 7 (white) if invalid.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_drawing_layer_color_index(doc: *const MmfDocument, index: u32) -> i16 {
+    if doc.is_null() {
+        return 7;
+    }
+    let doc = unsafe { &*doc };
+    for g in &doc.model.geometries {
+        if let Geometry::Drawing2D { drawing, .. } = g {
+            return drawing
+                .layers
+                .get(index as usize)
+                .map_or(7, |l| l.color_index);
+        }
+    }
+    7
+}
+
 // --- Draw command accessors (flat list) ---
 
 /// Total number of draw commands across all layers.
@@ -1035,9 +1092,63 @@ pub extern "C" fn mmf_draw_cmd_line_weight(doc: *const MmfDocument, index: u32) 
         .unwrap_or(0.0)
 }
 
+/// Get line dash pattern count for a draw command.  Returns 0 if solid line.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_line_dash_count(doc: *const MmfDocument, index: u32) -> u32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    doc.draw_list
+        .flat_commands
+        .get(index as usize)
+        .and_then(|fc| fc.line_dash.as_ref())
+        .map(|d| d.len() as u32)
+        .unwrap_or(0)
+}
+
+/// Get line dash pattern data for a draw command.
+/// Writes up to `max_count` dash lengths to `out_dash`.
+/// Returns number of values written, or 0 if no dash pattern.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_draw_cmd_line_dash(
+    doc: *const MmfDocument,
+    index: u32,
+    out_dash: *mut f64,
+    max_count: u32,
+) -> u32 {
+    if doc.is_null() || out_dash.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    match doc
+        .draw_list
+        .flat_commands
+        .get(index as usize)
+        .and_then(|fc| fc.line_dash.as_ref())
+    {
+        Some(dash) => {
+            let count = dash.len().min(max_count as usize);
+            for (i, &v) in dash.iter().enumerate().take(count) {
+                unsafe {
+                    *out_dash.add(i) = v;
+                }
+            }
+            count as u32
+        }
+        None => 0,
+    }
+}
+
 /// Query spatial index for commands visible in the given viewport rect.
-/// Returns the number of indices written to `out_indices` (up to `max_count`).
-/// Returns -1 if no spatial index available or error.
+///
+/// Returns:
+/// - `-1` if no spatial index available (caller should fall back to full draw).
+/// - `-1` if `doc` or `out_indices` is null.
+/// - `0` if no commands are visible in the viewport (legitimate empty result).
+/// - `>0` the total number of matching indices.  If `total > max_count`,
+///   only `max_count` were written to `out_indices`; the caller should
+///   reallocate with the returned total and re-query.
 #[unsafe(no_mangle)]
 pub extern "C" fn mmf_draw_spatial_query(
     doc: *const MmfDocument,
@@ -1061,11 +1172,12 @@ pub extern "C" fn mmf_draw_spatial_query(
         max: [max_x, max_y],
     };
     let indices = spatial.query(viewport);
-    let count = indices.len().min(max_count as usize);
-    for (i, &idx) in indices.iter().enumerate().take(count) {
+    let total = indices.len() as i32;
+    let written = (indices.len()).min(max_count as usize);
+    for (i, &idx) in indices.iter().enumerate().take(written) {
         unsafe {
             *out_indices.add(i) = idx;
         }
     }
-    count as i32
+    total
 }

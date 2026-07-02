@@ -1,0 +1,176 @@
+  0
+SECTION
+  2
+HEADER
+  9
+$ACADVER
+  1
+AC1009
+  0
+ENDSEC
+  0
+SECTION
+  2
+TABLES
+  0
+TABLE
+  2
+LTYPE
+  0
+LTYPE
+  2
+DASHED
+  3
+Dashed __ __ __ __
+ 40
+12.0
+ 49
+6.0
+ 49
+-6.0
+  0
+LTYPE
+  2
+DASHDOT
+  3
+Dash dot __ . __ . __
+ 40
+16.0
+ 49
+6.0
+ 49
+-3.0
+ 49
+1.0
+ 49
+-3.0
+  0
+LTYPE
+  2
+DOTTED
+  3
+Dotted . . . . . .
+ 40
+4.0
+ 49
+0.0
+ 49
+-4.0
+  0
+LTYPE
+  2
+Continuous
+  3
+Solid line
+ 40
+0.0
+  0
+ENDTAB
+  0
+TABLE
+  2
+LAYER
+  0
+LAYER
+  2
+solid_layer
+  6
+Continuous
+ 62
+     1
+ 70
+     0
+  0
+LAYER
+  2
+dashed_layer
+  6
+DASHED
+ 62
+     3
+ 70
+     0
+  0
+LAYER
+  2
+dotted_layer
+  6
+DOTTED
+ 62
+     5
+ 70
+     0
+  0
+ENDTAB
+  0
+ENDSEC
+  0
+SECTION
+  2
+ENTITIES
+  0
+LINE
+  8
+solid_layer
+ 10
+0.0
+ 20
+0.0
+ 11
+10.0
+ 21
+0.0
+  0
+LINE
+  8
+dashed_layer
+ 10
+0.0
+ 20
+2.0
+ 11
+10.0
+ 21
+2.0
+  0
+LINE
+  8
+dotted_layer
+  6
+DASHDOT
+ 10
+0.0
+ 20
+4.0
+ 11
+10.0
+ 21
+4.0
+  0
+CIRCLE
+  8
+dashed_layer
+ 10
+5.0
+ 20
+7.0
+ 40
+2.0
+  0
+LINE
+  8
+solid_layer
+  6
+DOTTED
+ 10
+0.0
+ 20
+10.0
+ 11
+10.0
+ 21
+10.0
+  0
+ENDSEC
+  0
+EOF

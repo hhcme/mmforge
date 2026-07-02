@@ -119,7 +119,7 @@ final class DocumentViewModel: ObservableObject {
     @Published var layerVisibility: [String: Bool] = [:]
     @Published var layerColors: [String: Int] = [:]
 
-    private var rustDoc: OpaquePointer?
+    private(set) var rustDoc: OpaquePointer?
     private var renderer: MetalRenderer?
     /// Stores DTO from async parse when renderer isn't ready yet.
     private var pendingDTO: RenderPacketDTO?

@@ -88,6 +88,7 @@ pub fn parse_dxf(path: &Path) -> Result<(ParseOutput, Drawing2DGeometry)> {
             name: "0".to_string(),
             color_index: 7,
             visible: true,
+            line_type: None,
         });
     }
 
@@ -394,5 +395,133 @@ mod tests {
             .filter(|c| matches!(c, mmforge_render::draw2d::DrawCommand2D::Line { .. }))
             .collect();
         assert!(line_cmds.len() >= 4);
+    }
+
+    #[test]
+    fn line_types_from_fixture() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("linetypes.dxf");
+        assert!(fixture.exists(), "linetypes.dxf fixture missing");
+
+        let (_, drawing) = parse_dxf(&fixture).expect("parse_dxf should succeed");
+
+        // Verify LTYPE table was parsed.
+        assert_eq!(drawing.line_types.len(), 4); // DASHED, DASHDOT, DOTTED, Continuous
+        let dashed = drawing
+            .line_types
+            .iter()
+            .find(|lt| lt.name == "DASHED")
+            .unwrap();
+        assert_eq!(dashed.dashes, vec![6.0, -6.0]);
+        let dashdot = drawing
+            .line_types
+            .iter()
+            .find(|lt| lt.name == "DASHDOT")
+            .unwrap();
+        assert_eq!(dashdot.dashes, vec![6.0, -3.0, 1.0, -3.0]);
+        let dotted = drawing
+            .line_types
+            .iter()
+            .find(|lt| lt.name == "DOTTED")
+            .unwrap();
+        assert_eq!(dotted.dashes, vec![0.0, -4.0]);
+
+        // Verify layer line types.
+        assert_eq!(drawing.layers.len(), 3);
+        let solid = drawing
+            .layers
+            .iter()
+            .find(|l| l.name == "solid_layer")
+            .unwrap();
+        assert!(solid.line_type.is_none()); // "Continuous" → None after parsing
+        let dashed_layer = drawing
+            .layers
+            .iter()
+            .find(|l| l.name == "dashed_layer")
+            .unwrap();
+        assert_eq!(dashed_layer.line_type.as_deref(), Some("DASHED"));
+        let dotted_layer = drawing
+            .layers
+            .iter()
+            .find(|l| l.name == "dotted_layer")
+            .unwrap();
+        assert_eq!(dotted_layer.line_type.as_deref(), Some("DOTTED"));
+
+        // Verify entity line types (raw entity-level, before resolution).
+        // Entity on solid_layer with no entity-level line type → None
+        let e0 = &drawing.entities[0];
+        assert!(e0.line_type().is_none());
+
+        // Entity on dashed_layer with no entity-level line type → None (entity-level)
+        let e1 = &drawing.entities[1];
+        assert!(e1.line_type().is_none());
+
+        // Entity on dotted_layer with entity-level DASHDOT → Some("DASHDOT")
+        let e2 = &drawing.entities[2];
+        assert_eq!(e2.line_type(), Some("DASHDOT"));
+
+        // CIRCLE on dashed_layer with no entity-level → None
+        let e3 = &drawing.entities[3];
+        assert!(e3.line_type().is_none());
+
+        // Entity on solid_layer with entity-level DOTTED → Some("DOTTED")
+        let e4 = &drawing.entities[4];
+        assert_eq!(e4.line_type(), Some("DOTTED"));
+    }
+
+    #[test]
+    fn draw_list_line_type_resolution() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("linetypes.dxf");
+        let (_, drawing) = parse_dxf(&fixture).expect("parse_dxf");
+        let draw_list = mmforge_render::draw2d::build_draw_list(&drawing);
+
+        // Find the dashed_layer commands.
+        let dashed_cmds: Vec<_> = draw_list
+            .flat_commands
+            .iter()
+            .filter(|fc| fc.layer_name == "dashed_layer")
+            .collect();
+        assert!(!dashed_cmds.is_empty());
+
+        // All dashed_layer commands should have resolved line type "DASHED".
+        for cmd in &dashed_cmds {
+            assert_eq!(
+                cmd.line_type.as_deref(),
+                Some("DASHED"),
+                "dashed_layer entity should inherit DASHED line type"
+            );
+            // DASHED pattern should be [6.0, -6.0].
+            assert!(cmd.line_dash.is_some(), "DASHED should have dash pattern");
+            let dash = cmd.line_dash.as_ref().unwrap();
+            assert_eq!(dash.len(), 2);
+            assert!((dash[0] - 6.0).abs() < 1e-10);
+            assert!((dash[1] - (-6.0)).abs() < 1e-10);
+        }
+
+        // Find the entity with entity-level DOTTED on solid_layer.
+        let dotted_cmds: Vec<_> = draw_list
+            .flat_commands
+            .iter()
+            .filter(|fc| {
+                fc.layer_name == "solid_layer" && fc.line_type.as_deref() == Some("DOTTED")
+            })
+            .collect();
+        assert_eq!(dotted_cmds.len(), 1, "one entity has entity-level DOTTED");
+        let dash = dotted_cmds[0].line_dash.as_ref().unwrap();
+        assert_eq!(dash, &vec![0.0, -4.0]);
+
+        // Entity on solid_layer with no entity-level → Continuous → no dash.
+        let solid_cmds: Vec<_> = draw_list
+            .flat_commands
+            .iter()
+            .filter(|fc| fc.layer_name == "solid_layer" && fc.line_type.is_none())
+            .collect();
+        assert!(!solid_cmds.is_empty());
+        for cmd in &solid_cmds {
+            assert!(cmd.line_dash.is_none(), "Continuous should have no dash");
+        }
     }
 }

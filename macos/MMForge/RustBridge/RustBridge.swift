@@ -201,7 +201,15 @@ final class RustBridge {
                 name = "Layer \(i)"
             }
             let visible = mmf_drawing_layer_visible(doc, UInt32(i)) != 0
-            layers.append(Drawing2DLayerInfo(name: name, visible: visible, colorIndex: 7))
+            let colorIdx = Int(mmf_drawing_layer_color_index(doc, UInt32(i)))
+            let lineType: String? = {
+                if let ptr = mmf_drawing_layer_line_type(doc, UInt32(i)) {
+                    return String(cString: ptr)
+                }
+                return nil
+            }()
+            layers.append(Drawing2DLayerInfo(
+                name: name, visible: visible, colorIndex: colorIdx, lineType: lineType))
         }
 
         return Drawing2DInfo(
@@ -231,22 +239,23 @@ struct Drawing2DLayerInfo {
     let name: String
     let visible: Bool
     let colorIndex: Int
+    let lineType: String?
 }
 
 /// A single 2D draw command for Swift rendering.
 enum DrawCommandDTO {
     case line(x0: Double, y0: Double, x1: Double, y1: Double,
               layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool,
-              lineType: String?, lineWeight: Double)
+              lineType: String?, lineWeight: Double, lineDash: [Double])
     case circle(cx: Double, cy: Double, r: Double,
                 layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool,
-                lineType: String?, lineWeight: Double)
+                lineType: String?, lineWeight: Double, lineDash: [Double])
     case arc(cx: Double, cy: Double, r: Double, startAngle: Double, endAngle: Double, ccw: Bool,
              layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool,
-             lineType: String?, lineWeight: Double)
+             lineType: String?, lineWeight: Double, lineDash: [Double])
     case polyline(points: [(Double, Double)], closed: Bool,
                   layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool,
-                  lineType: String?, lineWeight: Double)
+                  lineType: String?, lineWeight: Double, lineDash: [Double])
     case text(x: Double, y: Double, content: String, height: Double, rotation: Double,
               layerIndex: Int, layerName: String, colorIndex: Int, visible: Bool)
 }
@@ -277,6 +286,15 @@ extension RustBridge {
                 return nil
             }()
             let lineWeight = mmf_draw_cmd_line_weight(doc, idx)
+            let lineDash: [Double] = {
+                let count = Int(mmf_draw_cmd_line_dash_count(doc, idx))
+                guard count > 0 else { return [] }
+                var buffer = [Double](repeating: 0, count: count)
+                let written = buffer.withUnsafeMutableBufferPointer { buf in
+                    mmf_draw_cmd_line_dash(doc, idx, buf.baseAddress!, UInt32(count))
+                }
+                return Array(buffer.prefix(Int(written)))
+            }()
 
             switch type {
             case 0: // Line
@@ -285,7 +303,8 @@ extension RustBridge {
                     commands.append(.line(x0: x0, y0: y0, x1: x1, y1: y1,
                                           layerIndex: layerIdx, layerName: layerName,
                                           colorIndex: colorIdx, visible: visible,
-                                          lineType: lineType, lineWeight: lineWeight))
+                                          lineType: lineType, lineWeight: lineWeight,
+                                          lineDash: lineDash))
                 }
             case 1: // Circle
                 var cx: Double = 0, cy: Double = 0, r: Double = 0
@@ -293,7 +312,8 @@ extension RustBridge {
                     commands.append(.circle(cx: cx, cy: cy, r: r,
                                             layerIndex: layerIdx, layerName: layerName,
                                             colorIndex: colorIdx, visible: visible,
-                                            lineType: lineType, lineWeight: lineWeight))
+                                            lineType: lineType, lineWeight: lineWeight,
+                                            lineDash: lineDash))
                 }
             case 2: // Arc
                 var cx: Double = 0, cy: Double = 0, r: Double = 0
@@ -305,7 +325,8 @@ extension RustBridge {
                                          ccw: ccw != 0,
                                          layerIndex: layerIdx, layerName: layerName,
                                          colorIndex: colorIdx, visible: visible,
-                                         lineType: lineType, lineWeight: lineWeight))
+                                         lineType: lineType, lineWeight: lineWeight,
+                                         lineDash: lineDash))
                 }
             case 3: // Polyline
                 let ptCount = Int(mmf_draw_cmd_polyline_count(doc, idx))
@@ -320,7 +341,8 @@ extension RustBridge {
                 commands.append(.polyline(points: points, closed: closed,
                                           layerIndex: layerIdx, layerName: layerName,
                                           colorIndex: colorIdx, visible: visible,
-                                          lineType: lineType, lineWeight: lineWeight))
+                                          lineType: lineType, lineWeight: lineWeight,
+                                          lineDash: lineDash))
             case 4: // Text
                 var x: Double = 0, y: Double = 0, height: Double = 0, rotation: Double = 0
                 let contentPtr = mmf_draw_cmd_text(doc, idx, &x, &y, &height, &rotation)
@@ -338,14 +360,43 @@ extension RustBridge {
     }
 
     /// Query spatial index for visible commands in viewport.
-    /// Returns array of command indices, or empty array if no spatial index.
+    ///
+    /// Returns:
+    /// - `nil` if spatial index is unavailable (caller should fall back to full draw).
+    /// - Empty array if no commands are visible (legitimate empty viewport).
+    /// - Array of command indices to render.
     func spatialQuery(_ doc: OpaquePointer, minX: Double, minY: Double,
-                      maxX: Double, maxY: Double) -> [Int] {
-        let maxCount = 10000
-        let buffer = UnsafeMutablePointer<UInt32>.allocate(capacity: maxCount)
+                      maxX: Double, maxY: Double) -> [Int]? {
+        var capacity = 16384
+        let buffer = UnsafeMutablePointer<UInt32>.allocate(capacity: capacity)
         defer { buffer.deallocate() }
-        let count = mmf_draw_spatial_query(doc, minX, minY, maxX, maxY, buffer, UInt32(maxCount))
-        if count <= 0 { return [] }
-        return (0..<Int(count)).map { Int(buffer[$0]) }
+
+        let total = Int(mmf_draw_spatial_query(
+            doc, minX, minY, maxX, maxY, buffer, UInt32(capacity)))
+
+        if total < 0 {
+            // Spatial index unavailable or error — caller falls back to full draw.
+            return nil
+        }
+
+        if total == 0 {
+            // Legitimate empty viewport — nothing visible.
+            return []
+        }
+
+        if total > capacity {
+            // Overflow — reallocate with exact total and re-query.
+            capacity = total
+            let bigBuffer = UnsafeMutablePointer<UInt32>.allocate(capacity: capacity)
+            defer { bigBuffer.deallocate() }
+            let total2 = Int(mmf_draw_spatial_query(
+                doc, minX, minY, maxX, maxY, bigBuffer, UInt32(capacity)))
+            if total2 <= 0 { return nil }
+            let count = min(total2, capacity)
+            return (0..<count).map { Int(bigBuffer[$0]) }
+        }
+
+        // All results fit in buffer.
+        return (0..<total).map { Int(buffer[$0]) }
     }
 }

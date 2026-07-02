@@ -168,6 +168,12 @@ const char* mmf_drawing_layer_name(const MmfDocument* doc, uint32_t index);
 /** Check if layer is visible by index.  Returns 1 if visible. */
 int mmf_drawing_layer_visible(const MmfDocument* doc, uint32_t index);
 
+/** Get the default line type name for a layer.  NULL if Continuous. */
+const char* mmf_drawing_layer_line_type(const MmfDocument* doc, uint32_t index);
+
+/** Get the ACI color index for a layer.  Returns 7 (white) if invalid. */
+int16_t mmf_drawing_layer_color_index(const MmfDocument* doc, uint32_t index);
+
 /* ------------------------------------------------------------------ */
 /*  Draw command accessors (flat list across all layers)               */
 /* ------------------------------------------------------------------ */
@@ -226,6 +232,18 @@ const char* mmf_draw_cmd_line_type(const MmfDocument* doc, uint32_t index);
 /** Line weight for a draw command in mm.  0.0 if default. */
 double mmf_draw_cmd_line_weight(const MmfDocument* doc, uint32_t index);
 
+/** Line dash pattern element count for a draw command.  0 if solid line. */
+uint32_t mmf_draw_cmd_line_dash_count(const MmfDocument* doc, uint32_t index);
+
+/**
+ * Read line dash pattern data for a draw command.
+ * @param out_dash   Output array of dash lengths (caller-allocated).
+ * @param max_count  Max number of values to write.
+ * @return Number of values written, or 0 if no dash pattern.
+ */
+uint32_t mmf_draw_cmd_line_dash(const MmfDocument* doc, uint32_t index,
+                                double* out_dash, uint32_t max_count);
+
 /**
  * Spatial query for viewport culling.
  * @param doc       Document handle.
@@ -235,7 +253,10 @@ double mmf_draw_cmd_line_weight(const MmfDocument* doc, uint32_t index);
  * @param max_y     Viewport max Y.
  * @param out_indices  Output array of command indices (caller-allocated).
  * @param max_count    Max number of indices to write.
- * @return Number of indices written, or -1 on error.
+ * @return -1 if spatial index unavailable or error (caller falls back to full draw).
+ *          0 if no commands visible in viewport (legitimate empty).
+ *         >0 total matching indices. If total > max_count, caller should
+ *            reallocate with the returned total and re-query.
  */
 int32_t mmf_draw_spatial_query(const MmfDocument* doc,
                                double min_x, double min_y,

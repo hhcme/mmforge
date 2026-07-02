@@ -23,6 +23,7 @@
 		A10014 /* PickingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10017; };
 		A10015 /* SectionFill.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10018; };
 		A10016 /* DrawingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10019; };
+		A10017 /* TransformTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10020; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -44,6 +45,7 @@
 		B10017 /* PickingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickingTests.swift; sourceTree = "<group>"; };
 		B10018 /* SectionFill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionFill.swift; sourceTree = "<group>"; };
 		B10019 /* DrawingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawingView.swift; sourceTree = "<group>"; };
+		B10020 /* TransformTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransformTests.swift; sourceTree = "<group>"; };
 		B10015 /* mmforge_bridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = mmforge_bridge.h; sourceTree = "<group>"; };
 		C10001 /* MMForge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MMForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C10002 /* MMForgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MMForgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -163,6 +165,7 @@
 			isa = PBXGroup;
 			children = (
 				B10017 /* PickingTests.swift */,
+				B10020 /* TransformTests.swift */,
 			);
 			path = MMForgeTests;
 			sourceTree = "<group>";
@@ -264,6 +267,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10014 /* PickingTests.swift in Sources */,
+				A10017 /* TransformTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

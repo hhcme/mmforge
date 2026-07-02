@@ -81,6 +81,10 @@ pub struct Layer {
     /// AutoCAD Color Index (ACI).  Negative means the layer is off.
     pub color_index: i16,
     pub visible: bool,
+    /// Default line type name for entities on this layer (group 6 in LAYER table).
+    /// Entities with "ByLayer" line type inherit this value.
+    /// None or "Continuous" means solid line.
+    pub line_type: Option<String>,
 }
 
 /// A block definition (reusable group of entities).
@@ -100,6 +104,19 @@ pub struct LineType {
     pub dashes: Vec<f64>,
     /// Total pattern length.
     pub total_length: f64,
+}
+
+impl Entity2D {
+    /// Get the entity-level line type name (group 6), if set.
+    pub fn line_type(&self) -> Option<&str> {
+        match self {
+            Entity2D::Line { line_type, .. }
+            | Entity2D::Circle { line_type, .. }
+            | Entity2D::Arc { line_type, .. }
+            | Entity2D::Polyline { line_type, .. } => line_type.as_deref(),
+            Entity2D::Text { .. } | Entity2D::Insert { .. } => None,
+        }
+    }
 }
 
 impl Drawing2DGeometry {
@@ -473,5 +490,48 @@ mod tests {
         assert_eq!(aci_to_rgba(1), [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(aci_to_rgba(7), [1.0, 1.0, 1.0, 1.0]);
         assert_eq!(aci_to_rgba(0), [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn layer_with_line_type() {
+        let layer = Layer {
+            name: "dashed".to_string(),
+            color_index: 1,
+            visible: true,
+            line_type: Some("DASHED".to_string()),
+        };
+        assert_eq!(layer.line_type.as_deref(), Some("DASHED"));
+    }
+
+    #[test]
+    fn layer_default_line_type() {
+        let layer = Layer {
+            name: "0".to_string(),
+            color_index: 7,
+            visible: true,
+            line_type: None,
+        };
+        assert!(layer.line_type.is_none());
+    }
+
+    #[test]
+    fn entity_line_type_accessor() {
+        let line = Entity2D::Line {
+            start: [0.0, 0.0],
+            end: [1.0, 0.0],
+            layer: "0".to_string(),
+            line_type: Some("DASHED".to_string()),
+            line_weight: None,
+        };
+        assert_eq!(line.line_type(), Some("DASHED"));
+
+        let text = Entity2D::Text {
+            position: [0.0, 0.0],
+            content: "test".to_string(),
+            height: 1.0,
+            rotation: 0.0,
+            layer: "0".to_string(),
+        };
+        assert!(text.line_type().is_none());
     }
 }

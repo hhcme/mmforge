@@ -19,7 +19,7 @@ private func aciColor(_ index: Int) -> CGColor {
 ///
 /// Renders DXF drawing entities (lines, circles, arcs, polylines, text)
 /// with pan, zoom, and fit-to-view support.  Layer visibility can be
-/// toggled per-layer.
+/// toggled per-layer.  Uses spatial index for viewport culling.
 class Drawing2DView: NSView {
     /// Parsed draw commands from the Rust bridge.
     var drawCommands: [DrawCommandDTO] = [] {
@@ -36,12 +36,16 @@ class Drawing2DView: NSView {
         didSet { needsDisplay = true }
     }
 
+    /// Document pointer for spatial queries (borrowed from DocumentViewModel).
+    var documentPointer: OpaquePointer?
+
     /// Viewport state: pan offset and zoom level.
-    private var panOffset: CGPoint = .zero
-    private var zoomLevel: CGFloat = 1.0
+    /// Internal for testing — use gestures to modify in production.
+    var panOffset: CGPoint = .zero
+    var zoomLevel: CGFloat = 1.0
 
     /// World-space bounds of the drawing.
-    private var worldBounds: CGRect {
+    var worldBounds: CGRect {
         guard let info = drawingInfo else {
             return CGRect(x: -100, y: -100, width: 200, height: 200)
         }
@@ -53,6 +57,56 @@ class Drawing2DView: NSView {
         )
     }
 
+    // MARK: - Transform
+
+    /// Compute the fit-to-view scale given a screen rect and world bounds.
+    func fitScale(screenBounds: CGRect, worldRect: CGRect) -> CGFloat {
+        let margin: CGFloat = 40
+        let scaleX = (screenBounds.width - margin * 2) / max(worldRect.width, 0.001)
+        let scaleY = (screenBounds.height - margin * 2) / max(worldRect.height, 0.001)
+        return min(scaleX, scaleY)
+    }
+
+    /// Build the world→screen affine transform.
+    ///
+    /// This is the **single source of truth** used by both `draw(_:)` and
+    /// `spatiallyCulledCommands`.  The transform chain (applied left→right)
+    /// matches the CGContext calls exactly:
+    ///
+    ///   T1: translate(viewCenter)
+    ///   T2: scale(scale)
+    ///   T3: translate(panOffset / scale)
+    ///   T4: translate(-worldCenter)
+    ///   T5: scale(1, -1)            // Y-flip
+    ///   T6: translate(0, -wb.midY * 2)
+    func worldToScreenTransform(viewBounds: CGRect) -> CGAffineTransform {
+        let wb = worldBounds
+        let s = zoomLevel * fitScale(screenBounds: viewBounds, worldRect: wb)
+        let vc = CGPoint(x: viewBounds.midX, y: viewBounds.midY)
+        let wc = CGPoint(x: wb.midX, y: wb.midY)
+
+        // T1: translate(vc)
+        let t1 = CGAffineTransform(translationX: vc.x, y: vc.y)
+        // T2: scale(s)
+        let t2 = CGAffineTransform(scaleX: s, y: s)
+        // T3: translate(panOffset / s)
+        let t3 = CGAffineTransform(translationX: panOffset.x / s, y: panOffset.y / s)
+        // T4: translate(-wc)
+        let t4 = CGAffineTransform(translationX: -wc.x, y: -wc.y)
+        // T5: scale(1, -1)  — Y-flip
+        let t5 = CGAffineTransform(scaleX: 1, y: -1)
+        // T6: translate(0, -wb.midY * 2)
+        let t6 = CGAffineTransform(translationX: 0, y: -wb.midY * 2)
+
+        // CGAffineTransform.concatenating applies receiver first, but
+        // CGContext.concat applies argument first.  To match the CGContext
+        // call order (T1 first, T6 last), we must reverse the chain:
+        //   t6.concatenating(t5)...concatenating(t1)
+        // so that T1 is applied last (i.e., first in the CGContext order).
+        return t6.concatenating(t5).concatenating(t4)
+                  .concatenating(t3).concatenating(t2).concatenating(t1)
+    }
+
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
@@ -62,40 +116,64 @@ class Drawing2DView: NSView {
         ctx.setFillColor(CGColor(red: 0.12, green: 0.12, blue: 0.14, alpha: 1.0))
         ctx.fill(bounds)
 
-        // Compute transform: world → screen.
-        let viewCenter = CGPoint(x: bounds.midX, y: bounds.midY)
         let wb = worldBounds
-        let worldCenter = CGPoint(x: wb.midX, y: wb.midY)
+        let scale = zoomLevel * fitScale(screenBounds: bounds, worldRect: wb)
 
-        // Scale to fit the drawing in the view with margin.
-        let margin: CGFloat = 40
-        let scaleX = (bounds.width - margin * 2) / max(wb.width, 0.001)
-        let scaleY = (bounds.height - margin * 2) / max(wb.height, 0.001)
-        let fitScale = min(scaleX, scaleY)
-
+        // Apply the exact same transform as worldToScreenTransform.
+        let xform = worldToScreenTransform(viewBounds: bounds)
         ctx.saveGState()
-
-        // Move to view center, apply zoom, apply pan, center world.
-        ctx.translateBy(x: viewCenter.x, y: viewCenter.y)
-        ctx.scaleBy(x: zoomLevel * fitScale, y: zoomLevel * fitScale)
-        ctx.translateBy(x: panOffset.x / (zoomLevel * fitScale),
-                        y: panOffset.y / (zoomLevel * fitScale))
-        ctx.translateBy(x: -worldCenter.x, y: -worldCenter.y)
-
-        // Flip Y axis (DXF Y-up → screen Y-down).
-        ctx.scaleBy(x: 1.0, y: -1.0)
-        ctx.translateBy(x: 0, y: -wb.midY * 2)
+        ctx.concatenate(xform)
 
         // Draw grid.
-        drawGrid(ctx: ctx, worldBounds: wb, scale: zoomLevel * fitScale)
+        drawGrid(ctx: ctx, worldBounds: wb, scale: scale)
 
-        // Draw all entities.
-        let scale = zoomLevel * fitScale
-        for cmd in drawCommands {
+        // Determine which commands to draw via spatial culling.
+        // nil = index unavailable (draw all), [] = nothing visible, [...] = culled.
+        let visibleCommands = spatiallyCulledCommands(scale: scale) ?? drawCommands
+
+        // Draw visible entities.
+        for cmd in visibleCommands {
             drawCommand(ctx: ctx, cmd: cmd, scale: scale)
         }
 
         ctx.restoreGState()
+    }
+
+    /// Compute the visible commands using spatial index, with fallback to all commands.
+    ///
+    /// Returns `nil` when the spatial index is unavailable (fallback to full draw).
+    /// Returns `[]` when the viewport legitimately contains no visible commands.
+    private func spatiallyCulledCommands(scale: CGFloat) -> [DrawCommandDTO]? {
+        guard let doc = documentPointer, !drawCommands.isEmpty else {
+            return nil // fallback
+        }
+
+        // Build the world→screen transform and invert it.
+        // This is guaranteed to be consistent with draw(_:) because both
+        // use worldToScreenTransform().
+        let w2s = worldToScreenTransform(viewBounds: bounds)
+        let s2w = w2s.inverted()
+
+        // Map screen corners through the inverse transform.
+        // Screen origin is top-left; bottom-left = (0, height), top-right = (width, 0).
+        let wBL = CGPoint(x: 0, y: bounds.height).applying(s2w)
+        let wTR = CGPoint(x: bounds.width, y: 0).applying(s2w)
+
+        let vpMinX = min(wBL.x, wTR.x)
+        let vpMaxX = max(wBL.x, wTR.x)
+        let vpMinY = min(wBL.y, wTR.y)
+        let vpMaxY = max(wBL.y, wTR.y)
+
+        // Query spatial index.  nil = index unavailable, [] = nothing visible.
+        guard let indices = RustBridge.shared.spatialQuery(
+            doc, minX: vpMinX, minY: vpMinY, maxX: vpMaxX, maxY: vpMaxY) else {
+            return nil // spatial index unavailable → fallback to full draw
+        }
+
+        // Map indices to commands, filtering out-of-bounds.
+        return indices.compactMap { idx in
+            idx < drawCommands.count ? drawCommands[idx] : nil
+        }
     }
 
     private func drawGrid(ctx: CGContext, worldBounds: CGRect, scale: CGFloat) {
@@ -156,35 +234,49 @@ class Drawing2DView: NSView {
         layerVisibilityOverrides[layerName] ?? visible
     }
 
+    /// Compute line width in world-space units.
+    ///
+    /// - If `weight > 0`: converts mm → points, then divides by scale so the
+    ///   rendered width is independent of zoom.
+    /// - If `weight == 0` (default): returns `1.0 / scale` for a stable 1px
+    ///   screen line regardless of zoom level.
     private func lineWidth(_ cmd: DrawCommandDTO, scale: CGFloat) -> CGFloat {
         let weight: Double
         switch cmd {
-        case .line(_, _, _, _, _, _, _, _, _, let lw),
-             .circle(_, _, _, _, _, _, _, _, let lw),
-             .arc(_, _, _, _, _, _, _, _, _, _, _, let lw),
-             .polyline(_, _, _, _, _, _, _, let lw):
+        case .line(_, _, _, _, _, _, _, _, _, let lw, _),
+             .circle(_, _, _, _, _, _, _, _, let lw, _),
+             .arc(_, _, _, _, _, _, _, _, _, _, _, let lw, _),
+             .polyline(_, _, _, _, _, _, _, let lw, _):
             weight = lw
         case .text:
             weight = 0
         }
-        // Line weight in mm → points.  Default 0 means 1px.
+        // Line weight in mm → points.  Default 0 means 1px screen.
         if weight > 0 {
             return CGFloat(weight) * 2.835 / scale // 1mm ≈ 2.835pt
         }
-        return 1.0
+        // Stable 1px line: divide by scale so it stays 1 screen pixel.
+        return 1.0 / scale
     }
 
+    /// Resolve the dash pattern for a command.
+    ///
+    /// Uses the command's LTYPE-derived dash pattern if available,
+    /// otherwise falls back to a name-based lookup for standard patterns.
     private func lineDashPattern(_ cmd: DrawCommandDTO) -> [CGFloat]? {
-        let lineType: String?
-        switch cmd {
-        case .line(_, _, _, _, _, _, _, _, let lt, _),
-             .circle(_, _, _, _, _, _, _, let lt, _),
-             .arc(_, _, _, _, _, _, _, _, _, _, let lt, _),
-             .polyline(_, _, _, _, _, _, let lt, _):
-            lineType = lt
-        case .text:
-            lineType = nil
+        let (lineDash, lineType) = extractDashAndType(cmd)
+
+        // Use LTYPE-derived dash pattern if available.
+        // Convert zero-length dashes (DXF dots) to a visible small value.
+        if !lineDash.isEmpty {
+            let dotSize: CGFloat = 0.5  // visible dot length in drawing units
+            return lineDash.map { val in
+                let absVal = CGFloat(abs(val))
+                return absVal < 1e-10 ? dotSize : absVal
+            }
         }
+
+        // Fallback: standard name-based patterns.
         guard let lt = lineType else { return nil }
         switch lt.lowercased() {
         case "dashed":       return [6, 3]
@@ -201,17 +293,40 @@ class Drawing2DView: NSView {
         }
     }
 
+    /// Extract dash pattern and line type name from a command.
+    private func extractDashAndType(_ cmd: DrawCommandDTO) -> ([Double], String?) {
+        switch cmd {
+        case .line(_, _, _, _, _, _, _, _, let lt, _, let dash):
+            return (dash, lt)
+        case .circle(_, _, _, _, _, _, _, let lt, _, let dash):
+            return (dash, lt)
+        case .arc(_, _, _, _, _, _, _, _, _, _, let lt, _, let dash):
+            return (dash, lt)
+        case .polyline(_, _, _, _, _, _, let lt, _, let dash):
+            return (dash, lt)
+        case .text:
+            return ([], nil)
+        }
+    }
+
     private func drawCommand(ctx: CGContext, cmd: DrawCommandDTO, scale: CGFloat) {
         // Extract layer name and visibility from command.
         let layerName: String
         let visible: Bool
         let colorIdx: Int
         switch cmd {
-        case .line(_, _, _, _, _, let ln, let ci, let v, _, _),
-             .circle(_, _, _, _, let ln, let ci, let v, _, _),
-             .arc(_, _, _, _, _, _, _, let ln, let ci, let v, _, _),
-             .polyline(_, _, _, let ln, let ci, let v, _, _),
-             .text(_, _, _, _, _, _, let ln, let ci, let v):
+        // line: x0, y0, x1, y1, layerIndex, layerName, colorIndex, visible, lineType, lineWeight, lineDash
+        case .line(_, _, _, _, _, let ln, let ci, let v, _, _, _),
+             // circle: cx, cy, r, layerIndex, layerName, colorIndex, visible, lineType, lineWeight, lineDash
+             .circle(_, _, _, _, let ln, let ci, let v, _, _, _),
+             // arc: cx, cy, r, start, end, ccw, layerIndex, layerName, colorIndex, visible, lineType, lineWeight, lineDash
+             .arc(_, _, _, _, _, _, _, let ln, let ci, let v, _, _, _),
+             // polyline: points, closed, layerIndex, layerName, colorIndex, visible, lineType, lineWeight, lineDash
+             .polyline(_, _, _, let ln, let ci, let v, _, _, _):
+            layerName = ln
+            visible = v
+            colorIdx = ci
+        case .text(_, _, _, _, _, _, let ln, let ci, let v):
             layerName = ln
             visible = v
             colorIdx = ci
@@ -223,7 +338,7 @@ class Drawing2DView: NSView {
         let dash = lineDashPattern(cmd)
 
         switch cmd {
-        case .line(let x0, let y0, let x1, let y1, _, _, _, _, _, _):
+        case .line(let x0, let y0, let x1, let y1, _, _, _, _, _, _, _):
             ctx.setStrokeColor(aciColor(colorIdx))
             ctx.setLineWidth(lw)
             if let dash { ctx.setLineDash(phase: 0, lengths: dash) }
@@ -233,7 +348,7 @@ class Drawing2DView: NSView {
             ctx.addLine(to: CGPoint(x: x1, y: y1))
             ctx.strokePath()
 
-        case .circle(let cx, let cy, let r, _, _, _, _, _, _):
+        case .circle(let cx, let cy, let r, _, _, _, _, _, _, _):
             ctx.setStrokeColor(aciColor(colorIdx))
             ctx.setLineWidth(lw)
             if let dash { ctx.setLineDash(phase: 0, lengths: dash) }
@@ -242,7 +357,7 @@ class Drawing2DView: NSView {
             ctx.strokeEllipse(in: rect)
 
         case .arc(let cx, let cy, let r, let startAngle, let endAngle, let ccw,
-                  _, _, _, _, _, _):
+                  _, _, _, _, _, _, _):
             ctx.setStrokeColor(aciColor(colorIdx))
             ctx.setLineWidth(lw)
             if let dash { ctx.setLineDash(phase: 0, lengths: dash) }
@@ -255,7 +370,7 @@ class Drawing2DView: NSView {
                        clockwise: !ccw)
             ctx.strokePath()
 
-        case .polyline(let points, let closed, _, _, _, _, _, _):
+        case .polyline(let points, let closed, _, _, _, _, _, _, _):
             guard !points.isEmpty else { return }
             ctx.setStrokeColor(aciColor(colorIdx))
             ctx.setLineWidth(lw)
@@ -330,6 +445,7 @@ struct Drawing2DViewRepresentable: NSViewRepresentable {
     let drawCommands: [DrawCommandDTO]
     let drawingInfo: Drawing2DInfo?
     let layerVisibilityOverrides: [String: Bool]
+    let documentPointer: OpaquePointer?
 
     func makeNSView(context: Context) -> Drawing2DView {
         let view = Drawing2DView()
@@ -341,5 +457,6 @@ struct Drawing2DViewRepresentable: NSViewRepresentable {
         nsView.drawCommands = drawCommands
         nsView.drawingInfo = drawingInfo
         nsView.layerVisibilityOverrides = layerVisibilityOverrides
+        nsView.documentPointer = documentPointer
     }
 }
