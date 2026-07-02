@@ -118,6 +118,10 @@ final class DocumentViewModel: ObservableObject {
     @Published var pendingPolygonPoints: [CGPoint] = []  // 2D area polygon
     @Published var measurementType: MeasurementType = .distance
     @Published var snapEnabled: Bool = true
+    /// Active independent annotation tool (text/arrow/dimension). Nil = no tool active.
+    @Published var activeAnnotationTool: AnnotationTool?
+    /// Text content for text annotation tool.
+    @Published var annotationToolText: String = ""
 
     // Color override state
     @Published var nodeColorOverrides: [Int: simd_float4] = [:]
@@ -644,26 +648,24 @@ final class DocumentViewModel: ObservableObject {
         }
     }
 
-    /// Export the current 2D drawing as a PDF with annotations.
+    /// Export the current view as a PDF.
+    ///
+    /// - 2D drawings: vector PDF with the same rendering pipeline as the screen.
+    /// - 3D models: raster snapshot of the Metal viewport embedded in a PDF page.
     func exportPDF() {
-        // For 2D drawings, use the Drawing2DView's PDF export.
-        guard is2DDrawing else {
-            // For 3D, fall back to image export embedded in a PDF.
-            exportImage()
-            return
-        }
-
-        // Find the Drawing2DView to call exportPDF on it.
-        // We use the view's exportPDF method which handles the PDF context.
         let panel = NSSavePanel()
         panel.title = "Export PDF"
         panel.allowedContentTypes = [.pdf]
-        panel.nameFieldStringValue = "mmforge_drawing.pdf"
+        panel.nameFieldStringValue = is2DDrawing ? "mmforge_drawing.pdf" : "mmforge_model.pdf"
         panel.canCreateDirectories = true
 
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            self.exportPDFToFile(url: url)
+            if self.is2DDrawing {
+                self.exportPDFToFile(url: url)
+            } else {
+                self.export3DPDFToFile(url: url)
+            }
         }
     }
 
@@ -711,6 +713,57 @@ final class DocumentViewModel: ObservableObject {
             pageHeight: pageH,
             margin: margin)
 
+        pdfCtx.closePDF()
+    }
+
+    /// Export a 3D model as a PDF with a raster snapshot of the current viewport.
+    private func export3DPDFToFile(url: URL) {
+        guard let renderer else {
+            exportError = "No renderer available."
+            return
+        }
+        guard let image = renderer.captureImage(),
+              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            exportError = "Failed to capture viewport."
+            return
+        }
+
+        let imgW = CGFloat(cgImage.width)
+        let imgH = CGFloat(cgImage.height)
+
+        // A4 landscape, fit image with margin.
+        let pageW: CGFloat = 842
+        let pageH: CGFloat = 595
+        let margin: CGFloat = 36
+        let drawW = pageW - margin * 2
+        let drawH = pageH - margin * 2
+        let scaleX = drawW / imgW
+        let scaleY = drawH / imgH
+        let scale = min(scaleX, scaleY)
+        let renderW = imgW * scale
+        let renderH = imgH * scale
+        let originX = margin + (drawW - renderW) / 2
+        let originY = margin + (drawH - renderH) / 2
+
+        guard let consumer = CGDataConsumer(url: url as CFURL) else {
+            exportError = "Failed to create PDF data consumer."
+            return
+        }
+        var mediaBox = CGRect(x: 0, y: 0, width: pageW, height: pageH)
+        guard let pdfCtx = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+            exportError = "Failed to create PDF context."
+            return
+        }
+
+        pdfCtx.beginPDFPage(nil)
+        pdfCtx.saveGState()
+
+        // PDF origin is bottom-left; draw image with origin at top-left.
+        pdfCtx.translateBy(x: originX, y: pageH - originY - renderH)
+        pdfCtx.draw(cgImage, in: CGRect(x: 0, y: 0, width: renderW, height: renderH))
+
+        pdfCtx.restoreGState()
+        pdfCtx.endPDFPage()
         pdfCtx.closePDF()
     }
 
@@ -885,5 +938,20 @@ extension DocumentViewModel: Drawing2DAnnotationDelegate {
     func didCancelPending() {
         pendingAnnotationPoint = nil
         pendingPolygonPoints = []
+    }
+
+    func didPlaceTextAnnotation(at position: CGPoint, text: String) {
+        guard !text.isEmpty else { return }
+        addTextAnnotation(position: position, text: text)
+    }
+
+    func didCompleteArrowAnnotation(tail: CGPoint, head: CGPoint) {
+        addArrowAnnotation(tail: tail, head: head)
+        pendingAnnotationPoint = nil
+    }
+
+    func didCompleteDimensionAnnotation(start: CGPoint, end: CGPoint) {
+        addDimensionAnnotation(start: start, end: end)
+        pendingAnnotationPoint = nil
     }
 }

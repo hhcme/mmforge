@@ -28,6 +28,8 @@ struct ViewportContainer: View {
                         measurementMode: viewModel.measurementMode,
                         measurementType: viewModel.measurementType,
                         snapEnabled: viewModel.snapEnabled,
+                        activeAnnotationTool: viewModel.activeAnnotationTool,
+                        annotationToolText: viewModel.annotationToolText,
                         pendingAnnotationPoint: viewModel.pendingAnnotationPoint,
                         pendingPolygonPoints: viewModel.pendingPolygonPoints,
                         annotationDelegate: viewModel

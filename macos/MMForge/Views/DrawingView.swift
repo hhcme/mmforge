@@ -53,6 +53,12 @@ class Drawing2DView: NSView {
     /// Whether snap-to-entity is enabled.
     var snapEnabled: Bool = true
 
+    /// Active independent annotation tool (text/arrow/dimension).
+    var activeAnnotationTool: AnnotationTool?
+
+    /// Text content for the text annotation tool.
+    var annotationToolText: String = ""
+
     /// First-click point for 2D measurement (world coords).
     var pendingAnnotationPoint: CGPoint? {
         didSet { needsDisplay = true }
@@ -167,6 +173,14 @@ class Drawing2DView: NSView {
             }
         }
 
+        // Independent annotation tools take priority.
+        if let tool = activeAnnotationTool {
+            handleAnnotationToolClick(worldPt, tool: tool)
+            return
+        }
+
+        guard measurementMode else { return }
+
         switch measurementType {
         case .distance:
             handleDistanceClick(worldPt)
@@ -178,11 +192,30 @@ class Drawing2DView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
-        guard measurementMode else {
+        guard measurementMode || activeAnnotationTool != nil else {
             super.rightMouseDown(with: event)
             return
         }
         annotationDelegate?.didCancelPending()
+    }
+
+    private func handleAnnotationToolClick(_ worldPt: CGPoint, tool: AnnotationTool) {
+        switch tool {
+        case .text:
+            annotationDelegate?.didPlaceTextAnnotation(at: worldPt, text: annotationToolText)
+        case .arrow:
+            if let pending = pendingAnnotationPoint {
+                annotationDelegate?.didCompleteArrowAnnotation(tail: pending, head: worldPt)
+            } else {
+                annotationDelegate?.didSetPendingPoint(worldPt)
+            }
+        case .dimension:
+            if let pending = pendingAnnotationPoint {
+                annotationDelegate?.didCompleteDimensionAnnotation(start: pending, end: worldPt)
+            } else {
+                annotationDelegate?.didSetPendingPoint(worldPt)
+            }
+        }
     }
 
     private func handleDistanceClick(_ worldPt: CGPoint) {
@@ -884,31 +917,41 @@ class Drawing2DView: NSView {
         let originX = margin + (drawW - wb.width * pdfScale) / 2
         let originY = margin + (drawH - wb.height * pdfScale) / 2
 
+        // Build a temporary view to compute worldToScreenTransform.
+        // We set its properties so the transform is computed identically
+        // to the screen rendering path.
+        let tmpView = Drawing2DView()
+        tmpView.drawingInfo = Drawing2DInfo(
+            entityCount: 0, layerCount: 0,
+            boundsMinX: wb.origin.x, boundsMinY: wb.origin.y,
+            boundsMaxX: wb.origin.x + wb.width, boundsMaxY: wb.origin.y + wb.height,
+            layers: [])
+        // Match the screen view's frame so fitScale computes the same value.
+        tmpView.frame = CGRect(x: 0, y: 0, width: drawW, height: drawH)
+        tmpView.layerVisibilityOverrides = layerVisibility
+        tmpView.annotations = annotations
+
+        // Compute the world→screen transform using the same method as draw(_:).
+        let w2s = tmpView.worldToScreenTransform(viewBounds: tmpView.bounds)
+
+        // PDF coordinate frame: origin at (originX, pageHeight - originY),
+        // Y-axis pointing down (matching screen coordinates).
+        let pdfFrame = CGAffineTransform(translationX: originX, y: pageHeight - originY)
+            .concatenating(w2s)
+
         ctx.beginPDFPage(nil)
         ctx.saveGState()
+        ctx.concatenate(pdfFrame)
 
-        // PDF origin is bottom-left; flip to top-left.
-        ctx.translateBy(x: 0, y: pageHeight)
-        ctx.scaleBy(x: 1, y: -1)
-
-        // Position and scale the drawing.
-        ctx.translateBy(x: originX, y: originY)
-        ctx.scaleBy(x: pdfScale, y: pdfScale)
-        ctx.translateBy(x: -wb.origin.x, y: -wb.origin.y)
-
-        // Draw entities — use the same drawCommand method as screen rendering,
-        // which respects layer visibility, line types, line weights, and dash patterns.
-        // We create a temporary view instance to call the instance method.
-        let tmpView = Drawing2DView()
-        tmpView.layerVisibilityOverrides = layerVisibility
-
+        // Draw entities using the same pipeline as screen rendering.
+        let scale = tmpView.zoomLevel * tmpView.fitScale(
+            screenBounds: tmpView.bounds, worldRect: wb)
         for cmd in commands {
-            tmpView.drawCommand(ctx: ctx, cmd: cmd, scale: pdfScale)
+            tmpView.drawCommand(ctx: ctx, cmd: cmd, scale: scale)
         }
 
-        // Draw annotations — reuse the same overlay pipeline.
-        tmpView.annotations = annotations
-        tmpView.drawAnnotations(ctx: ctx, scale: pdfScale)
+        // Draw annotations.
+        tmpView.drawAnnotations(ctx: ctx, scale: scale)
 
         ctx.restoreGState()
         ctx.endPDFPage()
@@ -955,6 +998,9 @@ protocol Drawing2DAnnotationDelegate: AnyObject {
     func didSetPendingAngleRay(_ point: CGPoint)
     func didAddPolygonPoint(_ point: CGPoint)
     func didCancelPending()
+    func didPlaceTextAnnotation(at position: CGPoint, text: String)
+    func didCompleteArrowAnnotation(tail: CGPoint, head: CGPoint)
+    func didCompleteDimensionAnnotation(start: CGPoint, end: CGPoint)
 }
 
 // MARK: - NSViewRepresentable wrapper
@@ -968,6 +1014,8 @@ struct Drawing2DViewRepresentable: NSViewRepresentable {
     let measurementMode: Bool
     let measurementType: MeasurementType
     let snapEnabled: Bool
+    let activeAnnotationTool: AnnotationTool?
+    let annotationToolText: String
     let pendingAnnotationPoint: CGPoint?
     let pendingPolygonPoints: [CGPoint]
     let annotationDelegate: Drawing2DAnnotationDelegate?
@@ -987,6 +1035,8 @@ struct Drawing2DViewRepresentable: NSViewRepresentable {
         nsView.measurementMode = measurementMode
         nsView.measurementType = measurementType
         nsView.snapEnabled = snapEnabled
+        nsView.activeAnnotationTool = activeAnnotationTool
+        nsView.annotationToolText = annotationToolText
         nsView.pendingAnnotationPoint = pendingAnnotationPoint
         nsView.pendingPolygonPoints = pendingPolygonPoints
         nsView.annotationDelegate = annotationDelegate

@@ -53,6 +53,38 @@ enum MeasurementType: String, CaseIterable {
     }
 }
 
+/// An independent annotation tool (not tied to measurement mode).
+enum AnnotationTool: String, CaseIterable {
+    case text = "Text"
+    case arrow = "Arrow"
+    case dimension = "Dimension"
+
+    var instruction: String {
+        switch self {
+        case .text:      return "Click to place text annotation."
+        case .arrow:     return "Click tail, then head of arrow."
+        case .dimension: return "Click two endpoints for dimension line."
+        }
+    }
+
+    var color: NSColor {
+        switch self {
+        case .text:      return .white
+        case .arrow:     return .systemOrange
+        case .dimension: return .systemYellow
+        }
+    }
+
+    /// Number of clicks needed to complete this annotation.
+    var clickCount: Int {
+        switch self {
+        case .text:      return 1
+        case .arrow:     return 2
+        case .dimension: return 2
+        }
+    }
+}
+
 // MARK: - 2D Geometry Utilities
 
 /// Geometry helpers for 2D measurement and snap-to-entity.

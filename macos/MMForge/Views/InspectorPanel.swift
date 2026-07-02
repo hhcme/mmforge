@@ -268,56 +268,39 @@ struct InspectorPanel: View {
                     }
                 }
 
-                // Annotation creation tools (2D only)
+                // Annotation tools (2D only)
                 if viewModel.is2DDrawing {
                     Divider()
 
-                    Text("Annotations")
+                    Text("Annotation Tools")
                         .font(.headline)
                         .accessibilityAddTraits(.isHeader)
 
-                    HStack {
-                        TextField("Label text", text: $annotationText)
-                            .textFieldStyle(.roundedBorder)
-                        Button("Add Text") {
-                            guard !annotationText.isEmpty else { return }
-                            let center = CGPoint(x: 0, y: 0) // Will be placed at click
-                            viewModel.addTextAnnotation(
-                                position: viewModel.pendingAnnotationPoint ?? center,
-                                text: annotationText)
-                            annotationText = ""
+                    Picker("Tool", selection: $viewModel.activeAnnotationTool) {
+                        Text("None").tag(nil as AnnotationTool?)
+                        ForEach(AnnotationTool.allCases, id: \.self) { tool in
+                            Text(tool.rawValue).tag(tool as AnnotationTool?)
                         }
-                        .disabled(annotationText.isEmpty)
                     }
+                    .pickerStyle(.segmented)
+                    .accessibilityLabel("Annotation tool")
 
-                    Button("Add Dimension (from last 2 points)") {
-                        if viewModel.pendingPolygonPoints.count >= 2 {
-                            let pts = viewModel.pendingPolygonPoints
-                            viewModel.addDimensionAnnotation(
-                                start: pts[pts.count - 2],
-                                end: pts[pts.count - 1])
-                        } else if let p = viewModel.pendingAnnotationPoint {
-                            // Use pending point as one end, prompt for second
-                            viewModel.addDimensionAnnotation(
-                                start: p, end: CGPoint(x: p.x + 50, y: p.y))
-                        }
-                    }
-                    .disabled(viewModel.pendingAnnotationPoint == nil
-                              && viewModel.pendingPolygonPoints.count < 2)
+                    if let tool = viewModel.activeAnnotationTool {
+                        Text(tool.instruction)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
 
-                    Button("Add Arrow (from last 2 points)") {
-                        if viewModel.pendingPolygonPoints.count >= 2 {
-                            let pts = viewModel.pendingPolygonPoints
-                            viewModel.addArrowAnnotation(
-                                tail: pts[pts.count - 2],
-                                head: pts[pts.count - 1])
-                        } else if let p = viewModel.pendingAnnotationPoint {
-                            viewModel.addArrowAnnotation(
-                                tail: p, head: CGPoint(x: p.x + 50, y: p.y))
+                        if tool == .text {
+                            TextField("Text content", text: $viewModel.annotationToolText)
+                                .textFieldStyle(.roundedBorder)
+                        }
+
+                        if viewModel.pendingAnnotationPoint != nil && tool.clickCount > 1 {
+                            Text("First point set. Click second point.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
                         }
                     }
-                    .disabled(viewModel.pendingAnnotationPoint == nil
-                              && viewModel.pendingPolygonPoints.count < 2)
                 }
 
                 Divider()

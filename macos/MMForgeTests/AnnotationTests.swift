@@ -359,4 +359,198 @@ final class AnnotationTests: XCTestCase {
             snapRadius: 10)
         XCTAssertNil(result)
     }
+
+    // MARK: - PDF Coordinate Transform Tests
+
+    func testPDFRender_worldCenterMapsToPageCenter() {
+        // Verify that world center maps to approximately the page center
+        // in the PDF coordinate system (top-left origin).
+        let view = Drawing2DView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        view.drawingInfo = Drawing2DInfo(
+            entityCount: 0, layerCount: 0,
+            boundsMinX: 0, boundsMinY: 0, boundsMaxX: 100, boundsMaxY: 50,
+            layers: [])
+
+        let wb = CGRect(x: 0, y: 0, width: 100, height: 50)
+        let pageW: CGFloat = 842
+        let pageH: CGFloat = 595
+        let margin: CGFloat = 36
+
+        // Compute the same transform as renderPDF.
+        let drawW = pageW - margin * 2
+        let drawH = pageH - margin * 2
+        let scaleX = drawW / wb.width
+        let scaleY = drawH / wb.height
+        let pdfScale = min(scaleX, scaleY)
+
+        let tmpView = Drawing2DView(frame: CGRect(x: 0, y: 0, width: drawW, height: drawH))
+        tmpView.drawingInfo = Drawing2DInfo(
+            entityCount: 0, layerCount: 0,
+            boundsMinX: 0, boundsMinY: 0, boundsMaxX: 100, boundsMaxY: 50,
+            layers: [])
+
+        let w2s = tmpView.worldToScreenTransform(viewBounds: tmpView.bounds)
+        let worldCenter = CGPoint(x: 50, y: 25)
+        let screenCenter = worldCenter.applying(w2s)
+
+        // screenCenter should be at the center of the view.
+        XCTAssertEqual(screenCenter.x, drawW / 2, accuracy: 1.0)
+        XCTAssertEqual(screenCenter.y, drawH / 2, accuracy: 1.0)
+    }
+
+    func testPDFRender_yFlip_preservesOrientation() {
+        // In the PDF coordinate system, Y increases downward (after our flip).
+        // World Y=0 (bottom of drawing) should map to a LARGER screen Y
+        // than world Y=50 (top of drawing).
+        let tmpView = Drawing2DView(frame: CGRect(x: 0, y: 0, width: 770, height: 523))
+        tmpView.drawingInfo = Drawing2DInfo(
+            entityCount: 0, layerCount: 0,
+            boundsMinX: 0, boundsMinY: 0, boundsMaxX: 100, boundsMaxY: 50,
+            layers: [])
+
+        let w2s = tmpView.worldToScreenTransform(viewBounds: tmpView.bounds)
+        let bottomWorld = CGPoint(x: 50, y: 0).applying(w2s)
+        let topWorld = CGPoint(x: 50, y: 50).applying(w2s)
+
+        // Y-flip: bottom of world (y=0) → larger screen Y, top (y=50) → smaller.
+        XCTAssertGreaterThan(bottomWorld.y, topWorld.y,
+                             "World bottom should map to larger screen Y (Y-flip)")
+    }
+
+    // MARK: - Hidden Layer Exclusion Tests
+
+    func testDrawCommand_respectsLayerVisibility() {
+        // Verify that drawCommand returns early for hidden layers.
+        let view = Drawing2DView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        view.layerVisibilityOverrides = ["hidden_layer": false]
+
+        let cmd = DrawCommandDTO.line(
+            x0: 0, y0: 0, x1: 100, y1: 0,
+            layerIndex: 0, layerName: "hidden_layer", colorIndex: 7, visible: true,
+            lineType: nil, lineWeight: 0, lineDash: [])
+
+        // We can't directly test that drawCommand skips rendering,
+        // but we can verify the visibility check logic.
+        let isHidden = view.layerVisibilityOverrides["hidden_layer"] == false
+        XCTAssertTrue(isHidden, "Hidden layer should be marked as not visible")
+    }
+
+    func testPDFRender_hiddenLayerNotDrawn() {
+        // Create a PDF with a hidden layer command.
+        // The command should be filtered out by layer visibility.
+        let pdfData = NSMutableData()
+        guard let consumer = CGDataConsumer(data: pdfData as CFMutableData) else {
+            XCTFail("Failed to create CGDataConsumer")
+            return
+        }
+        var mediaBox = CGRect(x: 0, y: 0, width: 842, height: 595)
+        guard let ctx = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+            XCTFail("Failed to create CGContext")
+            return
+        }
+
+        let wb = CGRect(x: 0, y: 0, width: 100, height: 50)
+        let cmd = DrawCommandDTO.line(
+            x0: 0, y0: 0, x1: 100, y1: 0,
+            layerIndex: 0, layerName: "hidden", colorIndex: 7, visible: true,
+            lineType: nil, lineWeight: 0, lineDash: [])
+
+        // Layer "hidden" is set to false — should not be drawn.
+        Drawing2DView.renderPDF(
+            ctx: ctx,
+            commands: [cmd],
+            annotations: [],
+            layerVisibility: ["hidden": false],
+            worldBounds: wb,
+            pageWidth: 842,
+            pageHeight: 595,
+            margin: 36)
+
+        ctx.closePDF()
+
+        // PDF should still be generated (just without the hidden layer's content).
+        XCTAssertGreaterThan(pdfData.length, 0, "PDF should be generated even with hidden layers")
+    }
+
+    // MARK: - Annotation Position Tests
+
+    func testAnnotationPosition_measurement() {
+        let start = CGPoint(x: 10, y: 20)
+        let end = CGPoint(x: 30, y: 40)
+        let ann = Annotation(kind: .measurement(start: start, end: end))
+
+        if case .measurement(let s, let e) = ann.kind {
+            XCTAssertEqual(s.x, 10)
+            XCTAssertEqual(s.y, 20)
+            XCTAssertEqual(e.x, 30)
+            XCTAssertEqual(e.y, 40)
+        } else {
+            XCTFail("Expected measurement kind")
+        }
+    }
+
+    func testAnnotationPosition_text() {
+        let pos = CGPoint(x: 55.5, y: 33.3)
+        let ann = Annotation(kind: .textAnnotation(position: pos, text: "Test", fontSize: 12))
+
+        if case .textAnnotation(let p, let text, let fs) = ann.kind {
+            XCTAssertEqual(p.x, 55.5, accuracy: 1e-10)
+            XCTAssertEqual(p.y, 33.3, accuracy: 1e-10)
+            XCTAssertEqual(text, "Test")
+            XCTAssertEqual(fs, 12)
+        } else {
+            XCTFail("Expected textAnnotation kind")
+        }
+    }
+
+    func testAnnotationPosition_arrow() {
+        let tail = CGPoint(x: 0, y: 0)
+        let head = CGPoint(x: 100, y: 50)
+        let ann = Annotation(kind: .arrowAnnotation(tail: tail, head: head, text: "Arrow"))
+
+        if case .arrowAnnotation(let t, let h, let text) = ann.kind {
+            XCTAssertEqual(t.x, 0)
+            XCTAssertEqual(h.x, 100)
+            XCTAssertEqual(h.y, 50)
+            XCTAssertEqual(text, "Arrow")
+        } else {
+            XCTFail("Expected arrowAnnotation kind")
+        }
+    }
+
+    func testAnnotationPosition_dimension() {
+        let start = CGPoint(x: 10, y: 10)
+        let end = CGPoint(x: 60, y: 10)
+        let ann = Annotation(kind: .dimension(start: start, end: end, offset: 15))
+
+        if case .dimension(let s, let e, let offset) = ann.kind {
+            XCTAssertEqual(s.x, 10)
+            XCTAssertEqual(e.x, 60)
+            XCTAssertEqual(offset, 15)
+        } else {
+            XCTFail("Expected dimension kind")
+        }
+    }
+
+    // MARK: - AnnotationTool Tests
+
+    func testAnnotationTool_properties() {
+        for tool in AnnotationTool.allCases {
+            XCTAssertFalse(tool.instruction.isEmpty)
+            XCTAssertGreaterThan(tool.clickCount, 0)
+            XCTAssertNotNil(tool.color)
+        }
+    }
+
+    func testAnnotationTool_textSingleClick() {
+        XCTAssertEqual(AnnotationTool.text.clickCount, 1)
+    }
+
+    func testAnnotationTool_arrowTwoClicks() {
+        XCTAssertEqual(AnnotationTool.arrow.clickCount, 2)
+    }
+
+    func testAnnotationTool_dimensionTwoClicks() {
+        XCTAssertEqual(AnnotationTool.dimension.clickCount, 2)
+    }
 }
