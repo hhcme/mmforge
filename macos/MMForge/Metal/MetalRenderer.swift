@@ -215,6 +215,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     var selectedNodeIndex: Int?
     var hiddenNodeIndices: Set<Int> = []
+    /// Frame-local frustum cull mask (rebuilt each frame, never persists).
+    private var frustumCulledIndices: Set<Int> = []
     var renderMode: RenderMode = .solid
     var clipPlane: simd_float4 = simd_float4(0, 0, 0, -999999)
 
@@ -534,24 +536,21 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     // MARK: - Frustum Culling
 
-    /// Apply frustum culling: mark meshes outside the view frustum as invisible.
-    /// Preserves user-initiated visibility — meshes hidden by the user stay hidden.
-    /// Call each frame before draw(in:).
-    func cullByFrustum(aspect: Float) {
+    /// Update the frame-local frustum cull mask.  This does NOT modify
+    /// `gpuMeshes[*].visible` — it populates `frustumCulledIndices` which
+    /// `drawPass` checks alongside `visible` each frame.
+    ///
+    /// Call once per frame (typically inside `draw(in:)`).
+    func updateFrustumCulling(aspect: Float) {
         let vp = camera.projectionMatrix(aspect: aspect) * camera.viewMatrix
         let frustum = FrustumPlanes(from: vp)
-        for i in gpuMeshes.indices {
-            guard gpuMeshes[i].visible else { continue }
-            gpuMeshes[i].visible = frustum.intersects(
-                min: gpuMeshes[i].boundsMin, max: gpuMeshes[i].boundsMax)
+        var culled = Set<Int>()
+        for (i, mesh) in gpuMeshes.enumerated() {
+            if !frustum.intersects(min: mesh.boundsMin, max: mesh.boundsMax) {
+                culled.insert(i)
+            }
         }
-    }
-
-    /// Restore all auto-culled visibilities back to user-preference state.
-    func restoreAllVisible() {
-        for i in gpuMeshes.indices {
-            gpuMeshes[i].visible = !hiddenNodeIndices.contains(gpuMeshes[i].nodeIndex)
-        }
+        frustumCulledIndices = culled
     }
 
     // MARK: - Selection / Visibility
@@ -668,6 +667,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let mvp = camera.projectionMatrix(aspect: aspect) * camera.viewMatrix
         let highlightTint = simd_float4(0.2, 0.5, 1.0, 0.4)
 
+        // Update frustum visibility each frame (does not mutate gpuMeshes[*].visible).
+        updateFrustumCulling(aspect: aspect)
+
         switch renderMode {
         case .solid:
             drawPass(encoder: encoder, pipeline: solidPipeline, mvp: mvp,
@@ -727,8 +729,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// for correct alpha blending in transparent mode.
     private func backToFrontIndices() -> [Int] {
         let eye = camera.eye
+        let fc = frustumCulledIndices
         return gpuMeshes.enumerated()
-            .filter { $0.element.visible }
+            .filter { $0.element.visible && !fc.contains($0.offset) }
             .sorted { a, b in
                 let ca = (a.element.boundsMin + a.element.boundsMax) * 0.5
                 let cb = (b.element.boundsMin + b.element.boundsMax) * 0.5
@@ -753,7 +756,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let defaultAlpha: Float = mode == 3 ? 0.6 : 1.0
         for idx in indices {
             let mesh = gpuMeshes[idx]
-            guard mesh.visible else { continue }
+            guard mesh.visible, !frustumCulledIndices.contains(idx) else { continue }
             let isHighlighted = (mesh.nodeIndex == selectedNodeIndex)
             // Per-mesh color: override → default grey
             var baseColor: simd_float4

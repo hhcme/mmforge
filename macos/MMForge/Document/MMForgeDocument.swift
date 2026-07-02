@@ -411,6 +411,47 @@ extension DocumentViewModel {
         }
     }
 
+    /// Upload a single streaming chunk into the renderer (progressive loading).
+    /// Does NOT clear existing meshes — call `clearMeshes()` separately if needed.
+    /// The node-map is built once from `nodes` on the first call and reused.
+    func uploadChunk(chunkIndex: UInt32, dto: RenderPacketDTO) -> Int {
+        guard let renderer, let doc = rustDoc else { return 0 }
+        var map = [Int: Int]()
+        for (ni, n) in dto.nodes.enumerated() where n.geometryId >= 0 {
+            map[n.geometryId] = ni
+        }
+        return RustBridge.shared.uploadChunk(
+            from: doc, chunkIndex: chunkIndex,
+            nodeMap: map, nodeInfos: dto.nodes,
+            into: renderer
+        )
+    }
+
+    /// Build streaming chunks for the current document with the given budget.
+    /// Returns the number of chunks (calls mmf_build_streaming_packet).
+    func buildChunks(budgetBytes: UInt32) -> UInt32 {
+        guard let doc = rustDoc else { return 0 }
+        return RustBridge.shared.buildChunks(for: doc, budgetBytes: budgetBytes)
+    }
+
+    /// Rebuild streaming chunks with a new budget.
+    func rebuildChunks(budgetBytes: UInt32) -> UInt32 {
+        guard let doc = rustDoc else { return 0 }
+        return RustBridge.shared.rebuildChunks(for: doc, budgetBytes: budgetBytes)
+    }
+
+    /// Number of streaming chunks (0 if not built).
+    func chunkCount() -> UInt32 {
+        guard let doc = rustDoc else { return 0 }
+        return mmf_chunk_count(doc)
+    }
+
+    /// Info for a single chunk.
+    func chunkInfo(index: UInt32) -> RenderPacketDTO.ChunkInfo? {
+        guard let doc = rustDoc else { return nil }
+        return RustBridge.shared.chunkInfo(for: doc, index: index)
+    }
+
     func fitToView() {
         renderer?.fitToView()
     }

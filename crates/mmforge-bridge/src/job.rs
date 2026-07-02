@@ -485,6 +485,7 @@ mod tests {
     // ----------------------------------------------------------------
     unsafe extern "C" {
         fn mmf_build_streaming_packet(doc: *mut std::ffi::c_void, budget_bytes: u32) -> u32;
+        fn mmf_reset_streaming_packet(doc: *mut std::ffi::c_void);
         fn mmf_chunk_count(doc: *const std::ffi::c_void) -> u32;
         fn mmf_chunk_mesh_count(doc: *const std::ffi::c_void, chunk_idx: u32) -> u32;
         fn mmf_chunk_bounds(
@@ -518,6 +519,30 @@ mod tests {
             assert_eq!(ok, 1);
             assert!(mn[0] <= mx[0]);
         }
+
+        crate::mmf_document_free(doc);
+    }
+
+    #[test]
+    fn reset_rebuild_chunks_with_new_budget() {
+        let f = temp_file("stl", b"solid test\n  facet normal 0 0 1\n    outer loop\n      vertex 0 0 0\n      vertex 1 0 0\n      vertex 0 1 0\n    endloop\n  endfacet\nendsolid test\n");
+        let path = std::ffi::CString::new(f.path().to_str().unwrap()).unwrap();
+        let doc = crate::mmf_parse_file(path.as_ptr());
+        let doc_ptr: *mut std::ffi::c_void = doc as *mut std::ffi::c_void;
+
+        let c1 = unsafe { mmf_build_streaming_packet(doc_ptr, 128) };
+        assert!(c1 > 0);
+
+        // Reset forces rebuild
+        unsafe { mmf_reset_streaming_packet(doc_ptr) };
+        let c2 = unsafe { mmf_build_streaming_packet(doc_ptr, 64 * 1024 * 1024) };
+        assert!(c2 > 0);
+        // Larger budget may produce fewer chunks
+        assert!(c2 <= c1, "larger budget should have ≤ chunks");
+
+        // Without reset, build_streaming_packet returns existing count
+        let c3 = unsafe { mmf_build_streaming_packet(doc_ptr, 64) };
+        assert_eq!(c3, c2, "without reset, returns existing chunk count");
 
         crate::mmf_document_free(doc);
     }

@@ -449,11 +449,11 @@ extension RustBridge {
         let instanceCount = Int(mmf_chunk_instance_count(docPtr, index))
         let batchCount = Int(mmf_chunk_batch_count(docPtr, index))
         let memoryBytes = mmf_chunk_memory_bytes(docPtr, index)
-        var minOut = simd_float3()
-        var maxOut = simd_float3()
-        let boundsOk = withUnsafeMutablePointer(to: &minOut.x) { minPtr in
-            withUnsafeMutablePointer(to: &maxOut.x) { maxPtr in
-                mmf_chunk_bounds(docPtr, index, minPtr, maxPtr)
+        var mins = [Float](repeating: 0, count: 3)
+        var maxs = [Float](repeating: 0, count: 3)
+        let boundsOk = mins.withUnsafeMutableBufferPointer { minBuf in
+            maxs.withUnsafeMutableBufferPointer { maxBuf in
+                mmf_chunk_bounds(docPtr, index, minBuf.baseAddress, maxBuf.baseAddress)
             }
         }
         guard boundsOk == 1 else { return nil }
@@ -462,8 +462,8 @@ extension RustBridge {
             meshCount: meshCount,
             instanceCount: instanceCount,
             batchCount: batchCount,
-            boundsMin: minOut,
-            boundsMax: maxOut,
+            boundsMin: simd_float3(mins[0], mins[1], mins[2]),
+            boundsMax: simd_float3(maxs[0], maxs[1], maxs[2]),
             memoryBytes: memoryBytes
         )
     }
@@ -471,5 +471,46 @@ extension RustBridge {
     /// Total GPU memory across all chunks.
     func chunkTotalMemory(_ docPtr: OpaquePointer) -> UInt64 {
         mmf_chunk_total_memory(docPtr)
+    }
+
+    /// Upload all meshes of a single chunk into the Metal renderer.
+    /// Returns the number of meshes uploaded (0 if chunk invalid).
+    func uploadChunk(
+        from docPtr: OpaquePointer,
+        chunkIndex: UInt32,
+        nodeMap: [Int: Int],
+        nodeInfos: [RenderPacketDTO.NodeInfo],
+        into renderer: MetalRenderer
+    ) -> Int {
+        let meshCount = Int(mmf_chunk_mesh_count(docPtr, chunkIndex))
+        guard meshCount > 0 else { return 0 }
+
+        for mi in 0..<UInt32(meshCount) {
+            let geomId = Int(mmf_chunk_mesh_geometry_id(docPtr, chunkIndex, mi))
+            let vc = Int(mmf_chunk_mesh_vertex_count(docPtr, chunkIndex, mi))
+            let ic = Int(mmf_chunk_mesh_index_count(docPtr, chunkIndex, mi))
+            guard let pos = mmf_chunk_mesh_positions(docPtr, chunkIndex, mi),
+                  let nor = mmf_chunk_mesh_normals(docPtr, chunkIndex, mi),
+                  let idx = mmf_chunk_mesh_indices(docPtr, chunkIndex, mi),
+                  vc > 0, ic > 0 else { continue }
+
+            let nodeIdx = nodeMap[geomId] ?? -1
+            let node = nodeIdx >= 0 && nodeIdx < nodeInfos.count ? nodeInfos[nodeIdx] : nil
+
+            renderer.upload(
+                positions: pos, normals: nor, vertexCount: vc,
+                indices: idx, indexCount: ic,
+                nodeIndex: nodeIdx,
+                boundsMin: node?.boundsMin ?? .zero,
+                boundsMax: node?.boundsMax ?? .zero
+            )
+        }
+        return meshCount
+    }
+
+    /// Rebuild streaming packet with a different budget (clears then rebuilds).
+    func rebuildChunks(for docPtr: OpaquePointer, budgetBytes: UInt32) -> UInt32 {
+        mmf_reset_streaming_packet(docPtr)
+        return mmf_build_streaming_packet(docPtr, budgetBytes)
     }
 }

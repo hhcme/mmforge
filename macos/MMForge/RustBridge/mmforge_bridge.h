@@ -343,6 +343,9 @@ int32_t mmf_draw_spatial_query(const MmfDocument* doc,
  */
 uint32_t mmf_build_streaming_packet(MmfDocument* doc, uint32_t budget_bytes);
 
+/** Clear the streaming packet so it can be rebuilt with a new budget. */
+void mmf_reset_streaming_packet(MmfDocument* doc);
+
 /** Number of streaming chunks (0 if not built or empty). */
 uint32_t mmf_chunk_count(const MmfDocument* doc);
 

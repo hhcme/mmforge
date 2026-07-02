@@ -1292,6 +1292,15 @@ pub extern "C" fn mmf_build_streaming_packet(doc: *mut MmfDocument, budget_bytes
     count
 }
 
+/// Clear the streaming packet so `mmf_build_streaming_packet` rebuilds with a new budget.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_reset_streaming_packet(doc: *mut MmfDocument) {
+    if doc.is_null() {
+        return;
+    }
+    unsafe { &mut *doc }.streaming_packet = None;
+}
+
 /// Number of streaming chunks (0 if not built).
 #[unsafe(no_mangle)]
 pub extern "C" fn mmf_chunk_count(doc: *const MmfDocument) -> u32 {
