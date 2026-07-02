@@ -12,9 +12,11 @@ use mmforge_core::math::BoundingBox;
 
 /// A self-contained subset of a RenderPacket that fits within a memory budget.
 ///
-/// Each chunk carries a slice of meshes, the instances that reference them,
-/// and material+batch metadata.  The owning node IDs are preserved so the
-/// scene tree can correctly map each chunk's geometry back to the tree.
+/// Each chunk is fully self-contained:
+/// - `meshes[i].mesh_id == i` — all mesh ids are chunk-local.
+/// - `instances[*].mesh_id` references `meshes` by its chunk-local index.
+/// - `batches[*].instance_range` index into `instances` and never exceed `instances.len()`.
+/// - `stats.batch_count == batches.len()`.
 #[derive(Debug, Clone)]
 pub struct RenderChunk {
     pub meshes: Vec<RenderMesh>,
@@ -22,6 +24,8 @@ pub struct RenderChunk {
     pub instances: Vec<RenderInstance>,
     /// Indices of the instances in the **original** RenderPacket.
     pub instance_indices: Vec<usize>,
+    /// Draw-call batches built from chunk instances, grouped by material.
+    pub batches: Vec<RenderBatch>,
     /// The world-space bounds covering all meshes in this chunk.
     pub chunk_bounds: BoundingBox,
     pub stats: RenderStats,
@@ -50,7 +54,6 @@ impl StreamingPacket {
         let capacity = budget.capacity();
         let mut chunks: Vec<RenderChunk> = Vec::new();
 
-        // Build a lookup: original mesh_index -> all instance indices referencing it.
         let mut mesh_to_instances: HashMap<usize, Vec<usize>> = HashMap::new();
         for (inst_idx, inst) in packet.instances.iter().enumerate() {
             mesh_to_instances
@@ -59,8 +62,6 @@ impl StreamingPacket {
                 .push(inst_idx);
         }
 
-        // Remap table: original mesh_index -> chunk-local mesh index (for current chunk).
-        // Reset per chunk.
         let mut current_meshes: Vec<(usize, RenderMesh)> = Vec::new();
         let mut current_cost: usize = 0;
         let mut current_bounds = BoundingBox::EMPTY;
@@ -105,22 +106,18 @@ impl StreamingPacket {
         Self { chunks }
     }
 
-    /// Returns the number of chunks.
     pub fn chunk_count(&self) -> usize {
         self.chunks.len()
     }
 
-    /// Returns the chunk at the given index.
     pub fn chunk(&self, index: usize) -> Option<&RenderChunk> {
         self.chunks.get(index)
     }
 
-    /// Iterate all chunks in order.
     pub fn iter_chunks(&self) -> impl Iterator<Item = &RenderChunk> {
         self.chunks.iter()
     }
 
-    /// Consume self and return the chunks.
     pub fn into_chunks(self) -> Vec<RenderChunk> {
         self.chunks
     }
@@ -141,7 +138,6 @@ fn finish_chunk(
     }
 
     // Collect all instances that reference the meshes in this chunk.
-    // De-duplicate by original instance index.
     let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut chunk_instances: Vec<RenderInstance> = Vec::new();
     let mut chunk_instance_indices: Vec<usize> = Vec::new();
@@ -151,7 +147,6 @@ fn finish_chunk(
             for &inst_idx in inst_indices {
                 if seen.insert(inst_idx) {
                     let mut inst = packet_instances[inst_idx].clone();
-                    // Remap mesh_id to chunk-local index.
                     inst.mesh_id = mesh_remap[&(inst.mesh_id as usize)];
                     chunk_instances.push(inst);
                     chunk_instance_indices.push(inst_idx);
@@ -187,24 +182,30 @@ fn finish_chunk(
     let total_vertices: usize = meshes.iter().map(|(_, m)| m.positions.len()).sum();
     let total_indices: usize = meshes.iter().map(|(_, m)| m.indices.len()).sum();
     let memory_bytes = *cost;
+    let instance_count = chunk_instance_indices.len();
 
-    let chunk_meshes: Vec<RenderMesh> =
+    // Build final mesh vector with chunk-local mesh_ids.
+    let mut chunk_meshes: Vec<RenderMesh> =
         std::mem::take(meshes).into_iter().map(|(_, m)| m).collect();
+    for (i, mesh) in chunk_meshes.iter_mut().enumerate() {
+        mesh.mesh_id = i as u32;
+    }
     let mesh_count = chunk_meshes.len();
 
-    let instance_count = chunk_instance_indices.len();
+    let batch_count = batches.len();
 
     let chunk = RenderChunk {
         meshes: chunk_meshes,
         materials: materials.to_vec(),
         instances: chunk_instances,
         instance_indices: chunk_instance_indices,
+        batches,
         chunk_bounds: *bounds,
         stats: RenderStats {
             mesh_count,
             instance_count,
             triangle_count,
-            batch_count: batches.len(),
+            batch_count,
             total_vertices,
             total_indices,
             memory_bytes,
@@ -247,6 +248,16 @@ mod tests {
         }
     }
 
+    fn sample_material(id: u32, name: &str) -> RenderMaterial {
+        RenderMaterial {
+            material_id: id,
+            name: name.into(),
+            base_color: [0.5, 0.5, 0.5, 1.0],
+            metallic: 0.0,
+            roughness: 0.5,
+        }
+    }
+
     fn sample_packet(meshes: Vec<RenderMesh>) -> super::super::packet::RenderPacket {
         let instances: Vec<RenderInstance> = meshes
             .iter()
@@ -275,13 +286,7 @@ mod tests {
         };
         super::super::packet::RenderPacket {
             meshes,
-            materials: vec![super::super::packet::RenderMaterial {
-                material_id: 0,
-                name: "default".into(),
-                base_color: [0.5, 0.5, 0.5, 1.0],
-                metallic: 0.0,
-                roughness: 0.5,
-            }],
+            materials: vec![sample_material(0, "default")],
             instances,
             batches: vec![batch],
             scene_bounds: BoundingBox {
@@ -317,13 +322,7 @@ mod tests {
         };
         super::super::packet::RenderPacket {
             meshes,
-            materials: vec![super::super::packet::RenderMaterial {
-                material_id: 0,
-                name: "default".into(),
-                base_color: [0.5, 0.5, 0.5, 1.0],
-                metallic: 0.0,
-                roughness: 0.5,
-            }],
+            materials: vec![sample_material(0, "default")],
             instances,
             batches: vec![super::super::packet::RenderBatch {
                 material_id: 0,
@@ -337,6 +336,10 @@ mod tests {
             stats,
         }
     }
+
+    // ------------------------------------------------------------------
+    // Basic tests
+    // ------------------------------------------------------------------
 
     #[test]
     fn empty_packet_produces_no_chunks() {
@@ -420,18 +423,15 @@ mod tests {
         assert!(!chunks.is_empty());
     }
 
+    // ------------------------------------------------------------------
+    // Instance ↔ mesh mapping tests
+    // ------------------------------------------------------------------
+
     #[test]
     fn multiple_instances_per_mesh_are_all_collected() {
         let m0 = sample_mesh(0, 100, 300);
         let m1 = sample_mesh(1, 100, 300);
-        let packet = sample_packet_instanced(
-            vec![m0, m1],
-            vec![
-                (0, 0), // instance 0 references mesh 0
-                (0, 0), // instance 1 also references mesh 0
-                (1, 0), // instance 2 references mesh 1
-            ],
-        );
+        let packet = sample_packet_instanced(vec![m0, m1], vec![(0, 0), (0, 0), (1, 0)]);
         let budget = MemoryBudget::new(64 * 1024 * 1024);
         let sp = StreamingPacket::from_packet(&packet, &budget);
         assert_eq!(sp.chunk_count(), 1);
@@ -476,5 +476,184 @@ mod tests {
         let sp = StreamingPacket::from_packet(&packet, &budget);
         let total_tris: usize = sp.iter_chunks().map(|c| c.stats.triangle_count).sum();
         assert_eq!(total_tris, packet.stats.triangle_count);
+    }
+
+    // ------------------------------------------------------------------
+    // Chunk-local mesh_id invariant: meshes[i].mesh_id == i
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn chunk_mesh_ids_are_local_indices() {
+        let meshes: Vec<RenderMesh> = (0..5).map(|i| sample_mesh(i, 100, 300)).collect();
+        let packet = sample_packet(meshes);
+        let budget = MemoryBudget::new(64 * 1024 * 1024);
+        let sp = StreamingPacket::from_packet(&packet, &budget);
+        for chunk in sp.iter_chunks() {
+            for (i, mesh) in chunk.meshes.iter().enumerate() {
+                assert_eq!(mesh.mesh_id, i as u32, "meshes[{i}].mesh_id must equal {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn instance_mesh_id_indexes_into_chunk_meshes() {
+        let meshes: Vec<RenderMesh> = (0..5).map(|i| sample_mesh(i, 100, 300)).collect();
+        let packet = sample_packet(meshes);
+        let budget = MemoryBudget::new(64 * 1024 * 1024);
+        let sp = StreamingPacket::from_packet(&packet, &budget);
+        for chunk in sp.iter_chunks() {
+            for inst in &chunk.instances {
+                assert!(
+                    (inst.mesh_id as usize) < chunk.meshes.len(),
+                    "instance mesh_id {} out of range (meshes.len={})",
+                    inst.mesh_id,
+                    chunk.meshes.len(),
+                );
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Batch self-containment tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn chunks_have_batches_field() {
+        let mesh = sample_mesh(0, 100, 300);
+        let packet = sample_packet(vec![mesh]);
+        let budget = MemoryBudget::new(64 * 1024 * 1024);
+        let sp = StreamingPacket::from_packet(&packet, &budget);
+        let chunk = sp.chunk(0).unwrap();
+        assert!(!chunk.batches.is_empty(), "chunk should have batches");
+    }
+
+    #[test]
+    fn batch_count_matches_stats_and_batches_len() {
+        let meshes: Vec<RenderMesh> = (0..5).map(|i| sample_mesh(i, 100, 300)).collect();
+        let packet = sample_packet(meshes);
+        let budget = MemoryBudget::new(64 * 1024 * 1024);
+        let sp = StreamingPacket::from_packet(&packet, &budget);
+        for chunk in sp.iter_chunks() {
+            assert_eq!(
+                chunk.stats.batch_count,
+                chunk.batches.len(),
+                "stats.batch_count must equal batches.len()"
+            );
+        }
+    }
+
+    #[test]
+    fn batch_instance_ranges_cover_all_instances() {
+        let meshes: Vec<RenderMesh> = (0..5).map(|i| sample_mesh(i, 100, 300)).collect();
+        let packet = sample_packet(meshes);
+        let budget = MemoryBudget::new(64 * 1024 * 1024);
+        let sp = StreamingPacket::from_packet(&packet, &budget);
+        for chunk in sp.iter_chunks() {
+            let n = chunk.instances.len();
+            let mut covered = vec![false; n.max(1)];
+            for batch in &chunk.batches {
+                assert!(
+                    batch.instance_range.end <= n,
+                    "batch range {:?} exceeds instance count {n}",
+                    batch.instance_range,
+                );
+                for idx in batch.instance_range.clone() {
+                    covered[idx] = true;
+                }
+            }
+            if n > 0 {
+                let uncovered: Vec<usize> = covered
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| !**c)
+                    .map(|(i, _)| i)
+                    .collect();
+                assert!(
+                    uncovered.is_empty(),
+                    "instances not covered by any batch: {uncovered:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn batch_instance_ranges_are_contiguous_and_non_overlapping() {
+        let meshes: Vec<RenderMesh> = (0..5).map(|i| sample_mesh(i, 100, 300)).collect();
+        let packet = sample_packet(meshes);
+        let budget = MemoryBudget::new(64 * 1024 * 1024);
+        let sp = StreamingPacket::from_packet(&packet, &budget);
+        for chunk in sp.iter_chunks() {
+            let mut last_end = 0;
+            for batch in &chunk.batches {
+                assert_eq!(
+                    batch.instance_range.start, last_end,
+                    "batch ranges must be contiguous; expected start {last_end}, got {:?}",
+                    batch.instance_range,
+                );
+                assert!(
+                    batch.instance_range.start < batch.instance_range.end,
+                    "batch range must be non-empty: {:?}",
+                    batch.instance_range,
+                );
+                last_end = batch.instance_range.end;
+            }
+            assert_eq!(
+                last_end,
+                chunk.instances.len(),
+                "last batch end must equal instance count"
+            );
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Multi-material chunk test
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn multi_material_chunk_splits_batches() {
+        let m0 = sample_mesh(0, 100, 300);
+        let m1 = sample_mesh(1, 100, 300);
+        let packet = sample_packet_instanced(vec![m0, m1], vec![(0, 0), (1, 1), (0, 0), (1, 2)]);
+        let budget = MemoryBudget::new(64 * 1024 * 1024);
+        let sp = StreamingPacket::from_packet(&packet, &budget);
+        let chunk = sp.chunk(0).unwrap();
+        assert_eq!(chunk.instances.len(), 4);
+        assert!(
+            chunk.batches.len() >= 3,
+            "expected at least 3 batches (material changes), got {}",
+            chunk.batches.len()
+        );
+        assert_eq!(chunk.stats.batch_count, chunk.batches.len());
+        // Verify batch ranges don't exceed instance count.
+        for batch in &chunk.batches {
+            assert!(batch.instance_range.end <= 4);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Multi-chunk test with split meshes
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn multi_chunk_each_chunk_has_its_own_batches() {
+        let meshes: Vec<RenderMesh> = (0..6).map(|i| sample_mesh(i, 1000, 3000)).collect();
+        let mesh_cost = gpu_mesh_memory_bytes(1000, 3000);
+        let packet = sample_packet(meshes);
+        let budget = MemoryBudget::new(mesh_cost * 2 + 1);
+        let sp = StreamingPacket::from_packet(&packet, &budget);
+        assert!(sp.chunk_count() > 1);
+
+        let mut total_instances = 0;
+        for (ci, chunk) in sp.iter_chunks().enumerate() {
+            assert!(!chunk.batches.is_empty(), "chunk {ci} should have batches");
+            assert_eq!(chunk.batches.len(), chunk.stats.batch_count);
+
+            let n = chunk.instances.len();
+            total_instances += n;
+            for batch in &chunk.batches {
+                assert!(batch.instance_range.end <= n);
+            }
+        }
+        assert_eq!(total_instances, packet.instances.len());
     }
 }
