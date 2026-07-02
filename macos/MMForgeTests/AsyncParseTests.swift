@@ -1,11 +1,13 @@
 import XCTest
 import Combine
+import Metal
+import MetalKit
 @testable import MMForge
 
 // MARK: - Async Parse Lifecycle Tests
 
 /// Tests for the async parse pipeline's resource management:
-/// success, failure, cancellation, and duplicate-open paths.
+/// success, failure, cancellation, duplicate-open, streaming paths.
 final class AsyncParseTests: XCTestCase {
 
     // MARK: - Helpers
@@ -24,6 +26,21 @@ final class AsyncParseTests: XCTestCase {
         endsolid test
         """
         return Data(stl.utf8)
+    }
+
+    /// Create a view model with a renderer already bound.
+    @MainActor
+    private func makeVMWithRenderer(_ vm: DocumentViewModel? = nil) -> DocumentViewModel {
+        let v = vm ?? DocumentViewModel()
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            XCTFail("no Metal device"); return v
+        }
+        let view = MTKView(frame: NSRect(x: 0, y: 0, width: 100, height: 100), device: device)
+        guard let renderer = MetalRenderer(mtkView: view) else {
+            XCTFail("failed to create MetalRenderer"); return v
+        }
+        v.setRenderer(renderer)
+        return v
     }
 
     // MARK: - Success Path
@@ -196,17 +213,18 @@ final class AsyncParseTests: XCTestCase {
         cancellable.cancel()
     }
 
-    // MARK: - Streaming Path
+    // MARK: - Streaming Path Decision
 
     /// Verify that `shouldStream` returns false for models below the threshold.
     @MainActor
     func testShouldStream_falseForSmallModel() {
         let vm = DocumentViewModel()
-        // A single-triangle DTO is far below 100k threshold.
         let dto = RenderPacketDTO(
             meshes: [], sceneBoundsMin: .zero, sceneBoundsMax: .zero,
             triangleCount: 1, nodeNames: [], nodes: [],
-            stats: RenderPacketDTO.ModelStats(nodeCount: 0, geometryCount: 0, materialCount: 0, triangleCount: 1, meshCount: 0)
+            stats: RenderPacketDTO.ModelStats(
+                nodeCount: 0, geometryCount: 0, materialCount: 0,
+                triangleCount: 1, meshCount: 0)
         )
         XCTAssertFalse(vm.shouldStream(dto))
     }
@@ -218,7 +236,9 @@ final class AsyncParseTests: XCTestCase {
         let dto = RenderPacketDTO(
             meshes: [], sceneBoundsMin: .zero, sceneBoundsMax: .zero,
             triangleCount: 200_000, nodeNames: [], nodes: [],
-            stats: RenderPacketDTO.ModelStats(nodeCount: 0, geometryCount: 0, materialCount: 0, triangleCount: 200_000, meshCount: 0)
+            stats: RenderPacketDTO.ModelStats(
+                nodeCount: 0, geometryCount: 0, materialCount: 0,
+                triangleCount: 200_000, meshCount: 0)
         )
         XCTAssertTrue(vm.shouldStream(dto))
     }
@@ -245,6 +265,112 @@ final class AsyncParseTests: XCTestCase {
 
         wait(for: [expectation], timeout: 10.0)
         XCTAssertTrue(loadedStateReached, "small model should load via full upload path")
+        cancellable.cancel()
+    }
+
+    // MARK: - Streaming Path End-to-End
+
+    /// Verify that forcing streaming mode on a small model still reaches .loaded.
+    /// Uses `_testForceStreaming` to bypass the triangle-count threshold.
+    @MainActor
+    func testForceStreaming_reachesLoaded() {
+        let vm = makeVMWithRenderer()
+        vm._testForceStreaming = true
+        let expectation = expectation(description: "streaming completes")
+        var loadedStateReached = false
+        let cancellable = vm.$state
+            .filter { state in
+                if case .loaded = state { return true }
+                if case .error = state { return true }
+                return false
+            }
+            .first()
+            .sink { state in
+                if case .loaded = state { loadedStateReached = true }
+                expectation.fulfill()
+            }
+
+        vm.parseFile(data: validSTLData, fileExtension: "stl")
+
+        wait(for: [expectation], timeout: 10.0)
+        XCTAssertTrue(loadedStateReached, "streaming path should reach .loaded")
+        XCTAssertTrue(vm.nodeNames.count > 0, "should have nodes after streaming")
+        cancellable.cancel()
+    }
+
+    /// Verify that streaming upload reports progress (parseStage changes during chunks).
+    @MainActor
+    func testStreaming_reportsUploadProgress() {
+        let vm = makeVMWithRenderer()
+        vm._testForceStreaming = true
+
+        var capturedStages: [String] = []
+        // Collect all parseStage changes during streaming (skipping empty strings).
+        let cancellable = vm.$parseStage
+            .filter { !$0.isEmpty }
+            .sink { stage in
+                if !capturedStages.contains(stage) {
+                    capturedStages.append(stage)
+                }
+            }
+
+        let loadExpectation = expectation(description: "streaming completes")
+        let loadCancellable = vm.$state
+            .filter { s in if case .loaded = s { true } else if case .error = s { true } else { false } }
+            .first()
+            .sink { _ in loadExpectation.fulfill() }
+
+        vm.parseFile(data: validSTLData, fileExtension: "stl")
+
+        wait(for: [loadExpectation], timeout: 10.0)
+        // Should have seen at least one non-empty progress stage (the chunk upload message).
+        XCTAssertFalse(capturedStages.isEmpty, "streaming should emit parseStage updates")
+        cancellable.cancel()
+        loadCancellable.cancel()
+    }
+
+    /// Verify that a deferred streaming upload (renderer bound after parse completes)
+    /// still reaches .loaded.
+    @MainActor
+    func testDeferredStreaming_rendererBoundLater() {
+        let vm = DocumentViewModel()
+        vm._testForceStreaming = true
+        let loadExpectation = expectation(description: "streaming completes after renderer bind")
+        var loadedStateReached = false
+        let cancellable = vm.$state
+            .filter { state in
+                if case .loaded = state { return true }
+                if case .error = state { return true }
+                return false
+            }
+            .first()
+            .sink { state in
+                if case .loaded = state { loadedStateReached = true }
+                loadExpectation.fulfill()
+            }
+
+        // Start parse — will defer because no renderer yet.
+        vm.parseFile(data: validSTLData, fileExtension: "stl")
+
+        // Wait a tick for the parse to complete and defer.
+        let parseDone = expectation(description: "parse completes")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            // Create a real MetalRenderer (needs an MTKView).
+            guard let device = MTLCreateSystemDefaultDevice() else {
+                XCTFail("no Metal device"); return
+            }
+            let view = MTKView(frame: NSRect(x: 0, y: 0, width: 100, height: 100), device: device)
+            guard let renderer = MetalRenderer(mtkView: view) else {
+                XCTFail("failed to create MetalRenderer"); return
+            }
+            vm.setRenderer(renderer)
+            parseDone.fulfill()
+        }
+        wait(for: [parseDone], timeout: 5.0)
+
+        wait(for: [loadExpectation], timeout: 10.0)
+        XCTAssertTrue(loadedStateReached, "deferred streaming should reach .loaded")
+        XCTAssertTrue(vm.nodeNames.count > 0, "should have nodes after deferred streaming")
         cancellable.cancel()
     }
 }

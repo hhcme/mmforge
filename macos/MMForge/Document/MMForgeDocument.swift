@@ -143,10 +143,14 @@ final class DocumentViewModel: ObservableObject {
     fileprivate var currentJob: OpaquePointer?
     /// Active cancellation token.
     fileprivate var currentCancelToken: UnsafeMutableRawPointer?
-    /// Stores DTO from async parse when renderer isn't ready yet.
+    /// Stores DTO from async parse when renderer isn't ready yet (full-upload path).
     fileprivate var pendingDTO: RenderPacketDTO?
+    /// Stores DTO for deferred streaming upload (late renderer binding).
+    fileprivate var pendingStreamingDTO: RenderPacketDTO?
     /// Increments on each parseFile call; stale async results are discarded.
     fileprivate var parseGeneration: UInt64 = 0
+    /// If true, forces streaming mode even for small models (testing only).
+    var _testForceStreaming = false
 
     /// Whether the current document is a 2D drawing (DXF).
     var is2DDrawing: Bool {
@@ -178,8 +182,14 @@ final class DocumentViewModel: ObservableObject {
         updateClipPlane()
         // Upload any pending mesh data that arrived before the renderer.
         if let dto = pendingDTO {
-            pendingDTO = nil
+        pendingDTO = nil
+        pendingStreamingDTO = nil
             uploadToRenderer(dto: dto)
+        }
+        // Resume a deferred streaming upload.
+        if let dto = pendingStreamingDTO {
+            pendingStreamingDTO = nil
+            startStreamingUpload(dto: dto)
         }
     }
 
@@ -427,15 +437,29 @@ extension DocumentViewModel {
 
     /// Whether the model qualifies for streaming (progressive) upload.
     func shouldStream(_ dto: RenderPacketDTO) -> Bool {
-        return dto.triangleCount > Self.streamingTriangleThreshold
+        return _testForceStreaming || dto.triangleCount > Self.streamingTriangleThreshold
     }
 
-    /// Progressive chunk-based upload.
+    /// Enqueue a progressive chunk-based upload.
     ///
-    /// Builds streaming chunks, clears the renderer, then uploads chunks
-    /// sequentially on the main thread.  Each chunk advances `parseStage`
-    /// and `parseProgress`.  When all chunks are done, state → `.loaded`.
+    /// If the renderer is not yet bound, caches the DTO in
+    /// `pendingStreamingDTO` and resumes when `setRenderer` is called.
+    /// If chunking produces zero chunks, falls back to `uploadToRenderer`.
+    ///
+    /// Uses `Task` + `await Task.yield()` between chunks so that
+    /// SwiftUI `parseStage`/`parseProgress` and Metal draw calls can
+    /// refresh between chunks.
     func uploadStreaming(dto: RenderPacketDTO) {
+        guard let doc = rustDoc else { return }
+        guard renderer != nil else {
+            pendingStreamingDTO = dto
+            return
+        }
+        startStreamingUpload(dto: dto)
+    }
+
+    /// Internal entry: renderer is guaranteed non-nil.
+    private func startStreamingUpload(dto: RenderPacketDTO) {
         guard let renderer, let doc = rustDoc else { return }
 
         var geomIdToNodeIdx = [Int: Int]()
@@ -450,31 +474,38 @@ extension DocumentViewModel {
         }
 
         renderer.clearMeshes()
-        parseStage = "Uploading meshes..."
 
-        var uploadedMeshes = 0
-        for ci in 0..<UInt32(totalChunks) {
-            parseStage = "Uploading meshes (chunk \(ci + 1)/\(totalChunks))..."
-            parseProgress = Double(ci) / Double(totalChunks)
-
-            let count = RustBridge.shared.uploadChunk(
-                from: doc, chunkIndex: ci,
-                nodeMap: geomIdToNodeIdx, nodeInfos: dto.nodes,
-                into: renderer
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            parseStage = "Uploading meshes..."
+            var uploaded = 0
+            for ci in 0..<UInt32(totalChunks) {
+                parseStage = "Uploading meshes (chunk \(ci + 1)/\(totalChunks))..."
+                parseProgress = Double(ci) / Double(totalChunks)
+                let count = RustBridge.shared.uploadChunk(
+                    from: doc, chunkIndex: ci,
+                    nodeMap: geomIdToNodeIdx, nodeInfos: dto.nodes,
+                    into: renderer
+                )
+                uploaded += count
+                // Yield to the run loop so SwiftUI and Metal can refresh.
+                await Task.yield()
+            }
+            guard let renderer = self.renderer, self.rustDoc != nil else {
+                parseStage = ""
+                parseProgress = 0
+                return
+            }
+            renderer.setSceneBounds(min: dto.sceneBoundsMin, max: dto.sceneBoundsMax)
+            if clipEnabled { renderer.updateSectionFill() }
+            parseStage = ""
+            parseProgress = 1
+            state = .loaded(
+                triangleCount: dto.triangleCount,
+                meshCount: uploaded,
+                nodeCount: dto.nodeNames.count
             )
-            uploadedMeshes += count
         }
-
-        renderer.setSceneBounds(min: dto.sceneBoundsMin, max: dto.sceneBoundsMax)
-        if clipEnabled { renderer.updateSectionFill() }
-
-        parseStage = ""
-        parseProgress = 1
-        state = .loaded(
-            triangleCount: dto.triangleCount,
-            meshCount: uploadedMeshes,
-            nodeCount: dto.nodeNames.count
-        )
     }
 
     /// Upload a single streaming chunk into the renderer (progressive loading).
