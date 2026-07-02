@@ -184,6 +184,8 @@ mod tests {
     // `feature = "occt"` but `occt_found` not set configuration.
     #[cfg(any(not(feature = "occt"), occt_found))]
     use super::read_iges_file;
+    #[cfg(occt_found)]
+    use super::read_iges_file_with_tessellation;
 
     /// Without OCCT, read_iges_file returns NotAvailable.
     #[cfg(not(feature = "occt"))]

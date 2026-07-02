@@ -180,17 +180,19 @@ final class AsyncParseTests: XCTestCase {
     func testParseReportsProgress() {
         let vm = DocumentViewModel()
         let expectation = expectation(description: "progress reported")
+        var capturedStage: String?
         let cancellable = vm.$parseStage
             .filter { !$0.isEmpty }
             .first()
-            .sink { _ in
+            .sink { stage in
+                capturedStage = stage
                 expectation.fulfill()
             }
 
         vm.parseFile(data: validSTLData, fileExtension: "stl")
 
         wait(for: [expectation], timeout: 10.0)
-        XCTAssertFalse(vm.parseStage.isEmpty, "parseStage should be set")
+        XCTAssertNotNil(capturedStage, "parseStage should capture non-empty stage during parsing")
         cancellable.cancel()
     }
 }
