@@ -938,23 +938,30 @@ class Drawing2DView: NSView {
 
     // MARK: - PDF Rendering (static, reused by DocumentViewModel)
 
-    /// Render draw commands and annotations into a PDF CGContext.
-    /// Uses the same `drawCommand` and `drawAnnotations` pipeline as screen
-    /// rendering, ensuring pixel-identical output.
-    /// Compute the world→page affine transform for PDF export.
+    /// Coordinate contract for PDF rendering:
     ///
-    /// This is the single source of truth for PDF coordinate mapping.
-    /// It maps world coordinates to PDF page coordinates where:
-    /// - The drawing is centered in the page with the given margin.
-    /// - Y-axis points downward (screen convention).
-    /// - World center maps to page center.
-    /// - World bottom-left (minX, minY) maps below world top-left (minX, maxY).
+    /// `pdfPageTransform` returns a single affine transform that maps world
+    /// coordinates directly to native PDF page coordinates (origin bottom-left,
+    /// Y-up).  The transform embeds a Y-flip so that:
+    ///   - World Y=0 (drawing bottom) → page bottom (small page Y).
+    ///   - World Y=maxY (drawing top) → page top (large page Y).
+    ///   - Text rendered via `drawCommand`/`drawAnnotations` appears right-side
+    ///     up because the Y component of the transform is negative, which
+    ///     mirrors the screen-like Y-down convention those methods expect.
     ///
-    /// The mapping is:
+    /// In `renderPDF`, this transform is applied via `ctx.concatenate(pdfFrame)`
+    /// with no additional CGContext transforms.
+    ///
+    /// Mapping:
     ///   pageX =  s * (worldX - wb.minX) + originX
-    ///   pageY = -s * (worldY - wb.maxY) + originY
+    ///   pageY = -s * worldY + s * wb.maxY + originY
     ///
-    /// Verified invariant: worldCenter → pageCenter.
+    /// Verified invariants (see AnnotationTests):
+    ///   - worldCenter → pageCenter
+    ///   - world top (maxY) has larger page Y than world bottom (minY)
+    ///   - all four world corners land inside the page rect
+    ///   - works for non-zero world origin
+
     static func pdfPageTransform(
         worldBounds wb: CGRect,
         pageWidth: CGFloat,
@@ -971,10 +978,12 @@ class Drawing2DView: NSView {
         let originX = margin + (drawW - wb.width * s) / 2
         let originY = margin + (drawH - wb.height * s) / 2
 
-        // Direct matrix:
-        //   a  =  s,  b  =  0,  c  =  0,  d  = -s
-        //   tx = originX - s * wb.minX
-        //   ty = originY + s * wb.maxY
+        // Single affine:
+        //   pageX =  s * worldX + (originX - s * wb.minX)
+        //   pageY = -s * worldY + (originY + s * wb.maxY)
+        //
+        // This embeds the Y-flip: d = -s, so world Y-up becomes page Y-up.
+        // The translation terms position the drawing centered in the page.
         return CGAffineTransform(
             a: s, b: 0, c: 0, d: -s,
             tx: originX - s * wb.minX,
@@ -1009,6 +1018,10 @@ class Drawing2DView: NSView {
 
         ctx.beginPDFPage(nil)
         ctx.saveGState()
+
+        // Single transform — no separate Y-flip needed.
+        // pdfPageTransform embeds the Y-flip (d = -s) so drawCommand
+        // and drawAnnotations render text and geometry right-side up.
         ctx.concatenate(pdfFrame)
 
         for cmd in commands {

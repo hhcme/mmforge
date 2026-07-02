@@ -362,105 +362,78 @@ final class AnnotationTests: XCTestCase {
 
     // MARK: - PDF Coordinate Transform Tests
 
-    /// Build the pdfFrame transform using the same method as renderPDF.
-    private func buildPDFFrame(
+    /// Build the pdfPageTransform for testing.
+    private func pdfFrame(
         worldBounds wb: CGRect,
-        pageWidth: CGFloat,
-        pageHeight: CGFloat,
-        margin: CGFloat
+        pageWidth pw: CGFloat,
+        pageHeight ph: CGFloat,
+        margin m: CGFloat
     ) -> CGAffineTransform {
         Drawing2DView.pdfPageTransform(
-            worldBounds: wb, pageWidth: pageWidth,
-            pageHeight: pageHeight, margin: margin)
+            worldBounds: wb, pageWidth: pw, pageHeight: ph, margin: m)
     }
 
     func testPDFFrame_worldCenterMapsToPageCenter() {
         let wb = CGRect(x: 0, y: 0, width: 100, height: 50)
-        let pageW: CGFloat = 842
-        let pageH: CGFloat = 595
-        let margin: CGFloat = 36
-        let pdfFrame = buildPDFFrame(worldBounds: wb, pageWidth: pageW,
-                                     pageHeight: pageH, margin: margin)
+        let f = pdfFrame(worldBounds: wb, pageWidth: 842, pageHeight: 595, margin: 36)
 
-        let worldCenter = CGPoint(x: 50, y: 25)
-        let pagePt = worldCenter.applying(pdfFrame)
+        let pt = CGPoint(x: 50, y: 25).applying(f)
 
-        // World center must map to the page center.
-        XCTAssertEqual(pagePt.x, pageW / 2, accuracy: 1.0,
+        XCTAssertEqual(pt.x, 421, accuracy: 1.0,
                        "World center X should map to page center X")
-        XCTAssertEqual(pagePt.y, pageH / 2, accuracy: 1.0,
+        XCTAssertEqual(pt.y, 297.5, accuracy: 1.0,
                        "World center Y should map to page center Y")
     }
 
     func testPDFFrame_worldCornersInsidePage() {
         let wb = CGRect(x: 0, y: 0, width: 100, height: 50)
-        let pageW: CGFloat = 842
-        let pageH: CGFloat = 595
-        let margin: CGFloat = 36
-        let pdfFrame = buildPDFFrame(worldBounds: wb, pageWidth: pageW,
-                                     pageHeight: pageH, margin: margin)
+        let f = pdfFrame(worldBounds: wb, pageWidth: 842, pageHeight: 595, margin: 36)
+        let page = CGRect(x: 0, y: 0, width: 842, height: 595)
 
-        let corners = [
-            CGPoint(x: 0, y: 0),     // bottom-left
-            CGPoint(x: 100, y: 0),   // bottom-right
-            CGPoint(x: 0, y: 50),    // top-left
-            CGPoint(x: 100, y: 50),  // top-right
-        ]
-        let pageRect = CGRect(x: 0, y: 0, width: pageW, height: pageH)
-
-        for corner in corners {
-            let pagePt = corner.applying(pdfFrame)
-            XCTAssertTrue(pageRect.contains(pagePt),
-                          "World corner \(corner) → page \(pagePt) should be inside page \(pageRect)")
+        for corner in [CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0),
+                       CGPoint(x: 0, y: 50), CGPoint(x: 100, y: 50)] {
+            let pt = corner.applying(f)
+            XCTAssertTrue(page.contains(pt),
+                          "Corner \(corner) → \(pt) should be inside page")
         }
     }
 
-    func testPDFFrame_yDirectionCorrect() {
-        // World Y=0 (bottom) should map to LARGER page Y than world Y=50 (top).
-        // In PDF coordinates, Y increases downward, so bottom of drawing is
-        // at the bottom of the page (larger Y).
+    func testPDFFrame_yDirection_worldTopMapsToSmallerPageY() {
+        // pdfPageTransform uses d=-s (Y-flip) so drawCommand/drawAnnotations
+        // render text right-side up in screen-like coords.
+        // In native PDF coords, this means world top (y=50) maps to a SMALLER
+        // page Y than world bottom (y=0) — the flip inverts the Y ordering.
+        // The visual result is still correct: the PDF viewer renders the page
+        // with the drawing's top at the visual top.
         let wb = CGRect(x: 0, y: 0, width: 100, height: 50)
-        let pageW: CGFloat = 842
-        let pageH: CGFloat = 595
-        let margin: CGFloat = 36
-        let pdfFrame = buildPDFFrame(worldBounds: wb, pageWidth: pageW,
-                                     pageHeight: pageH, margin: margin)
+        let f = pdfFrame(worldBounds: wb, pageWidth: 842, pageHeight: 595, margin: 36)
 
-        let worldBottom = CGPoint(x: 50, y: 0).applying(pdfFrame)
-        let worldTop = CGPoint(x: 50, y: 50).applying(pdfFrame)
+        let bottom = CGPoint(x: 50, y: 0).applying(f)
+        let top = CGPoint(x: 50, y: 50).applying(f)
 
-        XCTAssertGreaterThan(worldBottom.y, worldTop.y,
-                             "World bottom (y=0) should have larger page Y than world top (y=50)")
+        // Y-flip: world top maps to smaller page Y.
+        XCTAssertLessThan(top.y, bottom.y,
+                          "With Y-flip (d=-s), world top should have smaller page Y")
+        // Both should be within the page.
+        XCTAssertGreaterThan(top.y, 0, "World top should be on the page")
+        XCTAssertLessThan(bottom.y, 595, "World bottom should be on the page")
     }
 
     func testPDFFrame_nonZeroOrigin() {
-        // Drawing with non-zero origin (e.g. offset drawing).
         let wb = CGRect(x: -200, y: -100, width: 400, height: 200)
-        let pageW: CGFloat = 842
-        let pageH: CGFloat = 595
-        let margin: CGFloat = 36
-        let pdfFrame = buildPDFFrame(worldBounds: wb, pageWidth: pageW,
-                                     pageHeight: pageH, margin: margin)
+        let f = pdfFrame(worldBounds: wb, pageWidth: 842, pageHeight: 595, margin: 36)
+        let page = CGRect(x: 0, y: 0, width: 842, height: 595)
 
-        let worldCenter = CGPoint(x: 0, y: 0)
-        let pagePt = worldCenter.applying(pdfFrame)
+        // Center (0,0) → page center.
+        let center = CGPoint(x: 0, y: 0).applying(f)
+        XCTAssertEqual(center.x, 421, accuracy: 1.0)
+        XCTAssertEqual(center.y, 297.5, accuracy: 1.0)
 
-        // Center of the drawing (0,0) should map to page center.
-        XCTAssertEqual(pagePt.x, pageW / 2, accuracy: 1.0)
-        XCTAssertEqual(pagePt.y, pageH / 2, accuracy: 1.0)
-
-        // All four corners should be inside the page.
-        let corners = [
-            CGPoint(x: -200, y: -100),
-            CGPoint(x: 200, y: -100),
-            CGPoint(x: -200, y: 100),
-            CGPoint(x: 200, y: 100),
-        ]
-        let pageRect = CGRect(x: 0, y: 0, width: pageW, height: pageH)
-        for corner in corners {
-            let pagePt = corner.applying(pdfFrame)
-            XCTAssertTrue(pageRect.contains(pagePt),
-                          "Corner \(corner) → \(pagePt) should be inside page")
+        for corner in [CGPoint(x: -200, y: -100), CGPoint(x: 200, y: -100),
+                       CGPoint(x: -200, y: 100), CGPoint(x: 200, y: 100)] {
+            let pt = corner.applying(f)
+            XCTAssertTrue(page.contains(pt),
+                          "Corner \(corner) → \(pt) should be inside page")
         }
     }
 
