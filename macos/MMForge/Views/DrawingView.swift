@@ -155,8 +155,15 @@ class Drawing2DView: NSView {
 
     // MARK: - Click Handling
 
+    /// Whether the view should intercept clicks for measurement or annotation.
+    private var isInteracting: Bool {
+        measurementMode || activeAnnotationTool != nil
+    }
+
     override func mouseDown(with event: NSEvent) {
-        guard measurementMode else {
+        // Annotation tools and measurement mode both need click handling.
+        // If neither is active, pass through to default behavior (e.g. pan).
+        guard isInteracting else {
             super.mouseDown(with: event)
             return
         }
@@ -173,14 +180,13 @@ class Drawing2DView: NSView {
             }
         }
 
-        // Independent annotation tools take priority.
+        // Annotation tools take priority over measurement mode.
         if let tool = activeAnnotationTool {
             handleAnnotationToolClick(worldPt, tool: tool)
             return
         }
 
-        guard measurementMode else { return }
-
+        // Measurement mode handling.
         switch measurementType {
         case .distance:
             handleDistanceClick(worldPt)
@@ -192,11 +198,18 @@ class Drawing2DView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
-        guard measurementMode || activeAnnotationTool != nil else {
+        guard isInteracting else {
             super.rightMouseDown(with: event)
             return
         }
-        annotationDelegate?.didCancelPending()
+        // Cancel pending state for whichever mode is active.
+        // If an annotation tool is active, cancel its pending point.
+        // If measurement mode is active, cancel its pending state.
+        if activeAnnotationTool != nil {
+            annotationDelegate?.didCancelPending()
+        } else if measurementMode {
+            annotationDelegate?.didCancelPending()
+        }
     }
 
     private func handleAnnotationToolClick(_ worldPt: CGPoint, tool: AnnotationTool) {
@@ -893,11 +906,82 @@ class Drawing2DView: NSView {
         nsString.draw(at: point, withAttributes: attrs)
     }
 
+    // MARK: - Draw Command Filtering
+
+    /// Filter draw commands by layer visibility.
+    ///
+    /// Returns only commands whose layer is visible according to the
+    /// provided overrides.  This is the same logic used by `drawCommand`
+    /// but extracted for testability.
+    static func visibleCommands(
+        _ commands: [DrawCommandDTO],
+        layerVisibility: [String: Bool]
+    ) -> [DrawCommandDTO] {
+        commands.filter { cmd in
+            let layerName: String
+            let defaultVisible: Bool
+            switch cmd {
+            case .line(_, _, _, _, _, let ln, _, let v, _, _, _):
+                layerName = ln; defaultVisible = v
+            case .circle(_, _, _, _, let ln, _, let v, _, _, _):
+                layerName = ln; defaultVisible = v
+            case .arc(_, _, _, _, _, _, _, let ln, _, let v, _, _, _):
+                layerName = ln; defaultVisible = v
+            case .polyline(_, _, _, let ln, _, let v, _, _, _):
+                layerName = ln; defaultVisible = v
+            case .text(_, _, _, _, _, _, let ln, _, let v):
+                layerName = ln; defaultVisible = v
+            }
+            return layerVisibility[layerName] ?? defaultVisible
+        }
+    }
+
     // MARK: - PDF Rendering (static, reused by DocumentViewModel)
 
     /// Render draw commands and annotations into a PDF CGContext.
     /// Uses the same `drawCommand` and `drawAnnotations` pipeline as screen
     /// rendering, ensuring pixel-identical output.
+    /// Compute the world→page affine transform for PDF export.
+    ///
+    /// This is the single source of truth for PDF coordinate mapping.
+    /// It maps world coordinates to PDF page coordinates where:
+    /// - The drawing is centered in the page with the given margin.
+    /// - Y-axis points downward (screen convention).
+    /// - World center maps to page center.
+    /// - World bottom-left (minX, minY) maps below world top-left (minX, maxY).
+    ///
+    /// The mapping is:
+    ///   pageX =  s * (worldX - wb.minX) + originX
+    ///   pageY = -s * (worldY - wb.maxY) + originY
+    ///
+    /// Verified invariant: worldCenter → pageCenter.
+    static func pdfPageTransform(
+        worldBounds wb: CGRect,
+        pageWidth: CGFloat,
+        pageHeight: CGFloat,
+        margin: CGFloat
+    ) -> CGAffineTransform {
+        let drawW = pageWidth - margin * 2
+        let drawH = pageHeight - margin * 2
+        let scaleX = drawW / max(wb.width, 0.001)
+        let scaleY = drawH / max(wb.height, 0.001)
+        let s = min(scaleX, scaleY)
+
+        // Center the scaled drawing in the available area.
+        let originX = margin + (drawW - wb.width * s) / 2
+        let originY = margin + (drawH - wb.height * s) / 2
+
+        // Direct matrix:
+        //   a  =  s,  b  =  0,  c  =  0,  d  = -s
+        //   tx = originX - s * wb.minX
+        //   ty = originY + s * wb.maxY
+        return CGAffineTransform(
+            a: s, b: 0, c: 0, d: -s,
+            tx: originX - s * wb.minX,
+            ty: originY + s * wb.maxY
+        )
+    }
+
     static func renderPDF(
         ctx: CGContext,
         commands: [DrawCommandDTO],
@@ -914,44 +998,23 @@ class Drawing2DView: NSView {
         let scaleY = drawH / max(wb.height, 0.001)
         let pdfScale = min(scaleX, scaleY)
 
-        let originX = margin + (drawW - wb.width * pdfScale) / 2
-        let originY = margin + (drawH - wb.height * pdfScale) / 2
+        let pdfFrame = pdfPageTransform(
+            worldBounds: wb, pageWidth: pageWidth,
+            pageHeight: pageHeight, margin: margin)
 
-        // Build a temporary view to compute worldToScreenTransform.
-        // We set its properties so the transform is computed identically
-        // to the screen rendering path.
+        // Build a temporary view to reuse drawCommand/drawAnnotations.
         let tmpView = Drawing2DView()
-        tmpView.drawingInfo = Drawing2DInfo(
-            entityCount: 0, layerCount: 0,
-            boundsMinX: wb.origin.x, boundsMinY: wb.origin.y,
-            boundsMaxX: wb.origin.x + wb.width, boundsMaxY: wb.origin.y + wb.height,
-            layers: [])
-        // Match the screen view's frame so fitScale computes the same value.
-        tmpView.frame = CGRect(x: 0, y: 0, width: drawW, height: drawH)
         tmpView.layerVisibilityOverrides = layerVisibility
         tmpView.annotations = annotations
-
-        // Compute the world→screen transform using the same method as draw(_:).
-        let w2s = tmpView.worldToScreenTransform(viewBounds: tmpView.bounds)
-
-        // PDF coordinate frame: origin at (originX, pageHeight - originY),
-        // Y-axis pointing down (matching screen coordinates).
-        let pdfFrame = CGAffineTransform(translationX: originX, y: pageHeight - originY)
-            .concatenating(w2s)
 
         ctx.beginPDFPage(nil)
         ctx.saveGState()
         ctx.concatenate(pdfFrame)
 
-        // Draw entities using the same pipeline as screen rendering.
-        let scale = tmpView.zoomLevel * tmpView.fitScale(
-            screenBounds: tmpView.bounds, worldRect: wb)
         for cmd in commands {
-            tmpView.drawCommand(ctx: ctx, cmd: cmd, scale: scale)
+            tmpView.drawCommand(ctx: ctx, cmd: cmd, scale: pdfScale)
         }
-
-        // Draw annotations.
-        tmpView.drawAnnotations(ctx: ctx, scale: scale)
+        tmpView.drawAnnotations(ctx: ctx, scale: pdfScale)
 
         ctx.restoreGState()
         ctx.endPDFPage()

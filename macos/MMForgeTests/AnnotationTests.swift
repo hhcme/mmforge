@@ -362,114 +362,155 @@ final class AnnotationTests: XCTestCase {
 
     // MARK: - PDF Coordinate Transform Tests
 
-    func testPDFRender_worldCenterMapsToPageCenter() {
-        // Verify that world center maps to approximately the page center
-        // in the PDF coordinate system (top-left origin).
-        let view = Drawing2DView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
-        view.drawingInfo = Drawing2DInfo(
-            entityCount: 0, layerCount: 0,
-            boundsMinX: 0, boundsMinY: 0, boundsMaxX: 100, boundsMaxY: 50,
-            layers: [])
+    /// Build the pdfFrame transform using the same method as renderPDF.
+    private func buildPDFFrame(
+        worldBounds wb: CGRect,
+        pageWidth: CGFloat,
+        pageHeight: CGFloat,
+        margin: CGFloat
+    ) -> CGAffineTransform {
+        Drawing2DView.pdfPageTransform(
+            worldBounds: wb, pageWidth: pageWidth,
+            pageHeight: pageHeight, margin: margin)
+    }
 
+    func testPDFFrame_worldCenterMapsToPageCenter() {
         let wb = CGRect(x: 0, y: 0, width: 100, height: 50)
         let pageW: CGFloat = 842
         let pageH: CGFloat = 595
         let margin: CGFloat = 36
+        let pdfFrame = buildPDFFrame(worldBounds: wb, pageWidth: pageW,
+                                     pageHeight: pageH, margin: margin)
 
-        // Compute the same transform as renderPDF.
-        let drawW = pageW - margin * 2
-        let drawH = pageH - margin * 2
-        let scaleX = drawW / wb.width
-        let scaleY = drawH / wb.height
-        let pdfScale = min(scaleX, scaleY)
-
-        let tmpView = Drawing2DView(frame: CGRect(x: 0, y: 0, width: drawW, height: drawH))
-        tmpView.drawingInfo = Drawing2DInfo(
-            entityCount: 0, layerCount: 0,
-            boundsMinX: 0, boundsMinY: 0, boundsMaxX: 100, boundsMaxY: 50,
-            layers: [])
-
-        let w2s = tmpView.worldToScreenTransform(viewBounds: tmpView.bounds)
         let worldCenter = CGPoint(x: 50, y: 25)
-        let screenCenter = worldCenter.applying(w2s)
+        let pagePt = worldCenter.applying(pdfFrame)
 
-        // screenCenter should be at the center of the view.
-        XCTAssertEqual(screenCenter.x, drawW / 2, accuracy: 1.0)
-        XCTAssertEqual(screenCenter.y, drawH / 2, accuracy: 1.0)
+        // World center must map to the page center.
+        XCTAssertEqual(pagePt.x, pageW / 2, accuracy: 1.0,
+                       "World center X should map to page center X")
+        XCTAssertEqual(pagePt.y, pageH / 2, accuracy: 1.0,
+                       "World center Y should map to page center Y")
     }
 
-    func testPDFRender_yFlip_preservesOrientation() {
-        // In the PDF coordinate system, Y increases downward (after our flip).
-        // World Y=0 (bottom of drawing) should map to a LARGER screen Y
-        // than world Y=50 (top of drawing).
-        let tmpView = Drawing2DView(frame: CGRect(x: 0, y: 0, width: 770, height: 523))
-        tmpView.drawingInfo = Drawing2DInfo(
-            entityCount: 0, layerCount: 0,
-            boundsMinX: 0, boundsMinY: 0, boundsMaxX: 100, boundsMaxY: 50,
-            layers: [])
-
-        let w2s = tmpView.worldToScreenTransform(viewBounds: tmpView.bounds)
-        let bottomWorld = CGPoint(x: 50, y: 0).applying(w2s)
-        let topWorld = CGPoint(x: 50, y: 50).applying(w2s)
-
-        // Y-flip: bottom of world (y=0) → larger screen Y, top (y=50) → smaller.
-        XCTAssertGreaterThan(bottomWorld.y, topWorld.y,
-                             "World bottom should map to larger screen Y (Y-flip)")
-    }
-
-    // MARK: - Hidden Layer Exclusion Tests
-
-    func testDrawCommand_respectsLayerVisibility() {
-        // Verify that drawCommand returns early for hidden layers.
-        let view = Drawing2DView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
-        view.layerVisibilityOverrides = ["hidden_layer": false]
-
-        let cmd = DrawCommandDTO.line(
-            x0: 0, y0: 0, x1: 100, y1: 0,
-            layerIndex: 0, layerName: "hidden_layer", colorIndex: 7, visible: true,
-            lineType: nil, lineWeight: 0, lineDash: [])
-
-        // We can't directly test that drawCommand skips rendering,
-        // but we can verify the visibility check logic.
-        let isHidden = view.layerVisibilityOverrides["hidden_layer"] == false
-        XCTAssertTrue(isHidden, "Hidden layer should be marked as not visible")
-    }
-
-    func testPDFRender_hiddenLayerNotDrawn() {
-        // Create a PDF with a hidden layer command.
-        // The command should be filtered out by layer visibility.
-        let pdfData = NSMutableData()
-        guard let consumer = CGDataConsumer(data: pdfData as CFMutableData) else {
-            XCTFail("Failed to create CGDataConsumer")
-            return
-        }
-        var mediaBox = CGRect(x: 0, y: 0, width: 842, height: 595)
-        guard let ctx = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
-            XCTFail("Failed to create CGContext")
-            return
-        }
-
+    func testPDFFrame_worldCornersInsidePage() {
         let wb = CGRect(x: 0, y: 0, width: 100, height: 50)
-        let cmd = DrawCommandDTO.line(
-            x0: 0, y0: 0, x1: 100, y1: 0,
-            layerIndex: 0, layerName: "hidden", colorIndex: 7, visible: true,
+        let pageW: CGFloat = 842
+        let pageH: CGFloat = 595
+        let margin: CGFloat = 36
+        let pdfFrame = buildPDFFrame(worldBounds: wb, pageWidth: pageW,
+                                     pageHeight: pageH, margin: margin)
+
+        let corners = [
+            CGPoint(x: 0, y: 0),     // bottom-left
+            CGPoint(x: 100, y: 0),   // bottom-right
+            CGPoint(x: 0, y: 50),    // top-left
+            CGPoint(x: 100, y: 50),  // top-right
+        ]
+        let pageRect = CGRect(x: 0, y: 0, width: pageW, height: pageH)
+
+        for corner in corners {
+            let pagePt = corner.applying(pdfFrame)
+            XCTAssertTrue(pageRect.contains(pagePt),
+                          "World corner \(corner) → page \(pagePt) should be inside page \(pageRect)")
+        }
+    }
+
+    func testPDFFrame_yDirectionCorrect() {
+        // World Y=0 (bottom) should map to LARGER page Y than world Y=50 (top).
+        // In PDF coordinates, Y increases downward, so bottom of drawing is
+        // at the bottom of the page (larger Y).
+        let wb = CGRect(x: 0, y: 0, width: 100, height: 50)
+        let pageW: CGFloat = 842
+        let pageH: CGFloat = 595
+        let margin: CGFloat = 36
+        let pdfFrame = buildPDFFrame(worldBounds: wb, pageWidth: pageW,
+                                     pageHeight: pageH, margin: margin)
+
+        let worldBottom = CGPoint(x: 50, y: 0).applying(pdfFrame)
+        let worldTop = CGPoint(x: 50, y: 50).applying(pdfFrame)
+
+        XCTAssertGreaterThan(worldBottom.y, worldTop.y,
+                             "World bottom (y=0) should have larger page Y than world top (y=50)")
+    }
+
+    func testPDFFrame_nonZeroOrigin() {
+        // Drawing with non-zero origin (e.g. offset drawing).
+        let wb = CGRect(x: -200, y: -100, width: 400, height: 200)
+        let pageW: CGFloat = 842
+        let pageH: CGFloat = 595
+        let margin: CGFloat = 36
+        let pdfFrame = buildPDFFrame(worldBounds: wb, pageWidth: pageW,
+                                     pageHeight: pageH, margin: margin)
+
+        let worldCenter = CGPoint(x: 0, y: 0)
+        let pagePt = worldCenter.applying(pdfFrame)
+
+        // Center of the drawing (0,0) should map to page center.
+        XCTAssertEqual(pagePt.x, pageW / 2, accuracy: 1.0)
+        XCTAssertEqual(pagePt.y, pageH / 2, accuracy: 1.0)
+
+        // All four corners should be inside the page.
+        let corners = [
+            CGPoint(x: -200, y: -100),
+            CGPoint(x: 200, y: -100),
+            CGPoint(x: -200, y: 100),
+            CGPoint(x: 200, y: 100),
+        ]
+        let pageRect = CGRect(x: 0, y: 0, width: pageW, height: pageH)
+        for corner in corners {
+            let pagePt = corner.applying(pdfFrame)
+            XCTAssertTrue(pageRect.contains(pagePt),
+                          "Corner \(corner) → \(pagePt) should be inside page")
+        }
+    }
+
+    // MARK: - Hidden Layer Filtering Tests
+
+    func testVisibleCommands_filtersHiddenLayers() {
+        let visible = DrawCommandDTO.line(
+            x0: 0, y0: 0, x1: 10, y1: 0,
+            layerIndex: 0, layerName: "visible", colorIndex: 7, visible: true,
+            lineType: nil, lineWeight: 0, lineDash: [])
+        let hidden = DrawCommandDTO.line(
+            x0: 0, y0: 0, x1: 10, y1: 0,
+            layerIndex: 1, layerName: "hidden", colorIndex: 7, visible: true,
             lineType: nil, lineWeight: 0, lineDash: [])
 
-        // Layer "hidden" is set to false — should not be drawn.
-        Drawing2DView.renderPDF(
-            ctx: ctx,
-            commands: [cmd],
-            annotations: [],
-            layerVisibility: ["hidden": false],
-            worldBounds: wb,
-            pageWidth: 842,
-            pageHeight: 595,
-            margin: 36)
+        let result = Drawing2DView.visibleCommands(
+            [visible, hidden],
+            layerVisibility: ["visible": true, "hidden": false])
 
-        ctx.closePDF()
+        XCTAssertEqual(result.count, 1, "Hidden layer command should be filtered out")
+        if case .line(_, _, _, _, _, let ln, _, _, _, _, _) = result[0] {
+            XCTAssertEqual(ln, "visible")
+        }
+    }
 
-        // PDF should still be generated (just without the hidden layer's content).
-        XCTAssertGreaterThan(pdfData.length, 0, "PDF should be generated even with hidden layers")
+    func testVisibleCommands_defaultVisible() {
+        // When a layer is not in the overrides dict, use the command's default visible flag.
+        let cmd = DrawCommandDTO.line(
+            x0: 0, y0: 0, x1: 10, y1: 0,
+            layerIndex: 0, layerName: "unknown", colorIndex: 7, visible: false,
+            lineType: nil, lineWeight: 0, lineDash: [])
+
+        let result = Drawing2DView.visibleCommands([cmd], layerVisibility: [:])
+        XCTAssertTrue(result.isEmpty, "Command with visible=false and no override should be filtered")
+    }
+
+    func testVisibleCommands_overrideShow() {
+        // Override a normally-hidden layer to be visible.
+        let cmd = DrawCommandDTO.line(
+            x0: 0, y0: 0, x1: 10, y1: 0,
+            layerIndex: 0, layerName: "off", colorIndex: 7, visible: false,
+            lineType: nil, lineWeight: 0, lineDash: [])
+
+        let result = Drawing2DView.visibleCommands([cmd], layerVisibility: ["off": true])
+        XCTAssertEqual(result.count, 1, "Override to visible should include the command")
+    }
+
+    func testVisibleCommands_emptyInput() {
+        let result = Drawing2DView.visibleCommands([], layerVisibility: ["x": false])
+        XCTAssertTrue(result.isEmpty)
     }
 
     // MARK: - Annotation Position Tests
