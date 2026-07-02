@@ -332,6 +332,94 @@ int32_t mmf_draw_spatial_query(const MmfDocument* doc,
                                double max_x, double max_y,
                                uint32_t* out_indices, uint32_t max_count);
 
+/* ------------------------------------------------------------------ */
+/*  Streaming / chunk-based progressive loading                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Build a streaming packet splitting the document into memory-budgeted chunks.
+ * @param budget_bytes  Max GPU memory per chunk (e.g. 64 * 1024 * 1024 for 64 MB).
+ * @return Number of chunks (0 if document has no render data).
+ */
+uint32_t mmf_build_streaming_packet(MmfDocument* doc, uint32_t budget_bytes);
+
+/** Number of streaming chunks (0 if not built or empty). */
+uint32_t mmf_chunk_count(const MmfDocument* doc);
+
+/** Number of meshes in chunk `chunk_idx`. */
+uint32_t mmf_chunk_mesh_count(const MmfDocument* doc, uint32_t chunk_idx);
+
+/** Number of instances in chunk `chunk_idx`. */
+uint32_t mmf_chunk_instance_count(const MmfDocument* doc, uint32_t chunk_idx);
+
+/**
+ * Chunk AABB.  out_min/out_max each receive 3 floats.
+ * @return 1 on success, 0 if chunk index invalid.
+ */
+int mmf_chunk_bounds(const MmfDocument* doc, uint32_t chunk_idx,
+                     float* out_min, float* out_max);
+
+/** Number of batch groups in chunk. */
+uint32_t mmf_chunk_batch_count(const MmfDocument* doc, uint32_t chunk_idx);
+
+/** GPU memory estimate for chunk in bytes. */
+uint64_t mmf_chunk_memory_bytes(const MmfDocument* doc, uint32_t chunk_idx);
+
+/** Total GPU memory across all chunks in bytes. */
+uint64_t mmf_chunk_total_memory(const MmfDocument* doc);
+
+/** Vertex count for mesh `mesh_idx` in chunk `chunk_idx`. */
+uint32_t mmf_chunk_mesh_vertex_count(const MmfDocument* doc,
+                                     uint32_t chunk_idx, uint32_t mesh_idx);
+
+/** Index count for mesh `mesh_idx` in chunk `chunk_idx`. */
+uint32_t mmf_chunk_mesh_index_count(const MmfDocument* doc,
+                                    uint32_t chunk_idx, uint32_t mesh_idx);
+
+/** Geometry id for mesh `mesh_idx` in chunk (returns -1 on error). */
+int32_t mmf_chunk_mesh_geometry_id(const MmfDocument* doc,
+                                   uint32_t chunk_idx, uint32_t mesh_idx);
+
+/**
+ * Borrowed pointer to mesh positions in chunk.
+ * Valid until mmf_document_free().  Returns NULL if invalid.
+ */
+const float* mmf_chunk_mesh_positions(const MmfDocument* doc,
+                                      uint32_t chunk_idx, uint32_t mesh_idx);
+
+/** Borrowed pointer to mesh normals in chunk. */
+const float* mmf_chunk_mesh_normals(const MmfDocument* doc,
+                                    uint32_t chunk_idx, uint32_t mesh_idx);
+
+/** Borrowed pointer to mesh indices in chunk. */
+const uint32_t* mmf_chunk_mesh_indices(const MmfDocument* doc,
+                                       uint32_t chunk_idx, uint32_t mesh_idx);
+
+/* ------------------------------------------------------------------ */
+/*  Frustum culling                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Test whether an AABB is visible within a camera frustum.
+ *
+ * @param bounds_min  float[3] min corner of the AABB.
+ * @param bounds_max  float[3] max corner of the AABB.
+ * @param cam_target  float[3] camera look-at target.
+ * @param cam_distance  Distance from target to eye.
+ * @param cam_yaw     Yaw in radians.
+ * @param cam_pitch   Pitch in radians.
+ * @param cam_fov_y   Vertical FOV in radians.
+ * @param cam_near    Near plane distance.
+ * @param cam_far     Far plane distance.
+ * @param aspect      Viewport width/height.
+ * @return 1 if visible, 0 if culled or error.
+ */
+int mmf_frustum_aabb_visible(const float* bounds_min, const float* bounds_max,
+                              const float* cam_target,
+                              float cam_distance, float cam_yaw, float cam_pitch,
+                              float cam_fov_y, float cam_near, float cam_far,
+                              float aspect);
+
 #ifdef __cplusplus
 }
 #endif

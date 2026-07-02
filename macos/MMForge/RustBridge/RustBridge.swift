@@ -31,6 +31,16 @@ struct RenderPacketDTO {
         let meshCount: Int
     }
 
+    struct ChunkInfo {
+        let index: Int
+        let meshCount: Int
+        let instanceCount: Int
+        let batchCount: Int
+        let boundsMin: simd_float3
+        let boundsMax: simd_float3
+        let memoryBytes: UInt64
+    }
+
     let meshes: [Mesh]
     let sceneBoundsMin: simd_float3
     let sceneBoundsMax: simd_float3
@@ -423,5 +433,43 @@ extension RustBridge {
 
         // All results fit in buffer.
         return (0..<total).map { Int(buffer[$0]) }
+    }
+
+    // MARK: - Streaming / chunk-based progressive loading
+
+    /// Build streaming chunks for a document with the given budget.
+    /// Returns the number of chunks (0 if empty).
+    func buildChunks(for docPtr: OpaquePointer, budgetBytes: UInt32) -> UInt32 {
+        mmf_build_streaming_packet(docPtr, budgetBytes)
+    }
+
+    /// Get chunk info. Returns nil if chunks not built or index out of range.
+    func chunkInfo(for docPtr: OpaquePointer, index: UInt32) -> RenderPacketDTO.ChunkInfo? {
+        let meshCount = Int(mmf_chunk_mesh_count(docPtr, index))
+        let instanceCount = Int(mmf_chunk_instance_count(docPtr, index))
+        let batchCount = Int(mmf_chunk_batch_count(docPtr, index))
+        let memoryBytes = mmf_chunk_memory_bytes(docPtr, index)
+        var minOut = simd_float3()
+        var maxOut = simd_float3()
+        let boundsOk = withUnsafeMutablePointer(to: &minOut.x) { minPtr in
+            withUnsafeMutablePointer(to: &maxOut.x) { maxPtr in
+                mmf_chunk_bounds(docPtr, index, minPtr, maxPtr)
+            }
+        }
+        guard boundsOk == 1 else { return nil }
+        return RenderPacketDTO.ChunkInfo(
+            index: Int(index),
+            meshCount: meshCount,
+            instanceCount: instanceCount,
+            batchCount: batchCount,
+            boundsMin: minOut,
+            boundsMax: maxOut,
+            memoryBytes: memoryBytes
+        )
+    }
+
+    /// Total GPU memory across all chunks.
+    func chunkTotalMemory(_ docPtr: OpaquePointer) -> UInt64 {
+        mmf_chunk_total_memory(docPtr)
     }
 }

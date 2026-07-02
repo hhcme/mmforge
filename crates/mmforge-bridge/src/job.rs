@@ -479,4 +479,108 @@ mod tests {
             "mmf_open_job_free blocked for {elapsed:?}"
         );
     }
+
+    // ----------------------------------------------------------------
+    // Chunk streaming (via C ABI in lib.rs)
+    // ----------------------------------------------------------------
+    unsafe extern "C" {
+        fn mmf_build_streaming_packet(doc: *mut std::ffi::c_void, budget_bytes: u32) -> u32;
+        fn mmf_chunk_count(doc: *const std::ffi::c_void) -> u32;
+        fn mmf_chunk_mesh_count(doc: *const std::ffi::c_void, chunk_idx: u32) -> u32;
+        fn mmf_chunk_bounds(
+            doc: *const std::ffi::c_void,
+            chunk_idx: u32,
+            out_min: *mut f32,
+            out_max: *mut f32,
+        ) -> i32;
+    }
+
+    #[test]
+    fn chunk_streaming_on_parsed_doc() {
+        let f = temp_file("stl", b"solid test\n  facet normal 0 0 1\n    outer loop\n      vertex 0 0 0\n      vertex 1 0 0\n      vertex 0 1 0\n    endloop\n  endfacet\nendsolid test\n");
+        let path = std::ffi::CString::new(f.path().to_str().unwrap()).unwrap();
+        let doc = crate::mmf_parse_file(path.as_ptr());
+        assert!(!doc.is_null());
+        let doc_ptr: *mut std::ffi::c_void = doc as *mut std::ffi::c_void;
+
+        let count = unsafe { mmf_build_streaming_packet(doc_ptr, 64 * 1024 * 1024) };
+        assert!(count > 0);
+
+        let total = unsafe { mmf_chunk_count(doc_ptr) };
+        assert_eq!(total, count);
+
+        for ci in 0..count {
+            let mc = unsafe { mmf_chunk_mesh_count(doc_ptr, ci) };
+            assert!(mc > 0);
+            let mut mn = [0f32; 3];
+            let mut mx = [0f32; 3];
+            let ok = unsafe { mmf_chunk_bounds(doc_ptr, ci, mn.as_mut_ptr(), mx.as_mut_ptr()) };
+            assert_eq!(ok, 1);
+            assert!(mn[0] <= mx[0]);
+        }
+
+        crate::mmf_document_free(doc);
+    }
+
+    // ----------------------------------------------------------------
+    // Frustum culling
+    // ----------------------------------------------------------------
+    unsafe extern "C" {
+        fn mmf_frustum_aabb_visible(
+            bounds_min: *const f32,
+            bounds_max: *const f32,
+            cam_target: *const f32,
+            cam_distance: f32,
+            cam_yaw: f32,
+            cam_pitch: f32,
+            cam_fov_y: f32,
+            cam_near: f32,
+            cam_far: f32,
+            aspect: f32,
+        ) -> i32;
+    }
+
+    #[test]
+    fn frustum_visible_central_cube() {
+        let bmin = [-1.0f32, -1.0, -1.0];
+        let bmax = [1.0f32, 1.0, 1.0];
+        let tgt = [0.0f32, 0.0, 0.0];
+        let r = unsafe {
+            mmf_frustum_aabb_visible(
+                bmin.as_ptr(),
+                bmax.as_ptr(),
+                tgt.as_ptr(),
+                5.0,
+                0.0,
+                0.0,
+                45.0f32.to_radians(),
+                0.1,
+                100.0,
+                1.0,
+            )
+        };
+        assert_eq!(r, 1);
+    }
+
+    #[test]
+    fn frustum_cull_far_cube() {
+        let bmin = [0.0f32, 0.0, 50.0];
+        let bmax = [1.0f32, 1.0, 51.0];
+        let tgt = [0.0f32, 0.0, 0.0];
+        let r = unsafe {
+            mmf_frustum_aabb_visible(
+                bmin.as_ptr(),
+                bmax.as_ptr(),
+                tgt.as_ptr(),
+                5.0,
+                0.0,
+                0.0,
+                45.0f32.to_radians(),
+                0.1,
+                10.0,
+                1.0,
+            )
+        };
+        assert_eq!(r, 0);
+    }
 }

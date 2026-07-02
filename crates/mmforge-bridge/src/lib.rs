@@ -15,7 +15,10 @@ use std::ptr;
 
 use mmforge_core::model::{Geometry, ParseOutput};
 use mmforge_geometry::tessellation::TessellationRegistry;
+use mmforge_render::Frustum;
+use mmforge_render::memory::MemoryBudget;
 use mmforge_render::packet::RenderPacket;
+use mmforge_render::streaming::StreamingPacket;
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
@@ -46,6 +49,8 @@ pub struct MmfDocument {
     layer_line_type_cstrings: Vec<Option<CString>>,
     /// Spatial index for 2D viewport culling.
     spatial_index: Option<mmforge_render::spatial2d::SpatialIndex2D>,
+    /// Optional streaming packet built on demand.
+    streaming_packet: Option<StreamingPacket>,
 }
 
 // --- Lifecycle ---
@@ -162,6 +167,7 @@ fn build_document(output: ParseOutput, registry: TessellationRegistry) -> MmfDoc
         draw_linetype_cstrings,
         layer_line_type_cstrings,
         spatial_index,
+        streaming_packet: None,
     }
 }
 
@@ -1260,4 +1266,307 @@ pub extern "C" fn mmf_draw_spatial_query(
         }
     }
     total
+}
+
+// ------------------------------------------------------------------
+// Streaming / chunk-based progressive loading
+// ------------------------------------------------------------------
+
+/// Build a streaming packet from the document's render data.
+///
+/// Splits the internal `RenderPacket` into chunks respecting `budget_bytes`.
+/// Returns the number of chunks (0 if empty or already built).
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_build_streaming_packet(doc: *mut MmfDocument, budget_bytes: u32) -> u32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &mut *doc };
+    if let Some(sp) = &doc.streaming_packet {
+        return sp.chunk_count() as u32;
+    }
+    let budget = MemoryBudget::new(budget_bytes as usize);
+    let sp = StreamingPacket::from_packet(&doc.packet, &budget);
+    let count = sp.chunk_count() as u32;
+    doc.streaming_packet = Some(sp);
+    count
+}
+
+/// Number of streaming chunks (0 if not built).
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_chunk_count(doc: *const MmfDocument) -> u32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    doc.streaming_packet
+        .as_ref()
+        .map_or(0, |sp| sp.chunk_count() as u32)
+}
+
+/// Number of meshes in chunk `chunk_idx`.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_chunk_mesh_count(doc: *const MmfDocument, chunk_idx: u32) -> u32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    doc.streaming_packet
+        .as_ref()
+        .and_then(|sp| sp.chunk(chunk_idx as usize))
+        .map_or(0, |c| c.meshes.len() as u32)
+}
+
+/// Number of instances in chunk `chunk_idx`.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_chunk_instance_count(doc: *const MmfDocument, chunk_idx: u32) -> u32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    doc.streaming_packet
+        .as_ref()
+        .and_then(|sp| sp.chunk(chunk_idx as usize))
+        .map_or(0, |c| c.instances.len() as u32)
+}
+
+/// AABB of chunk `chunk_idx`.  Writes 6 f32 to out_min/out_max. Returns 1 on success.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_chunk_bounds(
+    doc: *const MmfDocument,
+    chunk_idx: u32,
+    out_min: *mut f32,
+    out_max: *mut f32,
+) -> i32 {
+    if doc.is_null() || out_min.is_null() || out_max.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    if let Some(c) = doc
+        .streaming_packet
+        .as_ref()
+        .and_then(|sp| sp.chunk(chunk_idx as usize))
+    {
+        let b = &c.chunk_bounds;
+        unsafe {
+            *out_min.offset(0) = b.min.x;
+            *out_min.offset(1) = b.min.y;
+            *out_min.offset(2) = b.min.z;
+            *out_max.offset(0) = b.max.x;
+            *out_max.offset(1) = b.max.y;
+            *out_max.offset(2) = b.max.z;
+        }
+        1
+    } else {
+        0
+    }
+}
+
+/// Number of batch groups in chunk `chunk_idx`.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_chunk_batch_count(doc: *const MmfDocument, chunk_idx: u32) -> u32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    doc.streaming_packet
+        .as_ref()
+        .and_then(|sp| sp.chunk(chunk_idx as usize))
+        .map_or(0, |c| c.batches.len() as u32)
+}
+
+/// GPU memory estimate for chunk `chunk_idx` in bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_chunk_memory_bytes(doc: *const MmfDocument, chunk_idx: u32) -> u64 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    doc.streaming_packet
+        .as_ref()
+        .and_then(|sp| sp.chunk(chunk_idx as usize))
+        .map_or(0, |c| c.stats.memory_bytes as u64)
+}
+
+/// Total GPU memory across all chunks in bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_chunk_total_memory(doc: *const MmfDocument) -> u64 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    doc.streaming_packet.as_ref().map_or(0, |sp| {
+        sp.iter_chunks().map(|c| c.stats.memory_bytes as u64).sum()
+    })
+}
+
+/// Vertex count for mesh `mesh_idx` in chunk `chunk_idx`.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_chunk_mesh_vertex_count(
+    doc: *const MmfDocument,
+    chunk_idx: u32,
+    mesh_idx: u32,
+) -> u32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    doc.streaming_packet
+        .as_ref()
+        .and_then(|sp| sp.chunk(chunk_idx as usize))
+        .and_then(|c| c.meshes.get(mesh_idx as usize))
+        .map_or(0, |m| m.positions.len() as u32)
+}
+
+/// Index count for mesh `mesh_idx` in chunk `chunk_idx`.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_chunk_mesh_index_count(
+    doc: *const MmfDocument,
+    chunk_idx: u32,
+    mesh_idx: u32,
+) -> u32 {
+    if doc.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    doc.streaming_packet
+        .as_ref()
+        .and_then(|sp| sp.chunk(chunk_idx as usize))
+        .and_then(|c| c.meshes.get(mesh_idx as usize))
+        .map_or(0, |m| m.indices.len() as u32)
+}
+
+/// Geometry id for mesh `mesh_idx` in chunk `chunk_idx`.  Returns -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_chunk_mesh_geometry_id(
+    doc: *const MmfDocument,
+    chunk_idx: u32,
+    mesh_idx: u32,
+) -> i32 {
+    if doc.is_null() {
+        return -1;
+    }
+    let doc = unsafe { &*doc };
+    doc.streaming_packet
+        .as_ref()
+        .and_then(|sp| sp.chunk(chunk_idx as usize))
+        .and_then(|c| c.meshes.get(mesh_idx as usize))
+        .map_or(-1, |m| m.geometry_id as i32)
+}
+
+/// Borrowed float* to positions for mesh in chunk.  Valid until mmf_document_free.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_chunk_mesh_positions(
+    doc: *const MmfDocument,
+    chunk_idx: u32,
+    mesh_idx: u32,
+) -> *const f32 {
+    if doc.is_null() {
+        return ptr::null();
+    }
+    let doc = unsafe { &*doc };
+    doc.streaming_packet
+        .as_ref()
+        .and_then(|sp| sp.chunk(chunk_idx as usize))
+        .and_then(|c| c.meshes.get(mesh_idx as usize))
+        .map_or(ptr::null(), |m| m.positions.as_ptr() as *const f32)
+}
+
+/// Borrowed float* to normals for mesh in chunk.  Valid until mmf_document_free.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_chunk_mesh_normals(
+    doc: *const MmfDocument,
+    chunk_idx: u32,
+    mesh_idx: u32,
+) -> *const f32 {
+    if doc.is_null() {
+        return ptr::null();
+    }
+    let doc = unsafe { &*doc };
+    doc.streaming_packet
+        .as_ref()
+        .and_then(|sp| sp.chunk(chunk_idx as usize))
+        .and_then(|c| c.meshes.get(mesh_idx as usize))
+        .map_or(ptr::null(), |m| m.normals.as_ptr() as *const f32)
+}
+
+/// Borrowed u32* to indices for mesh in chunk.  Valid until mmf_document_free.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_chunk_mesh_indices(
+    doc: *const MmfDocument,
+    chunk_idx: u32,
+    mesh_idx: u32,
+) -> *const u32 {
+    if doc.is_null() {
+        return ptr::null();
+    }
+    let doc = unsafe { &*doc };
+    doc.streaming_packet
+        .as_ref()
+        .and_then(|sp| sp.chunk(chunk_idx as usize))
+        .and_then(|c| c.meshes.get(mesh_idx as usize))
+        .map_or(ptr::null(), |m| m.indices.as_ptr())
+}
+
+// ------------------------------------------------------------------
+// Frustum culling helper (via C ABI)
+// ------------------------------------------------------------------
+
+/// Test whether an AABB is visible within a camera frustum.
+///
+/// The caller provides the camera description and receives a 1 (visible)
+/// or 0 (culled).  Internally constructs an OrbitCamera + Frustum.
+///
+/// All 12 camera floats are required; aspect is the viewport width/height.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_frustum_aabb_visible(
+    bounds_min: *const f32,
+    bounds_max: *const f32,
+    cam_target: *const f32,
+    cam_distance: f32,
+    cam_yaw: f32,
+    cam_pitch: f32,
+    cam_fov_y: f32,
+    cam_near: f32,
+    cam_far: f32,
+    aspect: f32,
+) -> i32 {
+    if bounds_min.is_null() || bounds_max.is_null() || cam_target.is_null() {
+        return 0;
+    }
+    let cam = mmforge_render::OrbitCamera {
+        target: unsafe {
+            glam::Vec3::new(
+                *cam_target.offset(0),
+                *cam_target.offset(1),
+                *cam_target.offset(2),
+            )
+        },
+        distance: cam_distance,
+        yaw: cam_yaw,
+        pitch: cam_pitch,
+        fov_y: cam_fov_y,
+        near: cam_near,
+        far: cam_far,
+    };
+    let bb = mmforge_core::math::BoundingBox {
+        min: unsafe {
+            glam::Vec3::new(
+                *bounds_min.offset(0),
+                *bounds_min.offset(1),
+                *bounds_min.offset(2),
+            )
+        },
+        max: unsafe {
+            glam::Vec3::new(
+                *bounds_max.offset(0),
+                *bounds_max.offset(1),
+                *bounds_max.offset(2),
+            )
+        },
+    };
+    let vp = cam.projection_matrix(aspect) * cam.view_matrix();
+    let mut f = Frustum::from_view_projection(&vp);
+    f.normalise();
+    if f.intersects_aabb(&bb) { 1 } else { 0 }
 }

@@ -127,6 +127,43 @@ struct GPUMesh {
     let bvh: MeshBVH
 }
 
+/// Frustum plane extraction + AABB intersection, matching Rust Frustum.
+struct FrustumPlanes {
+    private let planes: [simd_float4] // left, right, bottom, top, near, far
+
+    /// Extract frustum planes from a view-projection matrix (OpenGL convention).
+    init(from vp: simd_float4x4) {
+        // Column-major: m[col][row_component]
+        // Row R = (m[0][R], m[1][R], m[2][R], m[3][R])
+        let m = vp
+        // Extract six planes using Gribb/Hartmann (OpenGL: near=row3+row2)
+        let left   = simd_float4(m[0][3] + m[0][0], m[1][3] + m[1][0], m[2][3] + m[2][0], m[3][3] + m[3][0])
+        let right  = simd_float4(m[0][3] - m[0][0], m[1][3] - m[1][0], m[2][3] - m[2][0], m[3][3] - m[3][0])
+        let bottom = simd_float4(m[0][3] + m[0][1], m[1][3] + m[1][1], m[2][3] + m[2][1], m[3][3] + m[3][1])
+        let top    = simd_float4(m[0][3] - m[0][1], m[1][3] - m[1][1], m[2][3] - m[2][1], m[3][3] - m[3][1])
+        let near   = simd_float4(m[0][3] + m[0][2], m[1][3] + m[1][2], m[2][3] + m[2][2], m[3][3] + m[3][2])
+        let far    = simd_float4(m[0][3] - m[0][2], m[1][3] - m[1][2], m[2][3] - m[2][2], m[3][3] - m[3][2])
+        // Normalize
+        planes = [left, right, bottom, top, near, far].map { p in
+            let len = sqrt(p.x * p.x + p.y * p.y + p.z * p.z)
+            return len > 0 ? p / len : p
+        }
+    }
+
+    /// Test AABB against all six planes (p-vertex optimization).
+    func intersects(min mins: simd_float3, max maxs: simd_float3) -> Bool {
+        for p in planes {
+            let px = p.x >= 0 ? maxs.x : mins.x
+            let py = p.y >= 0 ? maxs.y : mins.y
+            let pz = p.z >= 0 ? maxs.z : mins.z
+            if p.x * px + p.y * py + p.z * pz + p.w < 0 {
+                return false
+            }
+        }
+        return true
+    }
+}
+
 // MARK: - MetalRenderer
 
 /// Overlay vertex: position + color (no normals, no lighting).
@@ -492,6 +529,28 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         for axis in axes {
             verts.append(OverlayVertex(position: c - axis, color: color))
             verts.append(OverlayVertex(position: c + axis, color: color))
+        }
+    }
+
+    // MARK: - Frustum Culling
+
+    /// Apply frustum culling: mark meshes outside the view frustum as invisible.
+    /// Preserves user-initiated visibility — meshes hidden by the user stay hidden.
+    /// Call each frame before draw(in:).
+    func cullByFrustum(aspect: Float) {
+        let vp = camera.projectionMatrix(aspect: aspect) * camera.viewMatrix
+        let frustum = FrustumPlanes(from: vp)
+        for i in gpuMeshes.indices {
+            guard gpuMeshes[i].visible else { continue }
+            gpuMeshes[i].visible = frustum.intersects(
+                min: gpuMeshes[i].boundsMin, max: gpuMeshes[i].boundsMax)
+        }
+    }
+
+    /// Restore all auto-culled visibilities back to user-preference state.
+    func restoreAllVisible() {
+        for i in gpuMeshes.indices {
+            gpuMeshes[i].visible = !hiddenNodeIndices.contains(gpuMeshes[i].nodeIndex)
         }
     }
 
