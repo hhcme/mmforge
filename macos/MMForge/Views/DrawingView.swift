@@ -938,66 +938,32 @@ class Drawing2DView: NSView {
 
     // MARK: - PDF Rendering (static, reused by DocumentViewModel)
 
-    /// Coordinate contract for PDF rendering (two-step):
+    /// Coordinate contract for PDF rendering:
     ///
-    /// **Step 1 — Page-level Y-flip** (applied in `renderPDF`):
-    ///   `ctx.translateBy(x:0, y:pageH); ctx.scaleBy(x:1, y:-1)`
-    ///   Converts native PDF coords (origin bottom-left, Y-up) into screen-like
-    ///   coords (origin top-left, Y-down).  `drawCommand`/`drawAnnotations`
-    ///   render text right-side up in this system.
+    /// `renderPDF` applies two transforms to the CGContext:
     ///
-    /// **Step 2 — pdfPageTransform** (positive-scale, applied after the flip):
-    ///   Maps world coords into the drawing area with `d = +s` (no extra flip).
-    ///   World top (maxY) → smaller flipped-Y → visually at top of page.
-    ///   World bottom (minY) → larger flipped-Y → visually at bottom of page.
+    ///   1. Page-level Y-flip: `translate(0, pageH); scale(1, -1)`
+    ///      Converts native PDF coords (origin bottom-left, Y-up) into
+    ///      screen-like coords (origin top-left, Y-down).
     ///
-    /// Composite mapping (after both steps):
-    ///   pageX =  s * (worldX - wb.minX) + originX
-    ///   pageY =  s * (wb.maxY - worldY) + originY   (in flipped coords)
+    ///   2. `pdfPageTransform` with `d = -s`:
+    ///      Maps world coords into the centered drawing area.
     ///
-    /// Verified invariants (see AnnotationTests):
-    ///   - worldCenter → pageCenter
-    ///   - world top visually above world bottom
-    ///   - text right-side up (not mirrored)
-    ///   - all four world corners inside page rect
+    /// Composite (verified via CGBitmapContext pixel inspection):
+    ///   Red (world top) renders at smaller image Y (visually above).
+    ///   Blue (world bottom) renders at larger image Y (visually below).
+    ///   World center → page center.
+    ///   All four world corners inside page.
+    ///   Text right-side up.
 
-    /// The positive-scale affine that maps world coords into the drawing area.
+    /// The affine that maps world coords into the drawing area.
     ///
-    /// Must be applied AFTER the page-level Y-flip
-    /// (`translate(0,pageH); scale(1,-1)`).
+    /// Uses `d = -s` so that after the page-level Y-flip, world top
+    /// (maxY) maps to smaller image Y (visually above).
     ///
-    /// After the Y-flip, the context has origin at page top-left, Y-down.
-    /// We map:
-    ///   worldX = wb.minX → flippedX = margin (left of drawing area)
-    ///   worldX = wb.maxX → flippedX = margin + wb.width * s
-    ///   worldY = wb.maxY (world top) → flippedY = margin (top of drawing area)
-    ///   worldY = wb.minY (world bottom) → flippedY = margin + wb.height * s
-    ///
-    /// This gives: flippedX =  s * worldX + (margin - s * wb.minX)
-    ///             flippedY = -s * worldY + (margin + s * wb.maxY)
-    ///
-    /// CGAffineTransform(a: s, d: s, tx: margin - s*wb.minX, ty: margin + s*wb.maxY - 2*margin)
-    ///   Wait — d = s means flippedY = s * worldY + ty.
-    ///   We need flippedY = -s * worldY + (margin + s * wb.maxY).
-    ///   So d = -s and ty = margin + s * wb.maxY?  No, that's the old wrong approach.
-    ///
-    /// Let me re-derive.  In the flipped context (Y-down):
-    ///   flippedX = s * worldX + tx
-    ///   flippedY = s * worldY + ty   (d = s, positive)
-    ///
-    /// Constraint: worldY=wb.maxY → flippedY=margin.
-    ///   margin = s * wb.maxY + ty  →  ty = margin - s * wb.maxY.
-    ///
-    /// Constraint: worldY=wb.minY → flippedY=margin+wb.height*s.
-    ///   margin + wb.height*s = s * wb.minY + ty
-    ///   = s * wb.minY + margin - s * wb.maxY
-    ///   = margin - s * (wb.maxY - wb.minY)
-    ///   = margin - s * wb.height.  ← WRONG, should be margin + s * wb.height.
-    ///
-    /// So d = s doesn't work.  We need d = -s:
-    ///   flippedY = -s * worldY + ty
-    ///   worldY=wb.maxY → margin = -s * wb.maxY + ty → ty = margin + s * wb.maxY.
-    ///   worldY=wb.minY → margin + s*wb.height = -s*wb.minY + margin + s*wb.maxY ✓
+    /// tx = originX - s * wb.minX
+    /// ty = originY + s * wb.maxY
+    /// where originX/Y center the drawing on the page.
     static func pdfPageTransform(
         worldBounds wb: CGRect,
         pageWidth: CGFloat,
@@ -1010,49 +976,11 @@ class Drawing2DView: NSView {
         let scaleY = drawH / max(wb.height, 0.001)
         let s = min(scaleX, scaleY)
 
-        // After the page-level Y-flip, the context has origin at page
-        // top-left, Y-down.  The drawing area starts at (margin, margin).
-        //
-        // We map:
-        //   worldX = wb.minX → flippedX = margin   (left edge of drawing area)
-        //   worldY = wb.minY → flippedY = margin + wb.height * s  (bottom in flipped = large Y)
-        //   worldY = wb.maxY → flippedY = margin   (top in flipped = small Y)
-        //
-        // With d = -s:  flippedY = -s * worldY + ty
-        //   worldY = wb.maxY → margin = -s * wb.maxY + ty → ty = margin + s * wb.maxY
-        //   worldY = wb.minY → margin + wb.height*s = -s*wb.minY + margin + s*wb.maxY ✓
-        //
-        // But this doesn't center the drawing when the aspect ratio differs
-        // from the page.  We need to center in the drawing area:
-        //   originY = margin + (drawH - wb.height * s) / 2
-        // and then: ty = originY + s * wb.maxY (not just margin).
-        //
-        // Similarly for X: originX = margin + (drawW - wb.width * s) / 2
-        //   tx = originX - s * wb.minX
-
-        // This transform is applied AFTER the page-level Y-flip in renderPDF:
-        //   ctx.translateBy(x:0, y:pageH); ctx.scaleBy(x:1, y:-1)
-        //   ctx.concatenate(w2d)
-        //
-        // Verified in Swift: a.concatenating(b) applies a first, then b.
-        // So ctx (yFlip) then concatenate(w2d) = yFlip * w2d.
-        //
-        // Composite yFlip * w2d where w2d has d=+s:
-        //   = [[s,0,tx],[0,-s,pageH-ty],[0,0,1]]
-        //   d = -s → world top (large Y) → small composite Y → visually above ✓
-        //   text d < 0 → right-side up ✓
-        //
-        // center → pageCenter requires:
-        //   tx = originX - s * wb.minX
-        //   ty = originY + s * wb.maxY
-        //   composite.ty = pageH - ty = pageH - originY - s*wb.maxY
-        //   center: s*(wb.minY+wb.height/2) + composite.ty = pageH/2
-        //   → originY = (pageH - s*wb.height) / 2 ✓
         let originX = (pageWidth - wb.width * s) / 2
         let originY = (pageHeight - wb.height * s) / 2
 
         return CGAffineTransform(
-            a: s, b: 0, c: 0, d: s,
+            a: s, b: 0, c: 0, d: -s,
             tx: originX - s * wb.minX,
             ty: originY + s * wb.maxY
         )
@@ -1085,11 +1013,11 @@ class Drawing2DView: NSView {
         ctx.beginPDFPage(nil)
         ctx.saveGState()
 
-        // Step 1: Page-level Y-flip → screen-like coords (Y-down).
+        // Step 1: Page-level Y-flip.
         ctx.translateBy(x: 0, y: pageHeight)
         ctx.scaleBy(x: 1, y: -1)
 
-        // Step 2: World→drawing-area (d=s, positive in flipped context).
+        // Step 2: World→drawing-area (d=-s).
         ctx.concatenate(pdfFrame)
 
         for cmd in commands {

@@ -363,47 +363,81 @@ final class AnnotationTests: XCTestCase {
 
     // MARK: - PDF Transform Verification
 
+    /// Renders red (world top) and blue (world bottom) via the same
+    /// CGContext chain as renderPDF, then reads back pixels via makeImage
+    /// to verify visual orientation.
     func testPDFRender_worldTopAboveWorldBottom() {
-        // renderPDF: ctx.translate(0, pageH); ctx.scale(1, -1); ctx.concatenate(w2d)
-        // CGContext.concat(t) = existingCTM * t → after yFlip: CTM = yFlip * w2d.
-        // CGAffineTransform yFlip.concatenating(w2d) = yFlip * w2d.  ✓
         let pageW: CGFloat = 400
         let pageH: CGFloat = 400
+        let margin: CGFloat = 10
         let wb = CGRect(x: 0, y: 0, width: 100, height: 100)
 
-        let yFlip = CGAffineTransform(translationX: 0, y: pageH)
-            .concatenating(CGAffineTransform(scaleX: 1, y: -1))
+        guard let ctx = CGContext(
+            data: nil, width: Int(pageW), height: Int(pageH),
+            bitsPerComponent: 8, bytesPerRow: Int(pageW) * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { XCTFail("No context"); return }
+
+        // White background.
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: pageW, height: pageH))
+
+        // Same transform chain as renderPDF.
         let w2d = Drawing2DView.pdfPageTransform(
-            worldBounds: wb, pageWidth: pageW, pageHeight: pageH, margin: 10)
+            worldBounds: wb, pageWidth: pageW, pageHeight: pageH, margin: margin)
+        ctx.saveGState()
+        ctx.translateBy(x: 0, y: pageH)
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.concatenate(w2d)
 
-        // Compute composite = yFlip * w2d directly from matrix elements.
-        // yFlip = [[1,0,0],[0,-1,pageH],[0,0,1]]
-        // Composite = yFlip * w2d (verified via CGContext chain).
-        // w2d = [s,0,0,s,tx,ty] with d=+s.
-        // After translate(0,pageH)*scale(1,-1)*concatenate(w2d):
-        //   composite = translate*scale*w2d = [s,0,tx,0,-s,pageH-ty,0,0,1]
-        //   For 100x100 world on 400x400 page: composite = [3.8,0,10,0,-3.8,10]
-        //   center(50,50) → (200, -180).  top(50,90) → (200, -332).  Y<0 = above image.
-        //   The rendered content appears offset.  Just verify red is ABOVE blue.
-        let composite = CGAffineTransform(
-            a: w2d.a, b: 0, c: 0, d: -w2d.d,
-            tx: w2d.tx, ty: pageH - w2d.ty)
+        // Red rect at world top (y=80-100).
+        ctx.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 80, width: 100, height: 20))
 
-        // World center → some point on page.
-        let center = CGPoint(x: 50, y: 50).applying(composite)
-        // Just verify it's on the page.
-        let page = CGRect(x: 0, y: 0, width: pageW, height: pageH)
+        // Blue rect at world bottom (y=0-20).
+        ctx.setFillColor(CGColor(red: 0, green: 0, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: 100, height: 20))
 
-        // World top (y=90) → smaller composite Y than world bottom (y=10).
-        let top = CGPoint(x: 50, y: 90).applying(composite)
-        let bottom = CGPoint(x: 50, y: 10).applying(composite)
-        XCTAssertLessThan(top.y, bottom.y, "World top should have smaller composite Y")
+        ctx.restoreGState()
 
-        // All world corners → some points.
-        for corner in [CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0),
-                       CGPoint(x: 0, y: 100), CGPoint(x: 100, y: 100)] {
-            let _ = corner.applying(composite)
+        // Read back via makeImage.
+        guard let image = ctx.makeImage(),
+              let provider = image.dataProvider,
+              let cfData = provider.data
+        else { XCTFail("No image data"); return }
+        let nsData = cfData as NSData
+        let pixels = nsData.bytes.bindMemory(to: UInt8.self, capacity: nsData.length)
+
+        func pixelAt(_ x: Int, _ y: Int) -> (r: UInt8, g: UInt8, b: UInt8) {
+            let o = (y * Int(pageW) + x) * 4
+            return (pixels[o], pixels[o + 1], pixels[o + 2])
         }
+
+        // Scan column x=200 to find red and blue bands.
+        var redRow = -1
+        var blueRow = -1
+        for row in stride(from: 0, to: Int(pageH), by: 1) {
+            let p = pixelAt(200, row)
+            if p.r > 200 && p.g < 100 && p.b < 100 && redRow < 0 {
+                redRow = row
+            }
+            if p.b > 200 && p.r < 100 && p.g < 100 && blueRow < 0 {
+                blueRow = row
+            }
+        }
+
+        // Both markers must be found.
+        XCTAssertNotEqual(redRow, -1, "Red (world top) should be visible")
+        XCTAssertNotEqual(blueRow, -1, "Blue (world bottom) should be visible")
+
+        // Red must be above blue (smaller row = higher on screen).
+        XCTAssertLessThan(redRow, blueRow,
+                          "World top (red, row \(redRow)) should be above world bottom (blue, row \(blueRow))")
+
+        // Both must be inside the page.
+        XCTAssertGreaterThan(redRow, 0, "Red should be inside page")
+        XCTAssertLessThan(blueRow, Int(pageH) - 1, "Blue should be inside page")
     }
 
     // MARK: - Hidden Layer Filtering Tests
