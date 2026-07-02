@@ -1,8 +1,4 @@
 //! View-frustum culling — plane extraction and AABB intersection tests.
-//!
-//! Extracts 6 clip planes from a view-projection matrix and provides fast
-//! sphere/AABB intersection queries so renderers can discard invisible instances
-//! before submitting draw calls.
 
 use glam::Vec4;
 use mmforge_core::math::BoundingBox;
@@ -26,55 +22,66 @@ pub struct Frustum {
 impl Frustum {
     /// Extract frustum planes from the combined view-projection matrix.
     ///
-    /// Uses Gribb/Hartmann plane extraction (Gribb & Hartmann, 2001).
-    /// The input `vp` must be `projection * view`.
+    /// Uses Gribb/Hartmann plane extraction (Gribb & Hartmann, 2001),
+    /// OpenGL NDC convention (z ∈ [-1, 1]).
+    ///
+    /// The input `vp` must be `projection * view` in column-major order
+    /// (glam::Mat4's native storage).  `to_cols_array_2d()` returns
+    /// `m[col][row_component]` where row-component 0..3 is x,y,z,w of the column.
+    ///
+    /// In column-major convention, Row R (0-indexed) is
+    /// `(m[0][R], m[1][R], m[2][R], m[3][R])`.  For OpenGL:
+    ///
+    /// - Left:   Row3 + Row0
+    /// - Right:  Row3 − Row0
+    /// - Bottom: Row3 + Row1
+    /// - Top:    Row3 − Row1
+    /// - Near:   Row3 + Row2
+    /// - Far:    Row3 − Row2
     pub fn from_view_projection(vp: &glam::Mat4) -> Self {
         let m = vp.to_cols_array_2d();
-        // Left plane:   row3 + row0
-        // Right plane:  row3 - row0
-        // Bottom plane: row3 + row1
-        // Top plane:    row3 - row1
-        // Near plane:   row2
-        // Far plane:    row3 - row2
+
         Frustum {
             left: Vec4::new(
-                m[3][0] + m[0][0],
-                m[3][1] + m[0][1],
-                m[3][2] + m[0][2],
-                m[3][3] + m[0][3],
+                m[0][3] + m[0][0],
+                m[1][3] + m[1][0],
+                m[2][3] + m[2][0],
+                m[3][3] + m[3][0],
             ),
             right: Vec4::new(
-                m[3][0] - m[0][0],
-                m[3][1] - m[0][1],
-                m[3][2] - m[0][2],
-                m[3][3] - m[0][3],
+                m[0][3] - m[0][0],
+                m[1][3] - m[1][0],
+                m[2][3] - m[2][0],
+                m[3][3] - m[3][0],
             ),
             bottom: Vec4::new(
-                m[3][0] + m[1][0],
-                m[3][1] + m[1][1],
-                m[3][2] + m[1][2],
-                m[3][3] + m[1][3],
+                m[0][3] + m[0][1],
+                m[1][3] + m[1][1],
+                m[2][3] + m[2][1],
+                m[3][3] + m[3][1],
             ),
             top: Vec4::new(
-                m[3][0] - m[1][0],
-                m[3][1] - m[1][1],
-                m[3][2] - m[1][2],
-                m[3][3] - m[1][3],
+                m[0][3] - m[0][1],
+                m[1][3] - m[1][1],
+                m[2][3] - m[2][1],
+                m[3][3] - m[3][1],
             ),
-            near: Vec4::new(m[2][0], m[2][1], m[2][2], m[2][3]),
+            near: Vec4::new(
+                m[0][3] + m[0][2],
+                m[1][3] + m[1][2],
+                m[2][3] + m[2][2],
+                m[3][3] + m[3][2],
+            ),
             far: Vec4::new(
-                m[3][0] - m[2][0],
-                m[3][1] - m[2][1],
-                m[3][2] - m[2][2],
-                m[3][3] - m[2][3],
+                m[0][3] - m[0][2],
+                m[1][3] - m[1][2],
+                m[2][3] - m[2][2],
+                m[3][3] - m[3][2],
             ),
         }
     }
 
     /// Normalise all six planes so that `(nx, ny, nz)` has unit length.
-    ///
-    /// This is necessary for correct distance-based testing.  Call this once
-    /// after extraction before running intersection queries.
     pub fn normalise(&mut self) {
         self.left = normalise_plane(self.left);
         self.right = normalise_plane(self.right);
@@ -85,10 +92,6 @@ impl Frustum {
     }
 
     /// Test whether an axis-aligned bounding box intersects the frustum.
-    ///
-    /// Returns `true` if at least part of the box lies inside or intersects
-    /// the frustum.  Uses the n-vertex / p-vertex optimisation (pick the
-    /// corner farthest from the plane along the normal).
     pub fn intersects_aabb(&self, bb: &BoundingBox) -> bool {
         if !bb.is_valid() {
             return false;
@@ -104,7 +107,6 @@ impl Frustum {
             &self.far,
         ];
         for plane in planes {
-            // p-vertex: the corner that is farthest in the direction of the plane normal
             let px = if plane.x >= 0.0 { max[0] } else { min[0] };
             let py = if plane.y >= 0.0 { max[1] } else { min[1] };
             let pz = if plane.z >= 0.0 { max[2] } else { min[2] };
@@ -145,6 +147,17 @@ impl Frustum {
             self.far,
         ]
     }
+
+    /// Debug: compute signed distance of a point to each plane (normalised).
+    #[doc(hidden)]
+    pub fn signed_distances(&self, point: glam::Vec3) -> [f32; 6] {
+        let planes = self.planes();
+        let mut d = [0.0f32; 6];
+        for (i, p) in planes.iter().enumerate() {
+            d[i] = p.x * point.x + p.y * point.y + p.z * point.z + p.w;
+        }
+        d
+    }
 }
 
 fn normalise_plane(plane: Vec4) -> Vec4 {
@@ -161,17 +174,76 @@ mod tests {
     use super::*;
     use crate::camera::OrbitCamera;
 
-    fn unit_cube_bounds() -> BoundingBox {
+    fn make_frustum(cam: &OrbitCamera, aspect: f32) -> Frustum {
+        let vp = cam.projection_matrix(aspect) * cam.view_matrix();
+        let mut f = Frustum::from_view_projection(&vp);
+        f.normalise();
+        f
+    }
+
+    fn bounds(center: glam::Vec3, half: f32) -> BoundingBox {
         BoundingBox {
-            min: glam::Vec3::new(-1.0, -1.0, -1.0),
-            max: glam::Vec3::new(1.0, 1.0, 1.0),
+            min: center - glam::Vec3::splat(half),
+            max: center + glam::Vec3::splat(half),
         }
     }
 
+    fn frustum_center_target() -> OrbitCamera {
+        OrbitCamera {
+            target: glam::Vec3::new(0.0, 0.0, 5.0),
+            distance: 5.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            fov_y: 45.0_f32.to_radians(),
+            near: 0.1,
+            far: 100.0,
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // General tests
+    // ----------------------------------------------------------------
+
     #[test]
     fn frustum_contains_central_box() {
+        let cam = frustum_center_target();
+        let f = make_frustum(&cam, 1.0);
+        let bb = bounds(glam::Vec3::new(0.0, 0.0, 5.0), 0.5);
+        assert!(f.intersects_aabb(&bb));
+    }
+
+    #[test]
+    fn sphere_inside_frustum() {
+        let cam = frustum_center_target();
+        let f = make_frustum(&cam, 1.0);
+        assert!(f.intersects_sphere(glam::Vec3::new(0.0, 0.0, 5.0), 0.5));
+    }
+
+    #[test]
+    fn all_planes_provided() {
+        let cam = OrbitCamera::default();
+        let f = make_frustum(&cam, 1.0);
+        assert_eq!(f.planes().len(), 6);
+    }
+
+    #[test]
+    fn empty_bounds_rejected() {
+        let cam = OrbitCamera::default();
+        let f = make_frustum(&cam, 1.0);
+        assert!(!f.intersects_aabb(&BoundingBox::EMPTY));
+    }
+
+    // ----------------------------------------------------------------
+    // Per-boundary culling tests
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn box_beyond_near_plane_is_culled() {
+        // target=(0,0,5), distance=5 → eye at (0,0,10). near=0.1 → near plane
+        // at z≈9.95.  A box whose entire z-range is between the eye and the
+        // near plane (9.98±0.01 → [9.97, 9.99]) must be culled.
         let cam = OrbitCamera {
-            target: glam::Vec3::ZERO,
+            target: glam::Vec3::new(0.0, 0.0, 5.0),
             distance: 5.0,
             yaw: 0.0,
             pitch: 0.0,
@@ -179,40 +251,15 @@ mod tests {
             near: 0.1,
             far: 100.0,
         };
-        let vp = cam.projection_matrix(1.0) * cam.view_matrix();
-        let mut frustum = Frustum::from_view_projection(&vp);
-        frustum.normalise();
-
-        assert!(frustum.intersects_aabb(&unit_cube_bounds()));
+        let f = make_frustum(&cam, 1.0);
+        let too_close = bounds(glam::Vec3::new(0.0, 0.0, 9.98), 0.01);
+        assert!(!f.intersects_aabb(&too_close));
     }
 
     #[test]
-    fn box_behind_camera_is_culled() {
+    fn box_beyond_far_plane_is_culled() {
         let cam = OrbitCamera {
-            target: glam::Vec3::new(0.0, 0.0, 20.0),
-            distance: 5.0,
-            yaw: 0.0,
-            pitch: 0.0,
-            fov_y: 45.0_f32.to_radians(),
-            near: 0.1,
-            far: 100.0,
-        };
-        // Camera looks toward +Z from the origin, so objects behind it (near -Z) are out.
-        let vp = cam.projection_matrix(1.0) * cam.view_matrix();
-        let mut frustum = Frustum::from_view_projection(&vp);
-        frustum.normalise();
-
-        let behind = BoundingBox {
-            min: glam::Vec3::new(-1.0, -1.0, -10.0),
-            max: glam::Vec3::new(1.0, 1.0, -8.0),
-        };
-        assert!(!frustum.intersects_aabb(&behind));
-    }
-
-    #[test]
-    fn box_far_away_is_culled() {
-        let cam = OrbitCamera {
-            target: glam::Vec3::ZERO,
+            target: glam::Vec3::new(0.0, 0.0, 5.0),
             distance: 5.0,
             yaw: 0.0,
             pitch: 0.0,
@@ -220,21 +267,53 @@ mod tests {
             near: 0.1,
             far: 10.0,
         };
-        let vp = cam.projection_matrix(1.0) * cam.view_matrix();
-        let mut frustum = Frustum::from_view_projection(&vp);
-        frustum.normalise();
-
-        let far = BoundingBox {
-            min: glam::Vec3::new(-1.0, -1.0, 50.0),
-            max: glam::Vec3::new(1.0, 1.0, 52.0),
-        };
-        assert!(!frustum.intersects_aabb(&far));
+        let f = make_frustum(&cam, 1.0);
+        let far_box = bounds(glam::Vec3::new(0.0, 0.0, 100.0), 1.0);
+        assert!(!f.intersects_aabb(&far_box));
     }
 
     #[test]
-    fn sphere_inside_frustum() {
+    fn box_to_left_of_frustum_is_culled() {
+        let cam = frustum_center_target();
+        let f = make_frustum(&cam, 1.0);
+        let left_box = bounds(glam::Vec3::new(-100.0, 0.0, 5.0), 0.1);
+        assert!(!f.intersects_aabb(&left_box));
+    }
+
+    #[test]
+    fn box_to_right_of_frustum_is_culled() {
+        let cam = frustum_center_target();
+        let f = make_frustum(&cam, 1.0);
+        let right_box = bounds(glam::Vec3::new(100.0, 0.0, 5.0), 0.1);
+        assert!(!f.intersects_aabb(&right_box));
+    }
+
+    #[test]
+    fn box_above_frustum_is_culled() {
+        let cam = frustum_center_target();
+        let f = make_frustum(&cam, 1.0);
+        let top_box = bounds(glam::Vec3::new(0.0, 100.0, 5.0), 0.1);
+        assert!(!f.intersects_aabb(&top_box));
+    }
+
+    #[test]
+    fn box_below_frustum_is_culled() {
+        let cam = frustum_center_target();
+        let f = make_frustum(&cam, 1.0);
+        let bottom_box = bounds(glam::Vec3::new(0.0, -100.0, 5.0), 0.1);
+        assert!(!f.intersects_aabb(&bottom_box));
+    }
+
+    // ----------------------------------------------------------------
+    // Sphere boundary tests
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn sphere_outside_near_plane_is_culled() {
+        // eye at (0,0,10), near plane at z≈9.95.  Sphere at z=9.98, r=0.01
+        // is entirely between the eye and the near plane.
         let cam = OrbitCamera {
-            target: glam::Vec3::ZERO,
+            target: glam::Vec3::new(0.0, 0.0, 5.0),
             distance: 5.0,
             yaw: 0.0,
             pitch: 0.0,
@@ -242,46 +321,79 @@ mod tests {
             near: 0.1,
             far: 100.0,
         };
-        let vp = cam.projection_matrix(1.0) * cam.view_matrix();
-        let mut frustum = Frustum::from_view_projection(&vp);
-        frustum.normalise();
-
-        assert!(frustum.intersects_sphere(glam::Vec3::ZERO, 2.0));
+        let f = make_frustum(&cam, 1.0);
+        assert!(!f.intersects_sphere(glam::Vec3::new(0.0, 0.0, 9.98), 0.01));
     }
 
     #[test]
-    fn sphere_outside_frustum() {
+    fn sphere_outside_far_plane_is_culled() {
         let cam = OrbitCamera {
-            target: glam::Vec3::ZERO,
+            target: glam::Vec3::new(0.0, 0.0, 5.0),
             distance: 5.0,
             yaw: 0.0,
             pitch: 0.0,
             fov_y: 45.0_f32.to_radians(),
             near: 0.1,
+            far: 10.0,
+        };
+        let f = make_frustum(&cam, 1.0);
+        assert!(!f.intersects_sphere(glam::Vec3::new(0.0, 0.0, 100.0), 2.0));
+    }
+
+    // ----------------------------------------------------------------
+    // Non-axial camera tests
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn rotated_camera_still_contains_target() {
+        let cam = OrbitCamera {
+            target: glam::Vec3::new(0.0, 0.0, 5.0),
+            distance: 5.0,
+            yaw: 45.0_f32.to_radians(),
+            pitch: 0.0,
+            fov_y: 45.0_f32.to_radians(),
+            near: 0.1,
             far: 100.0,
         };
-        let vp = cam.projection_matrix(1.0) * cam.view_matrix();
-        let mut frustum = Frustum::from_view_projection(&vp);
-        frustum.normalise();
-
-        assert!(!frustum.intersects_sphere(glam::Vec3::new(0.0, 0.0, -50.0), 1.0));
+        let f = make_frustum(&cam, 1.0);
+        assert!(f.intersects_sphere(glam::Vec3::new(0.0, 0.0, 5.0), 0.1));
     }
 
     #[test]
-    fn all_planes_provided() {
-        let cam = OrbitCamera::default();
-        let vp = cam.projection_matrix(1.0) * cam.view_matrix();
-        let frustum = Frustum::from_view_projection(&vp);
-        let planes = frustum.planes();
-        assert_eq!(planes.len(), 6);
+    fn pitched_up_camera_still_contains_target() {
+        let cam = OrbitCamera {
+            target: glam::Vec3::new(0.0, 0.0, 5.0),
+            distance: 5.0,
+            yaw: 0.0,
+            pitch: 30.0_f32.to_radians(),
+            fov_y: 45.0_f32.to_radians(),
+            near: 0.1,
+            far: 100.0,
+        };
+        let f = make_frustum(&cam, 1.0);
+        assert!(f.intersects_sphere(glam::Vec3::new(0.0, 0.0, 5.0), 0.1));
     }
 
     #[test]
-    fn empty_bounds_rejected() {
-        let cam = OrbitCamera::default();
-        let vp = cam.projection_matrix(1.0) * cam.view_matrix();
-        let mut frustum = Frustum::from_view_projection(&vp);
-        frustum.normalise();
-        assert!(!frustum.intersects_aabb(&BoundingBox::EMPTY));
+    fn signed_distances_consistent() {
+        let cam = frustum_center_target();
+        let mut f = make_frustum(&cam, 1.0);
+        let inside = glam::Vec3::new(0.0, 0.0, 5.0);
+        let outside = glam::Vec3::new(100.0, 0.0, 5.0);
+        f.normalise();
+        let di = f.signed_distances(inside);
+        let dl = f.signed_distances(outside);
+        // Inside point: all distances >= 0
+        for &d in &di {
+            assert!(
+                d >= -0.001,
+                "inside point should have non-negative distances, got {d}"
+            );
+        }
+        // Far-left point: at least one distance < 0
+        assert!(
+            dl.iter().any(|&d| d < -0.001),
+            "far-left point should be outside, distances: {dl:?}"
+        );
     }
 }

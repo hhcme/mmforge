@@ -77,9 +77,24 @@ impl MemoryBudget {
     }
 
     /// Release previously reserved bytes.
+    ///
+    /// Uses a CAS loop to prevent concurrent underflow: if another thread
+    /// simultaneously modifies `used`, the subtraction is retried against
+    /// the fresh value so the counter never goes below zero.
     pub fn release(&self, bytes: usize) {
-        self.used
-            .fetch_sub(bytes.min(self.used()), Ordering::Relaxed);
+        let mut current = self.used.load(Ordering::Relaxed);
+        loop {
+            let new = current.saturating_sub(bytes);
+            match self.used.compare_exchange_weak(
+                current,
+                new,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(prev) => current = prev,
+            }
+        }
     }
 
     /// Reset the usage counter to zero.
@@ -140,6 +155,24 @@ mod tests {
         b.release(800);
         assert_eq!(b.used(), 0);
         assert!(b.reserve(1000));
+    }
+
+    #[test]
+    fn release_more_than_used_clamps_to_zero() {
+        let b = MemoryBudget::new(1024);
+        b.reserve(100);
+        b.release(500);
+        assert_eq!(b.used(), 0);
+    }
+
+    #[test]
+    fn release_partial_frees_remaining() {
+        let b = MemoryBudget::new(1024);
+        b.reserve(500);
+        b.release(200);
+        assert_eq!(b.used(), 300);
+        b.release(300);
+        assert_eq!(b.used(), 0);
     }
 
     #[test]
