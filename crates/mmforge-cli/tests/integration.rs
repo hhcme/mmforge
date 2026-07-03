@@ -361,8 +361,9 @@ fn lsmc_extension_corrupt_lsmc_rejected() {
     assert!(!out.status.success());
 }
 
+/// LSMC magic detected in a file with non-standard extension reads correctly.
 #[test]
-fn lsmc_magic_in_any_extension_reads() {
+fn lsmc_magic_in_unknown_extension_reads() {
     let stl = temp_stl(1);
     let lsmc = stl.path().with_extension("lsmc");
     Command::new(mmforge_bin())
@@ -446,4 +447,28 @@ fn no_extension_lsmc_magic_reads() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(String::from_utf8_lossy(&out.stdout).contains("STL"));
+}
+
+/// --compress zstd with explicit .lsm output must error.
+#[test]
+fn compress_zstd_rejects_non_lsmc_output() {
+    let stl = temp_stl(1);
+    let lsm_path = stl.path().with_extension("lsm");
+    let out = Command::new(mmforge_bin())
+        .args([
+            "convert",
+            stl.path().to_str().unwrap(),
+            "--compress",
+            "zstd",
+            "-o",
+            lsm_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "--compress zstd -o .lsm must fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(".lsmc") && stderr.contains("error"),
+        "stderr: {stderr}"
+    );
 }

@@ -197,12 +197,28 @@ fn cmd_convert(file: &std::path::Path, output: Option<&std::path::Path>, compres
     let out = output
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| file.with_extension(default_ext));
+
+    // When --compress is set, output MUST be .lsmc.
+    let wants_compress = compress.is_some();
+    let is_lsmc = out
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("lsmc"))
+        .unwrap_or(false);
+    if wants_compress && !is_lsmc {
+        eprintln!(
+            "error: --compress requires .lsmc output extension (got {})",
+            out.display()
+        );
+        std::process::exit(1);
+    }
+
     let mut f = std::fs::File::create(&out).unwrap_or_else(|e| {
         eprintln!("error creating {}: {e}", out.display());
         std::process::exit(1)
     });
 
-    let size = if out.extension().and_then(|e| e.to_str()) == Some("lsmc") {
+    let size = if is_lsmc {
         mmforge_core::lsm::lsmc::write_lsmc(&parsed.model, &mut f).unwrap_or_else(|e| {
             eprintln!("error writing LSMC: {e}");
             std::process::exit(1)

@@ -26,7 +26,7 @@ Detection routing in `detect_and_parse`:
 | `.lsm` extension | → `parse_lsm_file` (must be `LSMD` magic) |
 | `.lsmc` extension | → `parse_lsmc_file` (must be `LSMC` magic) |
 | `LSMD` magic (any extension) | → `parse_lsm_file` |
-| `LSMC` magic (any extension) | → `parse_lsmc_file` |
+| `LSMC` magic (unknown/no extension) | → `parse_lsmc_file` |
 
 A `.lsm` file renamed to `.lsmc` is now correctly rejected with "bad lsmc magic".
 A `.lsmc` file with a non-standard extension (or no extension) is correctly
