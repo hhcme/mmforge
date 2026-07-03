@@ -600,8 +600,8 @@ fn batch_convert_output_conflict_detected() {
         .output()
         .unwrap();
     assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("CONFLICT"));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("CONFLICT"));
 }
 
 /// Zero inputs must exit non-zero and not create output dir.
@@ -619,4 +619,100 @@ fn batch_convert_zero_inputs_exits_nonzero() {
         !sub.exists(),
         "output dir must not be created for zero inputs"
     );
+}
+
+/// --continue-on-error skips conflict items but converts the rest.
+#[test]
+fn batch_convert_continue_on_error_skips_conflicts() {
+    let dir1 = tempfile::tempdir().unwrap();
+    let dir2 = tempfile::tempdir().unwrap();
+    let stl_data = {
+        let f = temp_stl(1);
+        std::fs::read(f.path()).unwrap()
+    };
+    let same = dir1.path().join("dup.stl");
+    let dup = dir2.path().join("dup.stl");
+    std::fs::write(&same, &stl_data).unwrap();
+    std::fs::write(&dup, &stl_data).unwrap();
+    let other = temp_stl(1);
+    let out_dir = tempfile::tempdir().unwrap();
+
+    let out = Command::new(mmforge_bin())
+        .args([
+            "batch-convert",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            "--continue-on-error",
+            "--format",
+            "json",
+            same.to_str().unwrap(),
+            dup.to_str().unwrap(),
+            other.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(!out.status.success(), "should exit 1 due to conflict");
+    assert_eq!(v["conflicts"], 2);
+    assert_eq!(v["converted"], 1);
+}
+
+/// Existing output file is treated as conflict.
+#[test]
+fn batch_convert_rejects_existing_output() {
+    let a = temp_stl(1);
+    let out_dir = tempfile::tempdir().unwrap();
+    let name = a.path().file_stem().unwrap().to_str().unwrap();
+    std::fs::write(out_dir.path().join(format!("{name}.lsm")), b"existing").unwrap();
+
+    let out = Command::new(mmforge_bin())
+        .args([
+            "batch-convert",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            "--format",
+            "json",
+            a.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert_eq!(v["conflicts"], 1);
+    assert_eq!(v["converted"], 0);
+    assert_eq!(v["results"][0]["status"], "conflict");
+}
+
+/// Default (no --continue-on-error) with conflict reports summary and exits 1.
+#[test]
+fn batch_convert_default_conflict_reports_json() {
+    let dir1 = tempfile::tempdir().unwrap();
+    let dir2 = tempfile::tempdir().unwrap();
+    let stl_data = {
+        let f = temp_stl(1);
+        std::fs::read(f.path()).unwrap()
+    };
+    let same = dir1.path().join("dup.stl");
+    let dup = dir2.path().join("dup.stl");
+    std::fs::write(&same, &stl_data).unwrap();
+    std::fs::write(&dup, &stl_data).unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+
+    let out = Command::new(mmforge_bin())
+        .args([
+            "batch-convert",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            "--format",
+            "json",
+            same.to_str().unwrap(),
+            dup.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert_eq!(v["converted"], 0);
+    assert_eq!(v["conflicts"], 2);
 }

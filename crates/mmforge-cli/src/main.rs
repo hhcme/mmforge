@@ -525,33 +525,75 @@ fn cmd_batch_convert(
         }
     };
 
-    // Pre-compute all output paths and detect conflicts.
-    let mut planned: Vec<(&PathBuf, std::path::PathBuf)> = Vec::with_capacity(files.len());
+    // Pre-compute output paths; tag each with nullable conflict info.
+    struct PlanEntry {
+        input: PathBuf,
+        output: std::path::PathBuf,
+        conflict: Option<String>,
+    }
+    let mut planned: Vec<PlanEntry> = Vec::with_capacity(files.len());
     let mut seen: std::collections::HashMap<std::path::PathBuf, usize> =
         std::collections::HashMap::new();
-    let mut has_conflict = false;
 
-    for input in files {
+    for input in files.iter().cloned() {
         let stem = input
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("output");
         let output = output_dir.join(format!("{stem}.{compress_ext}"));
+        let mut conflict: Option<String> = None;
+
+        if output.exists() {
+            conflict = Some("output file already exists".into());
+        }
         if let Some(&prev_idx) = seen.get(&output) {
-            has_conflict = true;
-            eprintln!(
-                "CONFLICT {} → {} (already mapped from {})",
-                input.display(),
-                output.display(),
+            conflict = Some(format!(
+                "output path conflicts with {}",
                 files[prev_idx].display()
-            );
+            ));
+            // Also mark the earlier entry as conflicted.
+            planned[prev_idx].conflict =
+                Some(format!("output path conflicts with {}", input.display()));
         } else {
             seen.insert(output.clone(), planned.len());
         }
-        planned.push((input, output));
+        planned.push(PlanEntry {
+            input,
+            output,
+            conflict,
+        });
     }
-    if has_conflict {
-        eprintln!("error: output file conflicts detected — resolve before continuing");
+
+    let conflict_count = planned.iter().filter(|p| p.conflict.is_some()).count();
+    let non_conflict: Vec<&PlanEntry> = planned.iter().filter(|p| p.conflict.is_none()).collect();
+
+    // No --continue-on-error: print summary, exit 1 if any conflict.
+    if !continue_on_error && conflict_count > 0 {
+        std::fs::create_dir_all(output_dir).ok();
+        let results: Vec<BatchResult> = planned
+            .iter()
+            .map(|p| {
+                let status = if p.conflict.is_some() {
+                    "conflict"
+                } else {
+                    "skipped"
+                };
+                BatchResult {
+                    file: p.input.display().to_string(),
+                    output: p.output.display().to_string(),
+                    status: status.into(),
+                    size: None,
+                    error: p.conflict.clone(),
+                }
+            })
+            .collect();
+        print_batch_results(&results, format);
+        std::process::exit(1);
+    }
+
+    // --continue-on-error or zero conflicts: convert non-conflict files.
+    if non_conflict.is_empty() {
+        eprintln!("error: no files to convert (all conflicted or empty input)");
         std::process::exit(1);
     }
 
@@ -561,14 +603,26 @@ fn cmd_batch_convert(
     });
 
     let mut results: Vec<BatchResult> = Vec::new();
-    let mut failed = false;
+    // Report conflicts first.
+    for p in &planned {
+        if let Some(reason) = &p.conflict {
+            results.push(BatchResult {
+                file: p.input.display().to_string(),
+                output: p.output.display().to_string(),
+                status: "conflict".into(),
+                size: None,
+                error: Some(reason.clone()),
+            });
+        }
+    }
+    let mut failed = conflict_count > 0;
 
-    for (input, output) in &planned {
-        match convert_one(input, output, compress.is_some()) {
+    for p in &non_conflict {
+        match convert_one(&p.input, &p.output, compress.is_some()) {
             Ok(size) => {
                 results.push(BatchResult {
-                    file: input.display().to_string(),
-                    output: output.display().to_string(),
+                    file: p.input.display().to_string(),
+                    output: p.output.display().to_string(),
                     status: "ok".into(),
                     size: Some(size),
                     error: None,
@@ -576,8 +630,8 @@ fn cmd_batch_convert(
             }
             Err(e) => {
                 results.push(BatchResult {
-                    file: input.display().to_string(),
-                    output: output.display().to_string(),
+                    file: p.input.display().to_string(),
+                    output: p.output.display().to_string(),
                     status: "error".into(),
                     size: None,
                     error: Some(e),
@@ -590,29 +644,49 @@ fn cmd_batch_convert(
         }
     }
 
+    print_batch_results(&results, format);
+
+    if failed {
+        std::process::exit(1);
+    }
+}
+
+fn print_batch_results(results: &[BatchResult], format: OutputFormat) {
     match format {
         OutputFormat::Text => {
-            for r in &results {
-                if r.status == "ok" {
-                    println!(
-                        "OK    {} → {} ({} bytes)",
+            for r in results {
+                match r.status.as_str() {
+                    "ok" => println!(
+                        "OK      {} → {} ({} bytes)",
                         r.file,
                         r.output,
                         r.size.unwrap_or(0)
-                    );
-                } else {
-                    println!(
-                        "FAIL  {} → {} ({})",
+                    ),
+                    "conflict" => println!(
+                        "CONFLICT {} → {} ({})",
+                        r.file,
+                        r.output,
+                        r.error.as_deref().unwrap_or("")
+                    ),
+                    _ => println!(
+                        "FAIL    {} → {} ({})",
                         r.file,
                         r.output,
                         r.error.as_deref().unwrap_or("unknown error")
-                    );
+                    ),
                 }
             }
             let ok = results.iter().filter(|r| r.status == "ok").count();
-            let err = results.len() - ok;
+            let cf = results.iter().filter(|r| r.status == "conflict").count();
+            let err = results.iter().filter(|r| r.status == "error").count();
             println!("---");
-            println!("{}/{} converted ({} failed)", ok, results.len(), err);
+            println!(
+                "{}/{} converted ({} failed, {} conflicts)",
+                ok,
+                results.len(),
+                err,
+                cf
+            );
         }
         OutputFormat::Json => {
             let json = serde_json::json!({
@@ -623,13 +697,10 @@ fn cmd_batch_convert(
                 "total": results.len(),
                 "converted": results.iter().filter(|r| r.status == "ok").count(),
                 "failed": results.iter().filter(|r| r.status == "error").count(),
+                "conflicts": results.iter().filter(|r| r.status == "conflict").count(),
             });
             println!("{}", serde_json::to_string_pretty(&json).unwrap());
         }
-    }
-
-    if failed {
-        std::process::exit(1);
     }
 }
 
