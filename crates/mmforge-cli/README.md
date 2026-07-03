@@ -48,8 +48,8 @@ conflicting pairs and continue with non-conflicting files.
 ```json
 {
   "results": [
-    {"file":"dup1.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dup2.stl"},
-    {"file":"dup2.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dup1.stl"},
+    {"file":"dir1/dup.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dir2/dup.stl"},
+    {"file":"dir2/dup.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dir1/dup.stl"},
     {"file":"other.stl","output":"out/other.lsm","status":"skipped","size_bytes":null,"error":null}
   ],
   "total": 3,
@@ -65,8 +65,8 @@ With `--continue-on-error`:
 ```json
 {
   "results": [
-    {"file":"dup1.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dup2.stl"},
-    {"file":"dup2.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dup1.stl"},
+    {"file":"dir1/dup.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dir2/dup.stl"},
+    {"file":"dir2/dup.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dir1/dup.stl"},
     {"file":"other.stl","output":"out/other.lsm","status":"ok","size_bytes":561,"error":null}
   ],
   "total": 3,

@@ -204,9 +204,9 @@ mmforge batch-convert -o out/ --continue-on-error a.stl bad.stl
 ```json
 {
   "results": [
-    {"file":"a.stl","output":"out/a.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with b.stl"},
-    {"file":"b.stl","output":"out/b.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with a.stl"},
-    {"file":"c.stl","output":"out/c.lsm","status":"skipped","size_bytes":null,"error":null}
+    {"file":"dir1/dup.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dir2/dup.stl"},
+    {"file":"dir2/dup.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dir1/dup.stl"},
+    {"file":"other.stl","output":"out/other.lsm","status":"skipped","size_bytes":null,"error":null}
   ],
   "total": 3,
   "converted": 0,
@@ -221,9 +221,9 @@ mmforge batch-convert -o out/ --continue-on-error a.stl bad.stl
 ```json
 {
   "results": [
-    {"file":"a.stl","output":"out/a.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with b.stl"},
-    {"file":"b.stl","output":"out/b.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with a.stl"},
-    {"file":"c.stl","output":"out/c.lsm","status":"ok","size_bytes":561,"error":null}
+    {"file":"dir1/dup.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dir2/dup.stl"},
+    {"file":"dir2/dup.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dir1/dup.stl"},
+    {"file":"other.stl","output":"out/other.lsm","status":"ok","size_bytes":561,"error":null}
   ],
   "total": 3,
   "converted": 1,
