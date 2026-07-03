@@ -130,3 +130,39 @@ wrote test.lsm (561 bytes)
 - LZ4 or ZSTD compression codec for `.lsmc`
 - Golden file regression tests with committed `.lsm` fixtures
 - Schema migration path (v1 → v2)
+
+## 8. Round 1 Fixes (2026-07-03) — commit `4d5dbd1`
+
+### Metadata units round-trip
+
+**Bug**: Units were written in the Header section but the reader ignored them,
+and the Metadata section didn't carry units at all.
+
+**Fix**: Moved `units` field from Header section to Metadata section as the
+first field.  Writer writes it first in metadata, reader restores it to
+`Metadata.units`.  Added `metadata_units_preserved` test (core: 79 → 80).
+
+### CLI STL detection
+
+**Bug**: CLI's `parse_stl` used a weak heuristic: `starts_with("solid") &&
+!contains("facet")`.  Binary STL files without "solid" header, or with
+"facet" bytes in triangle data, were misidentified.
+
+**Fix**: Ported the bridge's robust two-step disambiguation:
+- `binary_length_valid()` — checks `file_size == 84 + tri_count * 50 (±80B)`
+- `is_probably_ascii()` — case‑insensitive `starts_with("solid")`
+- Priority: binary length check first, ASCII fallback second
+
+Verified with a programmatically‑generated binary STL fixture: `info`,
+`validate`, `convert`, `benchmark` all pass.
+
+### CLI exit code
+
+**Bug**: `mmforge info` printed error messages but returned exit code 0 on
+parse failure (`error: read: No such file ...` + exit 0).
+
+**Fix**: `cmd_info` calls `std::process::exit(1)` on `detect_and_parse` error.
+
+### Cargo.lock
+
+Previously uncommitted; now committed alongside the fixes.
