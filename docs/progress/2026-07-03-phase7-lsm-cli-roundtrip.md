@@ -117,3 +117,54 @@ benchmark: test.lsm
 - LSM `lsm-info` `--format json` with full metadata output
 - Committed golden `.lsm` fixtures from known source files
 - LZ4/ZSTD `.lsmc` compression codec
+
+## 3. Review Fixes (commit `a72a634`)
+
+### module_inception
+
+`clippy::module-inception` in `lsm/tests.rs`: `mod tests` inside file named `tests.rs`.
+Fixed with `#[allow(clippy::module_inception)]`.
+
+### Pre-existing clippy --tests warnings
+
+- `mmforge-bridge/src/gltf_parser.rs`: two `format!(r#...)"#)` with no format args → plain `r#"..."#.to_string()`
+- `mmforge-bridge/src/stl_parser.rs`: `+ 0` identity-op → removed
+- `mmforge-format-dxf/src/entity_parser.rs`: 6× `vec![...]` used only as iterable → `[...]` arrays
+
+### Process-level CLI integration tests (9 new)
+
+`crates/mmforge-cli/tests/integration.rs` forks the real `mmforge` binary:
+
+| Test | Assertion |
+|------|-----------|
+| `version_exit_zero` | exit 0, stdout contains "mmforge" |
+| `info_stl_exit_zero` | exit 0 |
+| `info_nonexistent_exit_nonzero` | exit ≠ 0, stderr has "error" |
+| `convert_then_info_lsm_exit_zero` | STL → convert → LSM → info: exit 0, format=STL, tris=1 |
+| `lsm_bad_magic_exit_nonzero` | `XXXX` magic → exit ≠ 0, "bad magic" |
+| `lsm_high_version_exit_nonzero` | version 99 → exit ≠ 0, "unsupported version" |
+| `info_json_output_stable` | `--format json` → valid JSON, `triangle_count=1` |
+| `validate_json_output_stable` | `--format json` → `"valid": true` |
+| `benchmark_json_output_stable` | `--format json` → keys: parse_ms_min, parse_ms_avg |
+
+### Cargo.lock
+
+Committed alongside fixes.
+
+### Verification (updated)
+
+| Command | Result |
+|---------|--------|
+| `cargo fmt --all --check` | Pass |
+| `cargo test --workspace --locked` | 298 tests pass (50+8+9+80+39+6+12+5+89) |
+| `cargo clippy --workspace -- -D warnings` | 0 warnings |
+| `cargo clippy --workspace --tests -- -D warnings` | 0 warnings |
+| `OCCT_INCLUDE_DIR=... cargo test --workspace --features occt` | 304 tests pass |
+| `cargo bench -p mmforge-format-dxf --no-run` | Compiles + links |
+| Working tree | Clean |
+
+| Crate | Test count | Δ |
+|-------|-----------|----|
+| CLI (unit) | 8 | — |
+| CLI (integration) | **9** | new |
+| Total locked | **298** | +9 |
