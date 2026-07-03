@@ -185,7 +185,14 @@ fn cmd_convert(file: &std::path::Path, output: Option<&std::path::Path>, compres
     };
     let default_ext = match compress {
         Some("zstd") | Some("zst") => "lsmc",
-        _ => "lsm",
+        None => "lsm",
+        Some(other) => {
+            eprintln!(
+                "error: unknown compression method '{}' (supported: zstd)",
+                other
+            );
+            std::process::exit(1);
+        }
     };
     let out = output
         .map(|p| p.to_path_buf())

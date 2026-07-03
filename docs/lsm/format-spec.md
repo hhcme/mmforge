@@ -538,11 +538,14 @@ option<T>: [1 byte tag] [T if tag = 0x01]
 
 ---
 
-## 8. 文件扩展名（草案）
+## 8. 文件扩展名
 
-- `.lsm` — 标准 LSM 文件
-- `.lsmc` — 压缩 LSM 文件（LZ4 压缩，v2.0+）
+- `.lsm` — 标准 LSM 文件（v1, 已冻结）
+- `.lsmc` — 压缩 LSM 文件（zstd 压缩，v1 已实现）。详见 `docs/progress/2026-07-03-phase7-lsmc-compression.md`。格式：24-byte header（magic `LSMC` + version 1 + zstd method=1 + uncompressed_size） + zstd-compressed `.lsm` v1 payload。
 
----
+## 9. 实现状态（2026-07-03）
 
-*本文档随开发持续更新。*
+- `.lsm` v1 reader/writer: `crates/mmforge-core/src/lsm/{reader,writer}.rs` — 已完成，含 golden fixture + 19 个边界测试。
+- `.lsmc` v1 reader/writer: `crates/mmforge-core/src/lsm/lsmc.rs` — 已完成，含 6 个单元测试 + 7 个 CLI 集成测试。
+- CLI `info/validate/convert/benchmark`: 支持 `.lsm` 和 `.lsmc` 透明读写。
+- 压缩方法: zstd (MIT/Apache-2.0)。LZ4 尚未实现。

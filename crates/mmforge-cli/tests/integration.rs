@@ -334,3 +334,59 @@ fn source_to_lsmc_to_info_json_round_trip() {
     assert_eq!(v["source_format"], "STL");
     assert!(v["bounds"]["min"].is_array());
 }
+
+#[test]
+fn unknown_compress_method_rejected() {
+    let stl = temp_stl(1);
+    let out = Command::new(mmforge_bin())
+        .args(["convert", stl.path().to_str().unwrap(), "--compress", "lz4"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unknown compression method"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn lsmc_extension_corrupt_lsmc_rejected() {
+    let mut f = tempfile::Builder::new().suffix(".lsmc").tempfile().unwrap();
+    f.write_all(b"LSMDjunk").unwrap();
+    let out = Command::new(mmforge_bin())
+        .args(["info", f.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+}
+
+#[test]
+fn lsmc_magic_in_any_extension_reads() {
+    let stl = temp_stl(1);
+    let lsmc = stl.path().with_extension("lsmc");
+    Command::new(mmforge_bin())
+        .args([
+            "convert",
+            stl.path().to_str().unwrap(),
+            "-o",
+            lsmc.to_str().unwrap(),
+            "--compress",
+            "zstd",
+        ])
+        .output()
+        .unwrap();
+    let lsm = stl.path().with_extension("lsm");
+    std::fs::rename(&lsmc, &lsm).unwrap();
+    let out = Command::new(mmforge_bin())
+        .args(["info", lsm.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("STL"));
+}

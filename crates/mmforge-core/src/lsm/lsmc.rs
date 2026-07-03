@@ -39,8 +39,7 @@ pub fn write_lsmc(model: &crate::model::LsmModel, w: &mut impl Write) -> std::io
     super::writer::write_lsm(model, &mut std::io::Cursor::new(&mut lsm_buf))?;
 
     let uncompressed_size = lsm_buf.len() as u64;
-    let compressed = zstd::encode_all(&lsm_buf[..], 0)
-        .map_err(std::io::Error::other)?;
+    let compressed = zstd::encode_all(&lsm_buf[..], 0).map_err(std::io::Error::other)?;
 
     // Header
     w.write_all(&MAGIC)?;
