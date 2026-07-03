@@ -144,6 +144,16 @@ fn cmd_validate(file: &std::path::Path, format: OutputFormat) {
                             "context": i.context,
                             "detail": i.detail,
                         })).collect::<Vec<_>>(),
+                        "source_format": p.model.header.source_format,
+                        "source_path": p.model.header.source_path,
+                        "metadata": {
+                            "units": p.model.metadata.units,
+                            "author": p.model.metadata.author,
+                            "description": p.model.metadata.description,
+                        },
+                        "custom": p.model.metadata.custom,
+                        "node_count": p.model.scene.nodes.len(),
+                        "triangle_count": p.model.total_triangle_count(),
                     });
                     println!("{}", serde_json::to_string_pretty(&json).unwrap());
                 }

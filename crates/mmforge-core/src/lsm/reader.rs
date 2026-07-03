@@ -11,24 +11,31 @@ use crate::model::{
     Geometry, LsmModel, Material, MeshGeometry, Metadata, ModelHeader, Node, SceneTree,
 };
 
-/// Error type for LSM read operations.
 #[derive(Debug)]
 pub enum ReadError {
-    /// I/O error from the underlying reader.
     Io(std::io::Error),
-    /// File did not start with the expected magic bytes.
-    BadMagic { found: [u8; 4] },
-    /// Schema version is higher than the reader supports.
-    UnsupportedVersion { found: u16, max: u16 },
-    /// A core section (type ≤ 0x0F) was missing.
+    BadMagic {
+        found: [u8; 4],
+    },
+    UnsupportedVersion {
+        found: u16,
+        max: u16,
+    },
     MissingCoreSection {
         section_type: u32,
         name: &'static str,
     },
-    /// Data in a section was corrupted.
-    CorruptSection { section_type: u32, reason: String },
-    /// TOC is inconsistent (bad offset, implausible count).
-    CorruptToc { reason: String },
+    CorruptSection {
+        section_type: u32,
+        reason: String,
+    },
+    CorruptToc {
+        reason: String,
+    },
+    DuplicateSection {
+        section_type: u32,
+        name: &'static str,
+    },
 }
 
 impl std::fmt::Display for ReadError {
@@ -53,6 +60,9 @@ impl std::fmt::Display for ReadError {
             ReadError::CorruptToc { reason } => {
                 write!(f, "corrupt TOC: {reason}")
             }
+            ReadError::DuplicateSection { section_type, name } => {
+                write!(f, "duplicate core section 0x{section_type:02X} ({name})")
+            }
         }
     }
 }
@@ -72,15 +82,12 @@ impl From<std::io::Error> for ReadError {
     }
 }
 
-/// Result alias for LSM read operations.
 pub type Result<T> = std::result::Result<T, ReadError>;
 
-/// Descriptor for a section found in the TOC.
 #[derive(Debug)]
 struct SectionDesc {
     section_type: u32,
     offset: u64,
-    #[allow(dead_code)]
     length: u64,
 }
 
@@ -88,7 +95,11 @@ struct SectionDesc {
 ///
 /// Unknown sections (types ≥ 0x10 or unrecognised core types) are silently
 /// skipped.  Core sections that are missing raise `MissingCoreSection`.
+/// Duplicate core sections raise `DuplicateSection`.
 pub fn read_lsm(r: &mut (impl Read + Seek)) -> Result<LsmModel> {
+    let file_size = r.seek(SeekFrom::End(0))?;
+    r.seek(SeekFrom::Start(0))?;
+
     // --- File header ---
     let mut magic = [0u8; 4];
     r.read_exact(&mut magic)?;
@@ -103,49 +114,66 @@ pub fn read_lsm(r: &mut (impl Read + Seek)) -> Result<LsmModel> {
         });
     }
     let _flags = read_u16(r)?;
-    let _toc_offset = read_u64(r)?;
+    let toc_offset = read_u64(r)?;
     let _toc_count = read_u32(r)?;
     let _source_format = read_u32(r)?;
-    // Skip remaining 40 bytes of 64-byte header padding.
     let mut pad = [0u8; 40];
     r.read_exact(&mut pad)?;
 
-    // Validate TOC offset: must be ≥ 64 (past the file header).
-    if _toc_offset < 64 {
+    if toc_offset < FILE_HEADER_SIZE as u64 || toc_offset > file_size {
         return Err(ReadError::CorruptToc {
-            reason: format!("TOC offset {_toc_offset} is inside the file header"),
+            reason: format!("TOC offset {toc_offset} out of bounds (file size {file_size})"),
         });
     }
 
-    // Seek to TOC.
-    r.seek(SeekFrom::Start(_toc_offset))?;
+    let toc_size = calculate_toc_size(r, toc_offset, file_size)?;
 
+    r.seek(SeekFrom::Start(toc_offset))?;
     let toc_count_total = read_u32(r)?;
     if toc_count_total > 1024 {
         return Err(ReadError::CorruptToc {
             reason: format!("implausible TOC count {toc_count_total}"),
         });
     }
+
     let mut sections: Vec<SectionDesc> = Vec::with_capacity(toc_count_total as usize);
     for _ in 0..toc_count_total {
         let st = read_u32(r)?;
         let off = read_u64(r)?;
         let len = read_u64(r)?;
-        // Section data must not reside inside the 64-byte file header.
+
         if off < FILE_HEADER_SIZE as u64 {
             return Err(ReadError::CorruptToc {
                 reason: format!("section 0x{st:02X} offset {off} is inside the file header"),
             });
         }
+        if off >= toc_offset && off < toc_offset + toc_size {
+            return Err(ReadError::CorruptToc {
+                reason: format!(
+                    "section 0x{st:02X} offset {off} overlaps TOC ({toc_offset}–{})",
+                    toc_offset + toc_size
+                ),
+            });
+        }
+        match off.checked_add(len) {
+            Some(end) if end <= file_size => {}
+            _ => {
+                return Err(ReadError::CorruptToc {
+                    reason: format!(
+                        "section 0x{st:02X} offset {off} + length {len} exceeds file size {file_size}"
+                    ),
+                });
+            }
+        }
+
         sections.push(SectionDesc {
             section_type: st,
             offset: off,
-            #[allow(dead_code)]
             length: len,
         });
     }
 
-    // --- Read known sections ---
+    // --- Read known sections, reject duplicates ---
     let mut header: Option<ModelHeader> = None;
     let mut scene: Option<SceneTree> = None;
     let mut geometries: Option<Vec<Geometry>> = None;
@@ -154,19 +182,56 @@ pub fn read_lsm(r: &mut (impl Read + Seek)) -> Result<LsmModel> {
 
     for s in &sections {
         r.seek(SeekFrom::Start(s.offset))?;
+        // Bounded read: wrap reader so it can only read `length` bytes.
+        let mut limited = LimitedReader::new(r, s.length);
+
         match s.section_type {
-            section::HEADER => header = Some(read_header_section(r)?),
-            section::SCENE_TREE => scene = Some(read_scene_tree_section(r)?),
-            section::GEOMETRY => geometries = Some(read_geometry_section(r)?),
-            section::MATERIALS => materials = Some(read_materials_section(r)?),
-            section::METADATA => metadata = Some(read_metadata_section(r)?),
-            t if t <= section::CORE_MAX => {
-                // Known core type range but unrecognised → skip.
-                // (reserved for future core types)
+            section::HEADER => {
+                if header.is_some() {
+                    return Err(ReadError::DuplicateSection {
+                        section_type: section::HEADER,
+                        name: "Header",
+                    });
+                }
+                header = Some(read_header_section(&mut limited)?);
             }
-            _ => {
-                // Extension section → silently skip.
+            section::SCENE_TREE => {
+                if scene.is_some() {
+                    return Err(ReadError::DuplicateSection {
+                        section_type: section::SCENE_TREE,
+                        name: "SceneTree",
+                    });
+                }
+                scene = Some(read_scene_tree_section(&mut limited)?);
             }
+            section::GEOMETRY => {
+                if geometries.is_some() {
+                    return Err(ReadError::DuplicateSection {
+                        section_type: section::GEOMETRY,
+                        name: "Geometry",
+                    });
+                }
+                geometries = Some(read_geometry_section(&mut limited)?);
+            }
+            section::MATERIALS => {
+                if materials.is_some() {
+                    return Err(ReadError::DuplicateSection {
+                        section_type: section::MATERIALS,
+                        name: "Materials",
+                    });
+                }
+                materials = Some(read_materials_section(&mut limited)?);
+            }
+            section::METADATA => {
+                if metadata.is_some() {
+                    return Err(ReadError::DuplicateSection {
+                        section_type: section::METADATA,
+                        name: "Metadata",
+                    });
+                }
+                metadata = Some(read_metadata_section(&mut limited)?);
+            }
+            _ => {} // skip
         }
     }
 
@@ -194,6 +259,48 @@ pub fn read_lsm(r: &mut (impl Read + Seek)) -> Result<LsmModel> {
     })
 }
 
+/// Compute total TOC size in bytes from `toc_offset` to end of last TOC entry.
+fn calculate_toc_size(r: &mut (impl Read + Seek), toc_offset: u64, _file_size: u64) -> Result<u64> {
+    r.seek(SeekFrom::Start(toc_offset))?;
+    let count = read_u32(r)?;
+    if count > 1024 {
+        return Err(ReadError::CorruptToc {
+            reason: format!("implausible TOC count {count}"),
+        });
+    }
+    Ok(4 + count as u64 * TOC_ENTRY_SIZE as u64)
+}
+
+/// Wraps a reader to limit total readable bytes, preventing section parsers
+/// from reading past the declared section boundary.
+struct LimitedReader<'a, R> {
+    inner: &'a mut R,
+    remaining: u64,
+}
+
+impl<'a, R: Read> LimitedReader<'a, R> {
+    fn new(inner: &'a mut R, limit: u64) -> Self {
+        Self {
+            inner,
+            remaining: limit,
+        }
+    }
+}
+
+impl<R: Read> Read for LimitedReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 {
+            return Ok(0);
+        }
+        let max = (buf.len() as u64).min(self.remaining) as usize;
+        let n = self.inner.read(&mut buf[..max])?;
+        self.remaining -= n as u64;
+        Ok(n)
+    }
+}
+
+// --- Section readers (unchanged logic, same function bodies) ---
+
 fn read_header_section(r: &mut impl Read) -> Result<ModelHeader> {
     let source_format = read_string(r)?;
     let source_path = read_string(r)?;
@@ -213,12 +320,10 @@ fn read_scene_tree_section(r: &mut impl Read) -> Result<SceneTree> {
     let node_count = read_array_count(r)?;
     let root_id_u32 = read_u32(r)?;
     let root = NodeId::new(root_id_u32);
-
     let mut nodes: Vec<Node> = Vec::with_capacity(node_count as usize);
     for _ in 0..node_count {
         nodes.push(read_node(r)?);
     }
-
     Ok(SceneTree { nodes, root })
 }
 
@@ -243,7 +348,6 @@ fn read_node(r: &mut impl Read) -> Result<Node> {
     } else {
         BoundingBox::EMPTY
     };
-
     Ok(Node {
         id,
         name,
@@ -285,7 +389,6 @@ fn read_geometry(r: &mut impl Read) -> Result<Geometry> {
     } else {
         BoundingBox::EMPTY
     };
-
     match tag {
         1 => {
             let label = read_string(r)?;
@@ -304,7 +407,6 @@ fn read_geometry(r: &mut impl Read) -> Result<Geometry> {
         }
         3 => {
             let _entity_count = read_u32(r)?;
-            // Drawing2D not deserialized in v1.
             Ok(Geometry::Drawing2D {
                 id,
                 bounds,

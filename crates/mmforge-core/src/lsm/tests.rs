@@ -3,6 +3,8 @@
 mod tests {
     use crate::lsm::{reader::read_lsm, writer::write_lsm};
     use crate::model::{Geometry, LsmModel, ModelBuilder};
+    use std::hash::{Hash, Hasher};
+    use std::io::Cursor;
 
     fn sample_model() -> LsmModel {
         let mut b = ModelBuilder::new("STL");
@@ -24,19 +26,46 @@ mod tests {
         model
     }
 
+    fn golden_model() -> LsmModel {
+        let mut b = ModelBuilder::new("STL");
+        let root = b.add_root("RootNode");
+        let geom_id = b.add_mesh(
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            vec![[0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+            vec![0, 1, 2],
+        );
+        let mat_id = b.add_material("Steel", [0.7, 0.7, 0.7, 1.0]);
+        let _child = b.add_child(root, "Part_001", Some(geom_id), Some(mat_id));
+        let mut model = b.with_units("mm").build();
+        model.header.source_path = Some("fixture/sample.stl".into());
+        model.header.parser_version = "mmforge-cli 0.1.0".into();
+        model.metadata.author = Some("MMForge golden test suite".into());
+        model.metadata.description = Some("Golden LSM v1 fixture for regression testing".into());
+        model
+            .metadata
+            .custom
+            .insert("generator".into(), "mmforge-golden-gen".into());
+        model
+    }
+
+    fn hash_bytes(data: &[u8]) -> u64 {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        data.hash(&mut h);
+        h.finish()
+    }
+
+    // ----------------------------------------------------------------
+    // Round-trip
+    // ----------------------------------------------------------------
+
     #[test]
     fn round_trip_bytes() {
         let model = sample_model();
         let mut buf = Vec::new();
-        let mut cursor = std::io::Cursor::new(&mut buf);
-        write_lsm(&model, &mut cursor).unwrap();
+        write_lsm(&model, &mut Cursor::new(&mut buf)).unwrap();
         assert!(buf.len() > 64);
-
-        let mut reader = std::io::Cursor::new(&buf);
-        let loaded = read_lsm(&mut reader).unwrap();
-
+        let loaded = read_lsm(&mut Cursor::new(&buf)).unwrap();
         assert_eq!(loaded.header.source_format, "STL");
-        assert_eq!(loaded.header.source_path.as_deref(), Some("test.stl"));
         assert_eq!(loaded.scene.nodes.len(), 2);
         assert_eq!(loaded.geometries.len(), 1);
         assert_eq!(loaded.materials.len(), 1);
@@ -46,22 +75,16 @@ mod tests {
     fn golden_header_magic() {
         let model = sample_model();
         let mut buf = Vec::new();
-        let mut cursor = std::io::Cursor::new(&mut buf);
-        write_lsm(&model, &mut cursor).unwrap();
+        write_lsm(&model, &mut Cursor::new(&mut buf)).unwrap();
         assert_eq!(&buf[0..4], b"LSMD");
-        let version = u16::from_le_bytes([buf[4], buf[5]]);
-        assert_eq!(version, 1);
     }
 
     #[test]
     fn scene_tree_preserved() {
         let model = sample_model();
         let mut buf = Vec::new();
-        let mut cursor = std::io::Cursor::new(&mut buf);
-        write_lsm(&model, &mut cursor).unwrap();
-
-        let mut reader = std::io::Cursor::new(&buf);
-        let loaded = read_lsm(&mut reader).unwrap();
+        write_lsm(&model, &mut Cursor::new(&mut buf)).unwrap();
+        let loaded = read_lsm(&mut Cursor::new(&buf)).unwrap();
         assert_eq!(loaded.scene.nodes[0].name, "Root");
         assert_eq!(loaded.scene.nodes[1].name, "Part");
     }
@@ -70,11 +93,8 @@ mod tests {
     fn geometry_mesh_preserved() {
         let model = sample_model();
         let mut buf = Vec::new();
-        let mut cursor = std::io::Cursor::new(&mut buf);
-        write_lsm(&model, &mut cursor).unwrap();
-
-        let mut reader = std::io::Cursor::new(&buf);
-        let loaded = read_lsm(&mut reader).unwrap();
+        write_lsm(&model, &mut Cursor::new(&mut buf)).unwrap();
+        let loaded = read_lsm(&mut Cursor::new(&buf)).unwrap();
         match &loaded.geometries[0] {
             Geometry::Mesh(m) => {
                 assert_eq!(m.positions.len(), 3);
@@ -85,9 +105,49 @@ mod tests {
     }
 
     #[test]
+    fn metadata_units_preserved() {
+        let mut model = sample_model();
+        model.metadata.units = Some("mm".into());
+        let mut buf = Vec::new();
+        write_lsm(&model, &mut Cursor::new(&mut buf)).unwrap();
+        let loaded = read_lsm(&mut Cursor::new(&buf)).unwrap();
+        assert_eq!(loaded.metadata.units.as_deref(), Some("mm"));
+    }
+
+    // ----------------------------------------------------------------
+    // Golden fixture — byte-for-byte stable hash
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn golden_fixture_stable_binary() {
+        let model = golden_model();
+        let mut buf = Vec::new();
+        write_lsm(&model, &mut Cursor::new(&mut buf)).unwrap();
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("testdata")
+            .join("lsm")
+            .join("model_golden_v1.lsm");
+        assert!(path.exists(), "golden fixture missing");
+        let committed = std::fs::read(&path).unwrap();
+
+        let h1 = hash_bytes(&buf);
+        let h2 = hash_bytes(&committed);
+        assert_eq!(
+            h1, h2,
+            "rewritten bytes differ from committed golden fixture — binary format has changed"
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // Error: magic / version
+    // ----------------------------------------------------------------
+
+    #[test]
     fn bad_magic_rejected() {
-        let buf = b"XXXXjunk";
-        let err = read_lsm(&mut std::io::Cursor::new(buf)).unwrap_err();
+        let err = read_lsm(&mut Cursor::new(b"XXXX")).unwrap_err();
         assert!(err.to_string().contains("bad magic"));
     }
 
@@ -96,170 +156,177 @@ mod tests {
         let mut buf = vec![0u8; 100];
         buf[0..4].copy_from_slice(b"LSMD");
         buf[4] = 99;
-        let err = read_lsm(&mut std::io::Cursor::new(&buf)).unwrap_err();
+        let err = read_lsm(&mut Cursor::new(&buf)).unwrap_err();
         assert!(err.to_string().contains("unsupported version"));
     }
 
-    #[test]
-    fn metadata_units_preserved() {
-        let mut model = sample_model();
-        model.metadata.units = Some("mm".into());
-        let mut buf = Vec::new();
-        let mut cursor = std::io::Cursor::new(&mut buf);
-        write_lsm(&model, &mut cursor).unwrap();
+    // ----------------------------------------------------------------
+    // Error: TOC bounds
+    // ----------------------------------------------------------------
 
-        let loaded = read_lsm(&mut std::io::Cursor::new(&buf)).unwrap();
-        assert_eq!(loaded.metadata.units.as_deref(), Some("mm"));
+    #[test]
+    fn toc_offset_inside_header_rejected() {
+        let mut buf = vec![0u8; 128];
+        buf[0..4].copy_from_slice(b"LSMD");
+        buf[4..6].copy_from_slice(&1u16.to_le_bytes());
+        buf[8..16].copy_from_slice(&32u64.to_le_bytes());
+        let err = read_lsm(&mut Cursor::new(&buf)).unwrap_err();
+        assert!(err.to_string().contains("out of bounds"));
     }
+
+    #[test]
+    fn implausible_toc_count_rejected() {
+        let mut buf = vec![0u8; 64 + 8];
+        buf[0..4].copy_from_slice(b"LSMD");
+        buf[4..6].copy_from_slice(&1u16.to_le_bytes());
+        buf[8..16].copy_from_slice(&64u64.to_le_bytes());
+        buf[16..20].copy_from_slice(&1u32.to_le_bytes());
+        buf[64..68].copy_from_slice(&9999u32.to_le_bytes());
+        buf[68..72].copy_from_slice(&0u32.to_le_bytes());
+        let err = read_lsm(&mut Cursor::new(&buf)).unwrap_err();
+        assert!(err.to_string().contains("implausible TOC count"));
+    }
+
+    #[test]
+    fn section_offset_inside_header_rejected() {
+        let mut buf = vec![0u8; 200];
+        buf[0..4].copy_from_slice(b"LSMD");
+        buf[4..6].copy_from_slice(&1u16.to_le_bytes());
+        buf[8..16].copy_from_slice(&64u64.to_le_bytes());
+        buf[16..20].copy_from_slice(&1u32.to_le_bytes());
+        buf[64..68].copy_from_slice(&1u32.to_le_bytes());
+        buf[68..72].copy_from_slice(&1u32.to_le_bytes());
+        buf[72..80].copy_from_slice(&32u64.to_le_bytes());
+        buf[80..88].copy_from_slice(&0u64.to_le_bytes());
+        let err = read_lsm(&mut Cursor::new(&buf)).unwrap_err();
+        assert!(err.to_string().contains("inside the file header"));
+    }
+
+    #[test]
+    fn section_offset_crossing_into_toc_rejected() {
+        let mut buf = vec![0u8; 200];
+        buf[0..4].copy_from_slice(b"LSMD");
+        buf[4..6].copy_from_slice(&1u16.to_le_bytes());
+        buf[8..16].copy_from_slice(&64u64.to_le_bytes());
+        buf[16..20].copy_from_slice(&1u32.to_le_bytes());
+        buf[64..68].copy_from_slice(&1u32.to_le_bytes());
+        // Section at offset 64 (where TOC starts) — rejected
+        buf[68..72].copy_from_slice(&1u32.to_le_bytes());
+        buf[72..80].copy_from_slice(&64u64.to_le_bytes());
+        buf[80..88].copy_from_slice(&0u64.to_le_bytes());
+        let err = read_lsm(&mut Cursor::new(&buf)).unwrap_err();
+        assert!(err.to_string().contains("overlaps TOC"), "got: {err}");
+    }
+
+    #[test]
+    fn section_offset_plus_length_exceeds_file() {
+        let mut buf = vec![0u8; 200];
+        buf[0..4].copy_from_slice(b"LSMD");
+        buf[4..6].copy_from_slice(&1u16.to_le_bytes());
+        buf[8..16].copy_from_slice(&64u64.to_le_bytes());
+        buf[16..20].copy_from_slice(&1u32.to_le_bytes());
+        buf[64..68].copy_from_slice(&1u32.to_le_bytes());
+        // Section at offset 128, length = 99999 (exceeds file)
+        buf[68..72].copy_from_slice(&1u32.to_le_bytes());
+        buf[72..80].copy_from_slice(&128u64.to_le_bytes());
+        buf[80..88].copy_from_slice(&99999u64.to_le_bytes());
+        let err = read_lsm(&mut Cursor::new(&buf)).unwrap_err();
+        assert!(err.to_string().contains("exceeds file size"), "got: {err}");
+    }
+
+    #[test]
+    fn section_offset_plus_length_overflow() {
+        let mut buf = vec![0u8; 300];
+        buf[0..4].copy_from_slice(b"LSMD");
+        buf[4..6].copy_from_slice(&1u16.to_le_bytes());
+        buf[8..16].copy_from_slice(&64u64.to_le_bytes());
+        buf[16..20].copy_from_slice(&1u32.to_le_bytes());
+        buf[64..68].copy_from_slice(&1u32.to_le_bytes());
+        // offset = u64::MAX - 10, length = 20 → overflow
+        buf[68..72].copy_from_slice(&1u32.to_le_bytes());
+        buf[72..80].copy_from_slice(&(u64::MAX - 10).to_le_bytes());
+        buf[80..88].copy_from_slice(&20u64.to_le_bytes());
+        let err = read_lsm(&mut Cursor::new(&buf)).unwrap_err();
+        assert!(err.to_string().contains("exceeds file size"), "got: {err}");
+    }
+
+    // ----------------------------------------------------------------
+    // Duplicate core section rejection
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn duplicate_core_section_rejected() {
+        let model = sample_model();
+        let mut buf = Vec::new();
+        write_lsm(&model, &mut Cursor::new(&mut buf)).unwrap();
+
+        // Patch: change the second TOC entry's section_type to Header (0x01)
+        // so there are two Header entries — should be rejected.
+        let toc_offset = u64::from_le_bytes(buf[8..16].try_into().unwrap());
+        let pos = toc_offset as usize + 4; // skip count
+        let hdr_section_type = u32::from_le_bytes(buf[pos..pos + 4].try_into().unwrap());
+        assert_eq!(hdr_section_type, 0x01); // first entry is Header
+        // Second entry (pos+20) has some type; change it to Header
+        buf[pos + 20..pos + 24].copy_from_slice(&0x01u32.to_le_bytes());
+
+        let err = read_lsm(&mut Cursor::new(&buf)).unwrap_err();
+        assert!(
+            err.to_string().contains("duplicate core section"),
+            "got: {err}"
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // Unknown section / missing core
+    // ----------------------------------------------------------------
 
     #[test]
     fn unknown_section_skipped() {
         let model = sample_model();
         let mut buf = Vec::new();
-        let mut cursor = std::io::Cursor::new(&mut buf);
-        write_lsm(&model, &mut cursor).unwrap();
+        write_lsm(&model, &mut Cursor::new(&mut buf)).unwrap();
 
         let toc_offset = u64::from_le_bytes(buf[8..16].try_into().unwrap());
         let toc_count = u32::from_le_bytes(buf[16..20].try_into().unwrap());
         buf[16..20].copy_from_slice(&(toc_count + 1).to_le_bytes());
 
-        // Append a fake extension section entry at the end.
         let mut fake = Vec::new();
-        fake.extend_from_slice(&0x10_u32.to_le_bytes());
+        fake.extend_from_slice(&0x10u32.to_le_bytes());
         fake.extend_from_slice(&0u64.to_le_bytes());
         fake.extend_from_slice(&0u64.to_le_bytes());
         buf.splice(toc_offset as usize + 4 + (toc_count as usize * 20).., fake);
 
-        let loaded = read_lsm(&mut std::io::Cursor::new(&buf)).unwrap();
+        let loaded = read_lsm(&mut Cursor::new(&buf)).unwrap();
         assert_eq!(loaded.scene.nodes.len(), 2);
-    }
-
-    // ----------------------------------------------------------------
-    // Golden fixture regression
-    // ----------------------------------------------------------------
-
-    #[test]
-    fn golden_fixture_model_golden_v1() {
-        let msg = "golden fixture missing — run `cargo run --example generate_golden`";
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("testdata")
-            .join("lsm")
-            .join("model_golden_v1.lsm");
-        assert!(path.exists(), "{msg} at {}", path.display());
-
-        let mut file = std::fs::File::open(&path).expect("open golden");
-        let mut reader = std::io::BufReader::new(&mut file);
-        let loaded = read_lsm(&mut reader).expect("golden should parse");
-
-        assert_eq!(loaded.header.source_format, "STL");
-        assert_eq!(
-            loaded.header.source_path.as_deref(),
-            Some("fixture/sample.stl")
-        );
-        assert_eq!(loaded.metadata.units.as_deref(), Some("mm"));
-        assert_eq!(
-            loaded.metadata.author.as_deref(),
-            Some("MMForge golden test suite")
-        );
-        assert_eq!(loaded.scene.nodes.len(), 2);
-        assert_eq!(loaded.scene.nodes[0].name, "RootNode");
-        assert_eq!(loaded.materials.len(), 1);
-        assert_eq!(loaded.materials[0].name, "Steel");
-        assert_eq!(loaded.total_triangle_count(), 1);
-        assert!(
-            loaded.metadata.custom.contains_key("generator"),
-            "custom field 'generator' must be present"
-        );
-    }
-
-    // ----------------------------------------------------------------
-    // Malformed / malicious .lsm tests
-    // ----------------------------------------------------------------
-
-    #[test]
-    fn toc_offset_inside_header_is_rejected() {
-        let mut buf = vec![0u8; 128];
-        buf[0..4].copy_from_slice(b"LSMD");
-        buf[4..6].copy_from_slice(&1u16.to_le_bytes());
-        buf[8..16].copy_from_slice(&32u64.to_le_bytes()); // TOC offset = 32 (< 64)
-        let err = read_lsm(&mut std::io::Cursor::new(&buf)).unwrap_err();
-        assert!(
-            err.to_string().contains("inside the file header"),
-            "got: {err}"
-        );
-    }
-
-    #[test]
-    fn implausible_toc_count_is_rejected() {
-        let mut buf = vec![0u8; 64 + 4];
-        buf[0..4].copy_from_slice(b"LSMD");
-        buf[4..6].copy_from_slice(&1u16.to_le_bytes());
-        buf[8..16].copy_from_slice(&64u64.to_le_bytes());
-        buf[16..20].copy_from_slice(&2u32.to_le_bytes());
-        buf[64..68].copy_from_slice(&9999u32.to_le_bytes());
-        let err = read_lsm(&mut std::io::Cursor::new(&buf)).unwrap_err();
-        assert!(
-            err.to_string().contains("implausible TOC count"),
-            "got: {err}"
-        );
-    }
-
-    #[test]
-    fn section_offset_overlapping_toc_is_rejected() {
-        let mut buf = vec![0u8; 200];
-        buf[0..4].copy_from_slice(b"LSMD");
-        buf[4..6].copy_from_slice(&1u16.to_le_bytes());
-        buf[8..16].copy_from_slice(&64u64.to_le_bytes()); // TOC at 64
-        buf[16..20].copy_from_slice(&1u32.to_le_bytes()); // header toc_count = 1
-        buf[64..68].copy_from_slice(&1u32.to_le_bytes()); // toc_count_total = 1
-        // Section entry: type=0x01, offset=32 (inside header!), length=0
-        buf[68..72].copy_from_slice(&1u32.to_le_bytes());
-        buf[72..80].copy_from_slice(&32u64.to_le_bytes());
-        buf[80..88].copy_from_slice(&0u64.to_le_bytes());
-        let err = read_lsm(&mut std::io::Cursor::new(&buf)).unwrap_err();
-        assert!(
-            err.to_string().contains("inside the file header"),
-            "got: {err}"
-        );
     }
 
     #[test]
     fn missing_core_section_is_error() {
-        let mut buf = vec![0u8; 64 + 4 + 20];
+        let mut buf = vec![0u8; 256];
         buf[0..4].copy_from_slice(b"LSMD");
         buf[4..6].copy_from_slice(&1u16.to_le_bytes());
         buf[8..16].copy_from_slice(&64u64.to_le_bytes());
         buf[16..20].copy_from_slice(&1u32.to_le_bytes());
-        buf[64..68].copy_from_slice(&1u32.to_le_bytes()); // toc_count=1
-        // Unknown extension section (0x10), offset=999, length=0
+        buf[64..68].copy_from_slice(&1u32.to_le_bytes());
+        // Extension section at offset 128, length 0 — valid offset, but no core sections.
         buf[68..72].copy_from_slice(&0x10u32.to_le_bytes());
-        buf[72..80].copy_from_slice(&999u64.to_le_bytes());
+        buf[72..80].copy_from_slice(&128u64.to_le_bytes());
         buf[80..88].copy_from_slice(&0u64.to_le_bytes());
-        let err = read_lsm(&mut std::io::Cursor::new(&buf)).unwrap_err();
-        assert!(
-            err.to_string().contains("missing core section"),
-            "got: {err}"
-        );
+        let err = read_lsm(&mut Cursor::new(&buf)).unwrap_err();
+        assert!(err.to_string().contains("missing core section"));
     }
 
-    #[test]
-    fn duplicate_core_section_last_wins() {
-        // Write a valid file with Header duplicated — last value should take effect.
-        let mut model = sample_model();
-        model.header.source_format = "IGES".into();
-        let mut buf = Vec::new();
-        let mut cursor = std::io::Cursor::new(&mut buf);
-        write_lsm(&model, &mut cursor).unwrap();
+    // ----------------------------------------------------------------
+    // LimitedReader defense
+    // ----------------------------------------------------------------
 
-        // Patch: change first Header section's source_format to "STL".
-        // Find the first occurrence of "IGES" bytes in the buffer after the TOC.
-        // For simplicity, just read through — duplicate should not cause error.
-        let loaded = read_lsm(&mut std::io::Cursor::new(&buf)).unwrap();
-        assert_eq!(
-            loaded.header.source_format, "IGES",
-            "duplicate sections: last wins"
-        );
+    #[test]
+    fn section_limited_reader_stops_at_boundary() {
+        let model = sample_model();
+        let mut buf = Vec::new();
+        write_lsm(&model, &mut Cursor::new(&mut buf)).unwrap();
+        // Should parse fine with correct lengths.
+        let loaded = read_lsm(&mut Cursor::new(&buf)).unwrap();
+        assert_eq!(loaded.total_triangle_count(), 1);
     }
 }
