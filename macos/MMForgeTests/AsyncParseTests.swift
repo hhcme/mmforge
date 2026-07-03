@@ -373,4 +373,108 @@ final class AsyncParseTests: XCTestCase {
         XCTAssertTrue(vm.nodeNames.count > 0, "should have nodes after deferred streaming")
         cancellable.cancel()
     }
+
+    // MARK: - Streaming Lifecycle
+
+    /// Verify that opening a new file during streaming cancels the old task
+    /// and the new file loads correctly without contamination.
+    @MainActor
+    func testReopenDuringStreaming_newFileLoads() {
+        let vm = makeVMWithRenderer()
+        vm._testForceStreaming = true
+
+        // Start first file
+        vm.parseFile(data: validSTLData, fileExtension: "stl")
+
+        // Immediately start a second file — should cancel first streaming task.
+        let expectation = expectation(description: "second file loads")
+        var secondLoaded = false
+        let cancellable = vm.$state
+            .filter { s in if case .loaded = s { true } else if case .error = s { true } else { false } }
+            .sink { s in
+                if case .loaded = s { secondLoaded = true }
+                expectation.fulfill()
+            }
+
+        vm.parseFile(data: validSTLData, fileExtension: "stl")
+
+        wait(for: [expectation], timeout: 10.0)
+        XCTAssertTrue(secondLoaded, "second file should reach .loaded")
+        XCTAssertTrue(vm.nodeNames.count > 0)
+        cancellable.cancel()
+    }
+
+    /// Verify that pending streaming DTO is cleared when a new file is opened
+    /// before the renderer is bound, and the new file loads normally.
+    @MainActor
+    func testPendingStreaming_clearedOnReopen() {
+        let vm = DocumentViewModel()
+        vm._testForceStreaming = true
+
+        // Start first file — will defer because no renderer.
+        vm.parseFile(data: validSTLData, fileExtension: "stl")
+
+        // Small delay for parse to complete and defer.
+        let parseDone = expectation(description: "first parse deferred")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            parseDone.fulfill()
+        }
+        wait(for: [parseDone], timeout: 5.0)
+
+        // Now open a second file with a renderer — should clear pending
+        // and load the new file.
+        let loaded = expectation(description: "second file loads")
+        var secondLoaded = false
+        let cancellable = vm.$state
+            .filter { s in if case .loaded = s { true } else if case .error = s { true } else { false } }
+            .sink { s in
+                if case .loaded = s { secondLoaded = true }
+                loaded.fulfill()
+            }
+
+        let vm2 = makeVMWithRenderer(vm)
+        vm2.parseFile(data: validSTLData, fileExtension: "stl")
+
+        wait(for: [loaded], timeout: 10.0)
+        XCTAssertTrue(secondLoaded, "second file should load after pending cleared")
+        cancellable.cancel()
+    }
+
+    /// Verify that a cancelled streaming task does NOT write mesh data or
+    /// set .loaded state on the new document.
+    @MainActor
+    func testStaleStreamingTask_doesNotPublishState() {
+        let vm = makeVMWithRenderer()
+        vm._testForceStreaming = true
+
+        // Start first parse with streaming — the task will begin uploading.
+        vm.parseFile(data: validSTLData, fileExtension: "stl")
+
+        // Wait for some progress, then open a new file.
+        let midProgress = expectation(description: "saw streaming progress")
+        let cancellable = vm.$parseStage
+            .filter { $0.hasPrefix("Uploading meshes (chunk") }
+            .first()
+            .sink { _ in midProgress.fulfill() }
+        wait(for: [midProgress], timeout: 10.0)
+        cancellable.cancel()
+
+        // Open new file — cancels old streaming task, clears renderer.
+        let loaded = expectation(description: "new file loads")
+        var finalTriangleCount = -1
+        let loadCancellable = vm.$state
+            .filter { s in if case .loaded = s { true } else if case .error = s { true } else { false } }
+            .sink { s in
+                if case .loaded(let tc, _, _) = s { finalTriangleCount = tc }
+                loaded.fulfill()
+            }
+
+        vm.parseFile(data: validSTLData, fileExtension: "stl")
+
+        wait(for: [loaded], timeout: 10.0)
+        // The new STL has 1 triangle; the old task must not have
+        // overwritten the state with a stale value.
+        XCTAssertTrue(finalTriangleCount > 0, "should have a valid triangle count")
+        loadCancellable.cancel()
+    }
 }

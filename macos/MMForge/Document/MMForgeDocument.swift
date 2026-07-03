@@ -147,6 +147,8 @@ final class DocumentViewModel: ObservableObject {
     fileprivate var pendingDTO: RenderPacketDTO?
     /// Stores DTO for deferred streaming upload (late renderer binding).
     fileprivate var pendingStreamingDTO: RenderPacketDTO?
+    /// Active streaming Task handle — cancelled on new parse, freeCurrentDocument, deinit.
+    fileprivate var streamingTask: Task<Void, Never>?
     /// Increments on each parseFile call; stale async results are discarded.
     fileprivate var parseGeneration: UInt64 = 0
     /// If true, forces streaming mode even for small models (testing only).
@@ -212,6 +214,9 @@ final class DocumentViewModel: ObservableObject {
             rustDoc = nil
         }
         pendingDTO = nil
+        pendingStreamingDTO = nil
+        streamingTask?.cancel()
+        streamingTask = nil
         renderer?.clearMeshes()
         renderer?.clearOverlay()
         renderer?.clearSectionFill()
@@ -238,6 +243,12 @@ final class DocumentViewModel: ObservableObject {
         // Increment generation — stale results are discarded.
         parseGeneration += 1
         let generation = parseGeneration
+
+        // Cancel any in-flight streaming upload (the generation bump above
+        // will also cause the task to bail out early, but explicit cancel is
+        // faster and prevents wasted upload work).
+        streamingTask?.cancel()
+        streamingTask = nil
 
         // Clean up previous state (Rust doc, meshes, overlay, etc.).
         freeCurrentDocument()
@@ -281,6 +292,7 @@ final class DocumentViewModel: ObservableObject {
     }
 
     deinit {
+        streamingTask?.cancel()
         // Release background job resources.  mmf_open_job_free is
         // non-blocking (detaches the thread), so this is safe in deinit.
         if let job = currentJob {
@@ -475,29 +487,65 @@ extension DocumentViewModel {
 
         renderer.clearMeshes()
 
-        Task { @MainActor [weak self] in
+        // Capture the generation at task creation.  If parseFile() fires a new
+        // parse, parseGeneration is bumped and this task will bail out.
+        let gen = parseGeneration
+
+        // Cancel any previous streaming task before starting a new one.
+        streamingTask?.cancel()
+
+        let task = Task { @MainActor [weak self, gen] in
             guard let self else { return }
+
+            // --- Check that the document is still valid before starting ---
+            guard gen == self.parseGeneration,
+                  let currentDoc = self.rustDoc,
+                  let renderer = self.renderer
+            else {
+                self.streamingTask = nil
+                return
+            }
+
             parseStage = "Uploading meshes..."
             var uploaded = 0
+
             for ci in 0..<UInt32(totalChunks) {
+                // --- Generation guard: bail if a new parse started ---
+                guard gen == self.parseGeneration,
+                      self.rustDoc != nil,
+                      let renderer = self.renderer,
+                      !Task.isCancelled
+                else {
+                    self.streamingTask = nil
+                    return
+                }
+
                 parseStage = "Uploading meshes (chunk \(ci + 1)/\(totalChunks))..."
                 parseProgress = Double(ci) / Double(totalChunks)
+
                 let count = RustBridge.shared.uploadChunk(
-                    from: doc, chunkIndex: ci,
+                    from: currentDoc, chunkIndex: ci,
                     nodeMap: geomIdToNodeIdx, nodeInfos: dto.nodes,
                     into: renderer
                 )
                 uploaded += count
-                // Yield to the run loop so SwiftUI and Metal can refresh.
+
                 await Task.yield()
             }
-            guard let renderer = self.renderer, self.rustDoc != nil else {
-                parseStage = ""
-                parseProgress = 0
+
+            // --- Final guard: don't publish if document changed ---
+            guard gen == self.parseGeneration,
+                  let renderer = self.renderer,
+                  self.rustDoc != nil,
+                  !Task.isCancelled
+            else {
+                self.streamingTask = nil
                 return
             }
+
             renderer.setSceneBounds(min: dto.sceneBoundsMin, max: dto.sceneBoundsMax)
             if clipEnabled { renderer.updateSectionFill() }
+
             parseStage = ""
             parseProgress = 1
             state = .loaded(
@@ -505,7 +553,10 @@ extension DocumentViewModel {
                 meshCount: uploaded,
                 nodeCount: dto.nodeNames.count
             )
+            self.streamingTask = nil
         }
+
+        streamingTask = task
     }
 
     /// Upload a single streaming chunk into the renderer (progressive loading).
