@@ -147,13 +147,26 @@ pub fn read_lsm(r: &mut (impl Read + Seek)) -> Result<LsmModel> {
                 reason: format!("section 0x{st:02X} offset {off} is inside the file header"),
             });
         }
-        if off >= toc_offset && off < toc_offset + toc_size {
+        // Section must not overlap the TOC region.
+        let toc_end = toc_offset + toc_size;
+        if off >= toc_offset && off < toc_end {
             return Err(ReadError::CorruptToc {
                 reason: format!(
-                    "section 0x{st:02X} offset {off} overlaps TOC ({toc_offset}–{})",
-                    toc_offset + toc_size
+                    "section 0x{st:02X} offset {off} starts inside TOC ({toc_offset}–{toc_end})"
                 ),
             });
+        }
+        if off < toc_offset {
+            match off.checked_add(len) {
+                Some(end) if end > toc_offset => {
+                    return Err(ReadError::CorruptToc {
+                        reason: format!(
+                            "section 0x{st:02X} range {off}–{end} crosses into TOC ({toc_offset}–{toc_end})"
+                        ),
+                    });
+                }
+                _ => {}
+            }
         }
         match off.checked_add(len) {
             Some(end) if end <= file_size => {}

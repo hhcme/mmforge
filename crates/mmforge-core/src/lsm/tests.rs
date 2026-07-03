@@ -215,7 +215,24 @@ mod tests {
         buf[72..80].copy_from_slice(&64u64.to_le_bytes());
         buf[80..88].copy_from_slice(&0u64.to_le_bytes());
         let err = read_lsm(&mut Cursor::new(&buf)).unwrap_err();
-        assert!(err.to_string().contains("overlaps TOC"), "got: {err}");
+        assert!(err.to_string().contains("starts inside TOC"), "got: {err}");
+    }
+
+    #[test]
+    fn section_starts_before_toc_extends_into_it_rejected() {
+        // TOC at 128, section at 64 with len=80 → 64+80=144 > 128.
+        let mut buf = vec![0u8; 256];
+        buf[0..4].copy_from_slice(b"LSMD");
+        buf[4..6].copy_from_slice(&1u16.to_le_bytes());
+        buf[8..16].copy_from_slice(&128u64.to_le_bytes());
+        buf[16..20].copy_from_slice(&1u32.to_le_bytes());
+        buf[128..132].copy_from_slice(&1u32.to_le_bytes());
+        // Section 0x10 at offset 64, length 80 (extends past TOC at 128)
+        buf[132..136].copy_from_slice(&0x10u32.to_le_bytes());
+        buf[136..144].copy_from_slice(&64u64.to_le_bytes());
+        buf[144..152].copy_from_slice(&80u64.to_le_bytes());
+        let err = read_lsm(&mut Cursor::new(&buf)).unwrap_err();
+        assert!(err.to_string().contains("crosses into TOC"), "got: {err}");
     }
 
     #[test]
