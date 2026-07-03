@@ -199,18 +199,37 @@ mmforge batch-convert -o out/ --continue-on-error a.stl bad.stl
 
 **JSON 汇总字段**:
 
+默认 (无 `--continue-on-error`)，冲突项 conflict、非冲突项 skipped，不做转换:
+
 ```json
 {
   "results": [
-    {"file":"a.stl","output":"out/a.lsm","status":"ok","size_bytes":561,"error":null},
-    {"file":"b.stl","output":"out/b.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with ..."},
+    {"file":"a.stl","output":"out/a.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with b.stl"},
+    {"file":"b.stl","output":"out/b.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with a.stl"},
     {"file":"c.stl","output":"out/c.lsm","status":"skipped","size_bytes":null,"error":null}
+  ],
+  "total": 3,
+  "converted": 0,
+  "failed": 0,
+  "conflicts": 2,
+  "skipped": 1
+}
+```
+
+`--continue-on-error` 模式，冲突项 conflict、非冲突项 ok:
+
+```json
+{
+  "results": [
+    {"file":"a.stl","output":"out/a.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with b.stl"},
+    {"file":"b.stl","output":"out/b.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with a.stl"},
+    {"file":"c.stl","output":"out/c.lsm","status":"ok","size_bytes":561,"error":null}
   ],
   "total": 3,
   "converted": 1,
   "failed": 0,
-  "conflicts": 1,
-  "skipped": 1
+  "conflicts": 2,
+  "skipped": 0
 }
 ```
 

@@ -43,18 +43,37 @@ name (e.g., `a/d.stl` and `b/d.stl`), the command detects the conflict before
 any conversion and exits with an error.  Use `--continue-on-error` to skip
 conflicting pairs and continue with non-conflicting files.
 
-**JSON summary fields**:
+**JSON summary fields** (default, no `--continue-on-error`):
 
 ```json
 {
   "results": [
-    {"file": "...", "output": "...", "status": "ok|error|conflict|skipped", "size_bytes": N, "error": null}
+    {"file":"dup1.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dup2.stl"},
+    {"file":"dup2.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dup1.stl"},
+    {"file":"other.stl","output":"out/other.lsm","status":"skipped","size_bytes":null,"error":null}
+  ],
+  "total": 3,
+  "converted": 0,
+  "failed": 0,
+  "conflicts": 2,
+  "skipped": 1
+}
+```
+
+With `--continue-on-error`:
+
+```json
+{
+  "results": [
+    {"file":"dup1.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dup2.stl"},
+    {"file":"dup2.stl","output":"out/dup.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with dup1.stl"},
+    {"file":"other.stl","output":"out/other.lsm","status":"ok","size_bytes":561,"error":null}
   ],
   "total": 3,
   "converted": 1,
   "failed": 0,
-  "conflicts": 1,
-  "skipped": 1
+  "conflicts": 2,
+  "skipped": 0
 }
 ```
 
