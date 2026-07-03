@@ -7,6 +7,7 @@ pub mod cancel;
 pub mod drawing;
 pub mod error;
 pub mod ids;
+pub mod lsm;
 pub mod math;
 pub mod model;
 pub mod parser;
