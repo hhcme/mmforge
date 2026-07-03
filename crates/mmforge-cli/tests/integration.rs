@@ -376,10 +376,11 @@ fn lsmc_magic_in_any_extension_reads() {
         ])
         .output()
         .unwrap();
-    let lsm = stl.path().with_extension("lsm");
-    std::fs::rename(&lsmc, &lsm).unwrap();
+    // Rename to a non-standard extension — magic detection must still work.
+    let data = stl.path().with_extension("data");
+    std::fs::rename(&lsmc, &data).unwrap();
     let out = Command::new(mmforge_bin())
-        .args(["info", lsm.to_str().unwrap()])
+        .args(["info", data.to_str().unwrap()])
         .output()
         .unwrap();
     assert!(
@@ -389,4 +390,60 @@ fn lsmc_magic_in_any_extension_reads() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("STL"));
+}
+
+/// .lsmc extension MUST be LSMC magic — valid .lsm renamed to .lsmc is rejected.
+#[test]
+fn lsmc_extension_rejects_plain_lsm_data() {
+    let stl = temp_stl(1);
+    let lsm = stl.path().with_extension("lsm");
+    Command::new(mmforge_bin())
+        .args([
+            "convert",
+            stl.path().to_str().unwrap(),
+            "-o",
+            lsm.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let lsmc = stl.path().with_extension("lsmc");
+    std::fs::rename(&lsm, &lsmc).unwrap();
+    let out = Command::new(mmforge_bin())
+        .args(["info", lsmc.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "plain .lsm renamed to .lsmc must fail"
+    );
+}
+
+/// No extension but LSMC magic must be read transparently.
+#[test]
+fn no_extension_lsmc_magic_reads() {
+    let stl = temp_stl(1);
+    let lsmc = stl.path().with_extension("lsmc");
+    Command::new(mmforge_bin())
+        .args([
+            "convert",
+            stl.path().to_str().unwrap(),
+            "-o",
+            lsmc.to_str().unwrap(),
+            "--compress",
+            "zstd",
+        ])
+        .output()
+        .unwrap();
+    let noext = stl.path().parent().unwrap().join("noext_test");
+    std::fs::rename(&lsmc, &noext).unwrap();
+    let out = Command::new(mmforge_bin())
+        .args(["info", noext.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("STL"));
 }

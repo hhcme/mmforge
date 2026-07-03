@@ -265,9 +265,12 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
         .unwrap_or("")
         .to_lowercase();
 
-    // LSM binary format — read directly, no format detection needed.
-    if ext == "lsm" || ext == "lsmc" {
-        return parse_lsm(path);
+    // LSM/compressed LSM — read directly by extension.
+    if ext == "lsm" {
+        return parse_lsm_file(path);
+    }
+    if ext == "lsmc" {
+        return parse_lsmc_file(path);
     }
 
     if ext == "stl" || ext == "stla" || ext == "stlb" {
@@ -276,9 +279,13 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
 
     let header = std::fs::read(path).map_err(|e| format!("cannot read: {e}"))?;
 
-    // LSM magic detection (for extension-less files).
-    if header.len() >= 4 && &header[..4] == b"LSMD" {
-        return parse_lsm(path);
+    // Magic detection for extension-less / unknown-extension files.
+    if header.len() >= 4 {
+        match &header[..4] {
+            b"LSMD" => return parse_lsm_file(path),
+            b"LSMC" => return parse_lsmc_file(path),
+            _ => {}
+        }
     }
 
     if header.starts_with(b"ISO-10303-21;") || ext == "step" || ext == "stp" {
@@ -299,18 +306,22 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
     parse_stl(path)
 }
 
-fn parse_lsm(path: &std::path::Path) -> Result<Parsed, String> {
+fn parse_lsm_file(path: &std::path::Path) -> Result<Parsed, String> {
     let data = std::fs::read(path).map_err(|e| format!("open: {e}"))?;
-    // If magic is LSMC, decompress first.
-    let model = if data.len() >= 4 && &data[..4] == b"LSMC" {
-        let dec = mmforge_core::lsm::lsmc::read_lsmc_decompressed(&mut std::io::Cursor::new(&data))
-            .map_err(|e| format!("lsmc read: {e}"))?;
-        mmforge_core::lsm::read_lsm(&mut std::io::Cursor::new(&dec))
-            .map_err(|e| format!("lsm read: {e}"))?
-    } else {
-        mmforge_core::lsm::read_lsm(&mut std::io::Cursor::new(&data))
-            .map_err(|e| format!("lsm read: {e}"))?
-    };
+    let model = mmforge_core::lsm::read_lsm(&mut std::io::Cursor::new(&data))
+        .map_err(|e| format!("lsm read: {e}"))?;
+    Ok(Parsed {
+        model,
+        warnings: vec![],
+    })
+}
+
+fn parse_lsmc_file(path: &std::path::Path) -> Result<Parsed, String> {
+    let data = std::fs::read(path).map_err(|e| format!("open: {e}"))?;
+    let dec = mmforge_core::lsm::lsmc::read_lsmc_decompressed(&mut std::io::Cursor::new(&data))
+        .map_err(|e| format!("lsmc read: {e}"))?;
+    let model = mmforge_core::lsm::read_lsm(&mut std::io::Cursor::new(&dec))
+        .map_err(|e| format!("lsm read: {e}"))?;
     Ok(Parsed {
         model,
         warnings: vec![],
