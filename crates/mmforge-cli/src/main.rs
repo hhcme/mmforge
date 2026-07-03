@@ -2,6 +2,9 @@
 
 use std::path::PathBuf;
 
+#[cfg(test)]
+use std::io::Write;
+
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
@@ -209,6 +212,7 @@ fn cmd_benchmark(file: &std::path::Path, iterations: u32, format: OutputFormat) 
 // Detection + parsing
 // ----------------------------------------------------------------
 
+#[derive(Debug)]
 struct Parsed {
     model: mmforge_core::LsmModel,
     warnings: Vec<mmforge_core::ParseWarning>,
@@ -221,11 +225,22 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
         .unwrap_or("")
         .to_lowercase();
 
+    // LSM binary format — read directly, no format detection needed.
+    if ext == "lsm" {
+        return parse_lsm(path);
+    }
+
     if ext == "stl" || ext == "stla" || ext == "stlb" {
         return parse_stl(path);
     }
 
     let header = std::fs::read(path).map_err(|e| format!("cannot read: {e}"))?;
+
+    // LSM magic detection (for extension-less files).
+    if header.len() >= 4 && &header[..4] == b"LSMD" {
+        return parse_lsm(path);
+    }
+
     if header.starts_with(b"ISO-10303-21;") || ext == "step" || ext == "stp" {
         return parse_step(path);
     }
@@ -242,6 +257,16 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
 
     // Last resort: try STL
     parse_stl(path)
+}
+
+fn parse_lsm(path: &std::path::Path) -> Result<Parsed, String> {
+    let mut file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
+    let mut reader = std::io::BufReader::new(&mut file);
+    let model = mmforge_core::lsm::read_lsm(&mut reader).map_err(|e| format!("lsm read: {e}"))?;
+    Ok(Parsed {
+        model,
+        warnings: vec![],
+    })
 }
 
 fn parse_stl(path: &std::path::Path) -> Result<Parsed, String> {
@@ -359,4 +384,172 @@ fn parse_step(path: &std::path::Path) -> Result<Parsed, String> {
         model,
         warnings: vec![],
     })
+}
+
+// ----------------------------------------------------------------
+// Tests
+// ----------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn write_temp_stl_ascii() -> tempfile::NamedTempFile {
+        let mut f = tempfile::Builder::new().suffix(".stl").tempfile().unwrap();
+        f.write_all(
+            b"solid test\n  facet normal 0 0 1\n    outer loop\n      vertex 0 0 0\n      vertex 1 0 0\n      vertex 0 1 0\n    endloop\n  endfacet\nendsolid test\n",
+        )
+        .unwrap();
+        f
+    }
+
+    fn write_temp_stl_binary(tri_count: u32) -> tempfile::NamedTempFile {
+        let mut f = tempfile::Builder::new().suffix(".stl").tempfile().unwrap();
+        let mut data = vec![0u8; 80]; // header
+        data[0..9].copy_from_slice(b"binarystl");
+        data.extend_from_slice(&tri_count.to_le_bytes());
+        for _ in 0..tri_count {
+            data.extend_from_slice(&[0.0f32; 12].map(|_| 0u8)); // normal
+            data.extend_from_slice(&1.0f32.to_le_bytes());
+            data.extend_from_slice(&0.0f32.to_le_bytes());
+            data.extend_from_slice(&0.0f32.to_le_bytes()); // v0
+            data.extend_from_slice(&0.0f32.to_le_bytes());
+            data.extend_from_slice(&1.0f32.to_le_bytes());
+            data.extend_from_slice(&0.0f32.to_le_bytes()); // v1
+            data.extend_from_slice(&0.0f32.to_le_bytes());
+            data.extend_from_slice(&0.0f32.to_le_bytes());
+            data.extend_from_slice(&1.0f32.to_le_bytes()); // v2
+            data.extend_from_slice(&0u16.to_le_bytes()); // attr
+        }
+        f.write_all(&data).unwrap();
+        f
+    }
+
+    fn write_lsm_triangle() -> tempfile::NamedTempFile {
+        let mut f = tempfile::Builder::new().suffix(".lsm").tempfile().unwrap();
+        let mut b = mmforge_core::ModelBuilder::new("STL")
+            .with_units("mm")
+            .build();
+        b.header.source_path = Some("test.stl".into());
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        mmforge_core::lsm::write_lsm(&b, &mut cursor).unwrap();
+        f.write_all(cursor.get_ref()).unwrap();
+        f
+    }
+
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn detect_ascii_stl() {
+        let f = write_temp_stl_ascii();
+        let p = detect_and_parse(f.path()).unwrap();
+        assert_eq!(p.model.header.source_format, "STL");
+        assert_eq!(p.model.total_triangle_count(), 1);
+    }
+
+    #[test]
+    fn detect_binary_stl() {
+        let f = write_temp_stl_binary(2);
+        let p = detect_and_parse(f.path()).unwrap();
+        assert_eq!(p.model.header.source_format, "STL");
+        assert_eq!(p.model.total_triangle_count(), 2);
+    }
+
+    /// Full round-trip: binary STL → convert → .lsm → info → validate.
+    #[test]
+    fn binary_stl_to_lsm_round_trip() {
+        let stl = write_temp_stl_binary(3);
+
+        // Convert
+        let lsm_path = stl.path().with_extension("lsm");
+        cmd_convert(stl.path(), Some(&lsm_path));
+        assert!(lsm_path.exists());
+
+        // Info on LSM
+        let p = detect_and_parse(&lsm_path).unwrap();
+        assert_eq!(p.model.header.source_format, "STL");
+        assert_eq!(p.model.total_triangle_count(), 3);
+        assert_eq!(p.model.scene.nodes.len(), 2);
+
+        // Validate LSM
+        let issues = p.model.validate_references();
+        assert!(issues.is_empty(), "LSM should have no validation issues");
+
+        // Benchmark .lsm
+        cmd_benchmark(&lsm_path, 2, OutputFormat::Text);
+    }
+
+    /// LSM info prints JSON stably.
+    #[test]
+    fn lsm_info_json_output() {
+        let f = write_temp_stl_ascii();
+        let lsm_path = f.path().with_extension("lsm");
+        cmd_convert(f.path(), Some(&lsm_path));
+
+        let p = detect_and_parse(&lsm_path).unwrap();
+        let bb = p.model.bounds();
+        let json = serde_json::json!({
+            "source_format": p.model.header.source_format,
+            "node_count": p.model.scene.nodes.len(),
+            "triangle_count": p.model.total_triangle_count(),
+            "bounds": {"min":[bb.min.x,bb.min.y,bb.min.z],"max":[bb.max.x,bb.max.y,bb.max.z]},
+        });
+        assert!(json["source_format"].as_str() == Some("STL"));
+        assert!(json["triangle_count"].as_u64() == Some(1));
+        assert!(json["bounds"]["min"].is_array());
+    }
+
+    /// LSM validate finds no issues on well-formed model.
+    #[test]
+    fn lsm_validate_clean() {
+        let f = write_temp_stl_ascii();
+        let lsm_path = f.path().with_extension("lsm");
+        cmd_convert(f.path(), Some(&lsm_path));
+
+        let p = detect_and_parse(&lsm_path).unwrap();
+        assert!(p.model.validate_references().is_empty());
+    }
+
+    /// Bad magic in LSM file returns error.
+    #[test]
+    fn lsm_bad_magic_error() {
+        let mut f = tempfile::Builder::new().suffix(".lsm").tempfile().unwrap();
+        f.write_all(b"XXXXjunkdata").unwrap();
+
+        let err = detect_and_parse(f.path()).unwrap_err();
+        assert!(
+            err.contains("lsm read"),
+            "expected lsm read error, got: {err}"
+        );
+    }
+
+    /// LSM file with unsupported version returns error.
+    #[test]
+    fn lsm_high_version_error() {
+        let mut f = tempfile::Builder::new().suffix(".lsm").tempfile().unwrap();
+        let mut data = vec![0u8; 100];
+        data[0..4].copy_from_slice(b"LSMD");
+        data[4] = 99; // version 99
+        f.write_all(&data).unwrap();
+
+        let err = detect_and_parse(f.path()).unwrap_err();
+        assert!(err.contains("unsupported version"));
+    }
+
+    /// Non-STL, non-LSM file without extension falls back to STL parser.
+    #[test]
+    fn unknown_file_falls_back_to_stl() {
+        let mut f = tempfile::Builder::new()
+            .suffix(".unknown")
+            .tempfile()
+            .unwrap();
+        f.write_all(b"garbage").unwrap();
+
+        let err = detect_and_parse(f.path()).unwrap_err();
+        assert!(
+            err.contains("not a valid STL") || err.contains("invalid UTF-8"),
+            "expected STL parse error, got: {err}"
+        );
+    }
 }
