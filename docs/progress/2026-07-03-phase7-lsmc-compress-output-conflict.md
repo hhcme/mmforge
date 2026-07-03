@@ -32,7 +32,7 @@ first, then the extension-compress conflict is validated.
 
 ## Additional cleanups
 
-- Renamed `lsmc_magic_in_any_extension_reads` test to 
+- Renamed `lsmc_magic_in_any_extension_reads` test to
   `lsmc_magic_in_unknown_extension_reads` to match actual semantics
   (uses `.data` extension, not `.lsm`).
 - Fixed duplicate `#[test]` annotations and orphan code in integration tests.
