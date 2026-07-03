@@ -651,16 +651,15 @@ mod tests {
     #[test]
     fn gltf_multi_root_gets_synthetic_assembly() {
         // glTF with 2 scenes, each with 1 node → 2 root nodes → synthetic assembly.
-        let json = format!(
-            r#"{{
-  "asset": {{"version": "2.0"}},
-  "scenes": [{{"nodes": [0]}}, {{"nodes": [1]}}],
+        let json = r#"{
+  "asset": {"version": "2.0"},
+  "scenes": [{"nodes": [0]}, {"nodes": [1]}],
   "nodes": [
-    {{"name": "A"}},
-    {{"name": "B"}}
+    {"name": "A"},
+    {"name": "B"}
   ]
-}}"#
-        );
+}"#
+        .to_string();
         let tmp = write_temp_gltf(&json);
         let (output, _) = parse_gltf(tmp.path()).unwrap();
 
@@ -678,14 +677,13 @@ mod tests {
 
     #[test]
     fn gltf_single_root_no_assembly() {
-        let json = format!(
-            r#"{{
-  "asset": {{"version": "2.0"}},
+        let json = r#"{
+  "asset": {"version": "2.0"},
   "scene": 0,
-  "scenes": [{{"nodes": [0]}}],
-  "nodes": [{{"name": "Solo"}}]
-}}"#
-        );
+  "scenes": [{"nodes": [0]}],
+  "nodes": [{"name": "Solo"}]
+}"#
+        .to_string();
         let tmp = write_temp_gltf(&json);
         let (output, _) = parse_gltf(tmp.path()).unwrap();
 

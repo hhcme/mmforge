@@ -2,9 +2,6 @@
 
 use std::path::PathBuf;
 
-#[cfg(test)]
-use std::io::Write;
-
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
@@ -426,6 +423,7 @@ mod tests {
         f
     }
 
+    #[allow(dead_code)]
     fn write_lsm_triangle() -> tempfile::NamedTempFile {
         let mut f = tempfile::Builder::new().suffix(".lsm").tempfile().unwrap();
         let mut b = mmforge_core::ModelBuilder::new("STL")

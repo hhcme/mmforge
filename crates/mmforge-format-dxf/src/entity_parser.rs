@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn parse_line_entity() {
-        let pairs = vec![
+        let pairs = [
             pair(8, "walls"),
             pair(10, "0.0"),
             pair(20, "0.0"),
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn parse_circle_entity() {
-        let pairs = vec![
+        let pairs = [
             pair(8, "0"),
             pair(10, "5.0"),
             pair(20, "5.0"),
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn parse_arc_entity() {
-        let pairs = vec![
+        let pairs = [
             pair(8, "0"),
             pair(10, "0.0"),
             pair(20, "0.0"),
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn parse_lwpolyline_straight() {
-        let pairs = vec![
+        let pairs = [
             pair(8, "0"),
             pair(70, "0"),
             pair(90, "3"),
@@ -339,7 +339,7 @@ mod tests {
 
     #[test]
     fn parse_lwpolyline_closed() {
-        let pairs = vec![
+        let pairs = [
             pair(8, "0"),
             pair(70, "1"),
             pair(90, "2"),
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn parse_text_entity() {
-        let pairs = vec![
+        let pairs = [
             pair(8, "text"),
             pair(10, "10.0"),
             pair(20, "20.0"),
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn parse_unknown_entity_returns_none() {
-        let pairs = vec![pair(8, "0")];
+        let pairs = [pair(8, "0")];
         let refs: Vec<&DxfPair> = pairs.iter().collect();
         assert!(parse_single_entity("HATCH", &refs).is_none());
     }

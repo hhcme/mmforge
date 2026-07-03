@@ -1,3 +1,4 @@
+#[allow(clippy::module_inception)]
 #[cfg(test)]
 mod tests {
     use crate::lsm::{reader::read_lsm, writer::write_lsm};

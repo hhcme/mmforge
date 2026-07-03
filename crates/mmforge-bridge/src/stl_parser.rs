@@ -528,7 +528,7 @@ endsolid test
         // Triangle 1: normal (0,0,1), vertices (0,0,0), (1,0,0), (0,1,0)
         let base1 = 84;
         write_f32_le(&mut data, base1 + 8, 1.0); // nz = 1.0
-        write_f32_le(&mut data, base1 + 12 + 0, 1.0); // v1.x = 1.0
+        write_f32_le(&mut data, base1 + 12, 1.0); // v1.x = 1.0
         write_f32_le(&mut data, base1 + 12 + 12 + 4, 1.0); // v2.y = 1.0
 
         // Triangle 2: normal (0,0,-1), vertices (0,0,0), (0,1,0), (1,0,0)
