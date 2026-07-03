@@ -472,3 +472,109 @@ fn compress_zstd_rejects_non_lsmc_output() {
         "stderr: {stderr}"
     );
 }
+
+// ----------------------------------------------------------------
+// Batch convert tests
+// ----------------------------------------------------------------
+
+#[test]
+fn batch_convert_two_files_succeeds() {
+    let a = temp_stl(1);
+    let b = temp_stl(1);
+    let out_dir = tempfile::tempdir().unwrap();
+
+    let out = Command::new(mmforge_bin())
+        .args([
+            "batch-convert",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            a.path().to_str().unwrap(),
+            b.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("2/2 converted"));
+    let name1 = a.path().file_stem().unwrap().to_str().unwrap();
+    let name2 = b.path().file_stem().unwrap().to_str().unwrap();
+    assert!(out_dir.path().join(format!("{name1}.lsm")).exists());
+    assert!(out_dir.path().join(format!("{name2}.lsm")).exists());
+}
+
+#[test]
+fn batch_convert_compressed() {
+    let a = temp_stl(1);
+    let out_dir = tempfile::tempdir().unwrap();
+
+    let out = Command::new(mmforge_bin())
+        .args([
+            "batch-convert",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            "--compress",
+            "zstd",
+            a.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("1/1 converted"));
+    let name = a.path().file_stem().unwrap().to_str().unwrap();
+    assert!(out_dir.path().join(format!("{name}.lsmc")).exists());
+}
+
+#[test]
+fn batch_convert_json_summary() {
+    let a = temp_stl(1);
+    let out_dir = tempfile::tempdir().unwrap();
+
+    let out = Command::new(mmforge_bin())
+        .args([
+            "batch-convert",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            "--format",
+            "json",
+            a.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert_eq!(v["total"], 1);
+    assert_eq!(v["converted"], 1);
+    assert_eq!(v["failed"], 0);
+    assert_eq!(v["results"][0]["status"], "ok");
+}
+
+#[test]
+fn batch_convert_partial_failure_json() {
+    let a = temp_stl(1);
+    // Non-existent file
+    let bad = a.path().parent().unwrap().join("nonexistent_xyz.stl");
+    let out_dir = tempfile::tempdir().unwrap();
+
+    let out = Command::new(mmforge_bin())
+        .args([
+            "batch-convert",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            "--format",
+            "json",
+            "--continue-on-error",
+            a.path().to_str().unwrap(),
+            bad.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    // Should exit 1 due to partial failure
+    assert!(!out.status.success());
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert_eq!(v["total"], 2);
+    assert_eq!(v["converted"], 1);
+    assert_eq!(v["failed"], 1);
+    assert_eq!(v["results"][0]["status"], "ok");
+    assert_eq!(v["results"][1]["status"], "error");
+}

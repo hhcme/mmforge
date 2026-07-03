@@ -42,6 +42,23 @@ enum Commands {
         #[arg(long, default_value = "text")]
         format: OutputFormat,
     },
+    /// Convert multiple files to .lsm/.lsmc in a single output directory.
+    BatchConvert {
+        /// Output directory (created if missing).
+        #[arg(short, long)]
+        output_dir: PathBuf,
+        /// Input files.
+        files: Vec<PathBuf>,
+        /// Use zstd compression (outputs .lsmc).
+        #[arg(long)]
+        compress: Option<String>,
+        /// Summary format.
+        #[arg(long, default_value = "text")]
+        format: OutputFormat,
+        /// Continue processing remaining files on error.
+        #[arg(long)]
+        continue_on_error: bool,
+    },
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -66,6 +83,19 @@ fn main() {
             iterations,
             format,
         } => cmd_benchmark(&file, iterations, format),
+        Commands::BatchConvert {
+            output_dir,
+            files,
+            compress,
+            format,
+            continue_on_error,
+        } => cmd_batch_convert(
+            &output_dir,
+            &files,
+            compress.as_deref(),
+            format,
+            continue_on_error,
+        ),
     }
 }
 
@@ -459,6 +489,133 @@ fn parse_step(path: &std::path::Path) -> Result<Parsed, String> {
         model,
         warnings: vec![],
     })
+}
+
+// ----------------------------------------------------------------
+// Batch conversion
+// ----------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct BatchResult {
+    file: String,
+    output: String,
+    status: String,
+    size: Option<u64>,
+    error: Option<String>,
+}
+
+fn cmd_batch_convert(
+    output_dir: &std::path::Path,
+    files: &[PathBuf],
+    compress: Option<&str>,
+    format: OutputFormat,
+    continue_on_error: bool,
+) {
+    std::fs::create_dir_all(output_dir).unwrap_or_else(|e| {
+        eprintln!("error: cannot create output directory: {e}");
+        std::process::exit(1);
+    });
+
+    let compress_ext = match compress {
+        Some("zstd") | Some("zst") => "lsmc",
+        None => "lsm",
+        Some(other) => {
+            eprintln!("error: unknown compression method '{other}' (supported: zstd)");
+            std::process::exit(1);
+        }
+    };
+
+    let mut results: Vec<BatchResult> = Vec::new();
+    let mut failed = false;
+
+    for input in files {
+        let stem = input
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let output = output_dir.join(format!("{stem}.{compress_ext}"));
+
+        match convert_one(input, &output, compress.is_some()) {
+            Ok(size) => {
+                results.push(BatchResult {
+                    file: input.display().to_string(),
+                    output: output.display().to_string(),
+                    status: "ok".into(),
+                    size: Some(size),
+                    error: None,
+                });
+            }
+            Err(e) => {
+                results.push(BatchResult {
+                    file: input.display().to_string(),
+                    output: output.display().to_string(),
+                    status: "error".into(),
+                    size: None,
+                    error: Some(e),
+                });
+                failed = true;
+                if !continue_on_error {
+                    break;
+                }
+            }
+        }
+    }
+
+    match format {
+        OutputFormat::Text => {
+            for r in &results {
+                if r.status == "ok" {
+                    println!(
+                        "OK    {} → {} ({} bytes)",
+                        r.file,
+                        r.output,
+                        r.size.unwrap_or(0)
+                    );
+                } else {
+                    println!(
+                        "FAIL  {} → {} ({})",
+                        r.file,
+                        r.output,
+                        r.error.as_deref().unwrap_or("unknown error")
+                    );
+                }
+            }
+            let ok = results.iter().filter(|r| r.status == "ok").count();
+            let err = results.len() - ok;
+            println!("---");
+            println!("{}/{} converted ({} failed)", ok, results.len(), err);
+        }
+        OutputFormat::Json => {
+            let json = serde_json::json!({
+                "results": results.iter().map(|r| serde_json::json!({
+                    "file": r.file, "output": r.output, "status": r.status,
+                    "size_bytes": r.size, "error": r.error,
+                })).collect::<Vec<_>>(),
+                "total": results.len(),
+                "converted": results.iter().filter(|r| r.status == "ok").count(),
+                "failed": results.iter().filter(|r| r.status == "error").count(),
+            });
+            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+        }
+    }
+
+    if failed {
+        std::process::exit(1);
+    }
+}
+
+fn convert_one(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    compress: bool,
+) -> Result<u64, String> {
+    let parsed = detect_and_parse(input)?;
+    let mut f = std::fs::File::create(output).map_err(|e| format!("create: {e}"))?;
+    if compress {
+        mmforge_core::lsm::lsmc::write_lsmc(&parsed.model, &mut f).map_err(|e| format!("lsmc: {e}"))
+    } else {
+        mmforge_core::lsm::write_lsm(&parsed.model, &mut f).map_err(|e| format!("lsm: {e}"))
+    }
 }
 
 // ----------------------------------------------------------------
