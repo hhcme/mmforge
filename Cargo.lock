@@ -588,6 +588,7 @@ dependencies = [
  "clap",
  "glam",
  "mmforge-core",
+ "serde",
  "serde_json",
  "tempfile",
 ]
