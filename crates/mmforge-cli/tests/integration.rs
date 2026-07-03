@@ -757,3 +757,61 @@ fn batch_convert_all_conflicted_continue_on_error_produces_summary() {
         assert_eq!(r["status"], "conflict");
     }
 }
+
+/// Mixed input (1 conflict pair + 1 normal) without --continue-on-error:
+/// non-conflicting input shows as SKIP, not FAIL.
+#[test]
+fn batch_convert_no_continue_skips_non_conflict_with_skip_status() {
+    let dir1 = tempfile::tempdir().unwrap();
+    let dir2 = tempfile::tempdir().unwrap();
+    let stl_data = {
+        let f = temp_stl(1);
+        std::fs::read(f.path()).unwrap()
+    };
+    let same = dir1.path().join("dup.stl");
+    let dup = dir2.path().join("dup.stl");
+    std::fs::write(&same, &stl_data).unwrap();
+    std::fs::write(&dup, &stl_data).unwrap();
+    let other = temp_stl(1);
+    let out_dir = tempfile::tempdir().unwrap();
+
+    // Text output
+    let out = Command::new(mmforge_bin())
+        .args([
+            "batch-convert",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            same.to_str().unwrap(),
+            dup.to_str().unwrap(),
+            other.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("SKIP"), "stdout: {stdout}");
+    assert!(stdout.contains("CONFLICT"));
+    assert!(!stdout.contains("FAIL"));
+    assert!(stdout.contains("skipped"));
+
+    // JSON output
+    let out2 = Command::new(mmforge_bin())
+        .args([
+            "batch-convert",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            "--format",
+            "json",
+            same.to_str().unwrap(),
+            dup.to_str().unwrap(),
+            other.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out2.stdout)).unwrap();
+    assert_eq!(v["total"], 3);
+    assert_eq!(v["converted"], 0);
+    assert_eq!(v["conflicts"], 2);
+    assert_eq!(v["skipped"], 1);
+}

@@ -48,13 +48,21 @@ conflicting pairs and continue with non-conflicting files.
 ```json
 {
   "results": [
-    {"file": "...", "output": "...", "status": "ok|error|conflict", "size_bytes": N, "error": null}
+    {"file": "...", "output": "...", "status": "ok|error|conflict|skipped", "size_bytes": N, "error": null}
   ],
   "total": 3,
-  "converted": 2,
-  "failed": 1
+  "converted": 1,
+  "failed": 0,
+  "conflicts": 1,
+  "skipped": 1
 }
 ```
+
+**Status values**:
+- `ok` — converted successfully
+- `error` — parse/convert failed
+- `conflict` — output path collision or existing file
+- `skipped` — not converted because another input in the batch had a conflict (only without `--continue-on-error`)
 
 ## Usage
 

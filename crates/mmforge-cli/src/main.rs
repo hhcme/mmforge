@@ -679,6 +679,10 @@ fn print_batch_results(results: &[BatchResult], format: OutputFormat) {
                         r.output,
                         r.error.as_deref().unwrap_or("")
                     ),
+                    "skipped" => println!(
+                        "SKIP    {} → {} (not converted — conflict in batch)",
+                        r.file, r.output
+                    ),
                     _ => println!(
                         "FAIL    {} → {} ({})",
                         r.file,
@@ -690,13 +694,15 @@ fn print_batch_results(results: &[BatchResult], format: OutputFormat) {
             let ok = results.iter().filter(|r| r.status == "ok").count();
             let cf = results.iter().filter(|r| r.status == "conflict").count();
             let err = results.iter().filter(|r| r.status == "error").count();
+            let sk = results.iter().filter(|r| r.status == "skipped").count();
             println!("---");
             println!(
-                "{}/{} converted ({} failed, {} conflicts)",
+                "{}/{} converted ({} failed, {} conflicts, {} skipped)",
                 ok,
                 results.len(),
                 err,
-                cf
+                cf,
+                sk
             );
         }
         OutputFormat::Json => {
@@ -709,6 +715,7 @@ fn print_batch_results(results: &[BatchResult], format: OutputFormat) {
                 "converted": results.iter().filter(|r| r.status == "ok").count(),
                 "failed": results.iter().filter(|r| r.status == "error").count(),
                 "conflicts": results.iter().filter(|r| r.status == "conflict").count(),
+                "skipped": results.iter().filter(|r| r.status == "skipped").count(),
             });
             println!("{}", serde_json::to_string_pretty(&json).unwrap());
         }
