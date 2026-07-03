@@ -716,3 +716,44 @@ fn batch_convert_default_conflict_reports_json() {
     assert_eq!(v["converted"], 0);
     assert_eq!(v["conflicts"], 2);
 }
+
+/// All inputs conflicted + --continue-on-error: must still produce
+/// unified summary with every conflict result (not just an error message).
+#[test]
+fn batch_convert_all_conflicted_continue_on_error_produces_summary() {
+    let dir1 = tempfile::tempdir().unwrap();
+    let dir2 = tempfile::tempdir().unwrap();
+    let stl_data = {
+        let f = temp_stl(1);
+        std::fs::read(f.path()).unwrap()
+    };
+    let same = dir1.path().join("dup.stl");
+    let dup = dir2.path().join("dup.stl");
+    std::fs::write(&same, &stl_data).unwrap();
+    std::fs::write(&dup, &stl_data).unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+
+    let out = Command::new(mmforge_bin())
+        .args([
+            "batch-convert",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            "--continue-on-error",
+            "--format",
+            "json",
+            same.to_str().unwrap(),
+            dup.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert_eq!(v["total"], 2);
+    assert_eq!(v["converted"], 0);
+    assert_eq!(v["failed"], 0);
+    assert_eq!(v["conflicts"], 2);
+    assert_eq!(v["results"].as_array().unwrap().len(), 2);
+    for r in v["results"].as_array().unwrap() {
+        assert_eq!(r["status"], "conflict");
+    }
+}

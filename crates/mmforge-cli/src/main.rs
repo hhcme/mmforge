@@ -593,7 +593,18 @@ fn cmd_batch_convert(
 
     // --continue-on-error or zero conflicts: convert non-conflict files.
     if non_conflict.is_empty() {
-        eprintln!("error: no files to convert (all conflicted or empty input)");
+        // All inputs conflicted — produce unified summary and exit 1.
+        let results: Vec<BatchResult> = planned
+            .iter()
+            .map(|p| BatchResult {
+                file: p.input.display().to_string(),
+                output: p.output.display().to_string(),
+                status: "conflict".into(),
+                size: None,
+                error: p.conflict.clone(),
+            })
+            .collect();
+        print_batch_results(&results, format);
         std::process::exit(1);
     }
 

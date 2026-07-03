@@ -143,37 +143,73 @@ mmforge info model.step --json
 ```bash
 mmforge convert <INPUT> [OPTIONS]
 
-# 示例
-# 源格式 → LSM（文件格式冻结前为实验性输出）
-mmforge convert model.step -o model.lsm
+# 源格式 → LSM
+mmforge convert model.stl -o model.lsm
 
-# 源格式 → glTF
-mmforge convert model.step --format gltf -o model.gltf
+# 源格式 → LSMC (zstd 压缩)
+mmforge convert model.stl --compress zstd -o model.lsmc
 
-# 源格式 → STL（tessellation 后导出）
-mmforge convert model.step --format stl -o model.stl
-
-# 批量转换
-mmforge convert *.step --output-dir ./lsm/
-
-# 带精度控制的转换
-mmforge convert model.step -o model.stl --tessellation-quality high
-
-# 只转换结构树（不转换几何）
-mmforge convert model.step -o model.lsm --no-geometry
+# 默认输出 (使用输入文件名)
+mmforge convert model.stl                    # → model.lsm
+mmforge convert model.stl --compress zstd    # → model.lsmc
 ```
 
 选项：
 
 ```
 -o, --output <FILE>           输出文件路径
--f, --format <FORMAT>         输出格式 (lsm/gltf/stl/obj)
--d, --output-dir <DIR>        输出目录（批量模式）
-    --tessellation-quality    精度 (low/standard/high)
-    --no-geometry             不转换几何数据
-    --no-materials            不转换材质
-    --units <UNITS>           转换单位 (mm/cm/m/inch)
-    --progress                显示进度条
+    --compress <zstd>         使用 zstd 压缩输出 .lsmc
+    --tessellation-quality    精度 (low/standard/high)  [未实现]
+```
+
+### 3.4 batch-convert — 批量转换
+
+```bash
+mmforge batch-convert -o <DIR> [--compress zstd] [--format json] [--continue-on-error] <FILES...>
+
+# 批量转换到输出目录
+mmforge batch-convert -o out/ a.stl b.stl c.stl
+
+# 压缩批量
+mmforge batch-convert -o out/ --compress zstd *.stl
+
+# JSON 汇总
+mmforge batch-convert -o out/ --format json a.stl b.stl
+
+# 遇错继续
+mmforge batch-convert -o out/ --continue-on-error a.stl bad.stl
+```
+
+选项：
+
+```
+-o, --output-dir <DIR>        输出目录 (自动创建)
+    --compress <zstd>         使用 zstd 压缩 (输出 .lsmc)
+    --format <text|json>      汇总输出格式 (默认 text)
+    --continue-on-error       单文件失败后继续处理后续文件
+```
+
+**退出码**: 0 = 全部成功; 1 = 有错误或冲突。
+
+**输出冲突策略**:
+- 两个不同输入映射到同一输出文件名 → status=conflict
+- 输出文件已存在 → status=conflict
+- 默认 (无 --continue-on-error): 汇总冲突后不做转换，退出 1
+- --continue-on-error: 跳过冲突项，转换非冲突文件，最终退出 1 (如有冲突)
+
+**JSON 汇总字段**:
+
+```json
+{
+  "results": [
+    {"file":"a.stl","output":"out/a.lsm","status":"ok","size_bytes":561,"error":null},
+    {"file":"b.stl","output":"out/b.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with ..."}
+  ],
+  "total": 2,
+  "converted": 1,
+  "failed": 0,
+  "conflicts": 1
+}
 ```
 
 ### 3.4 validate — 验证文件
