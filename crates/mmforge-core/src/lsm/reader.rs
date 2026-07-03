@@ -27,6 +27,8 @@ pub enum ReadError {
     },
     /// Data in a section was corrupted.
     CorruptSection { section_type: u32, reason: String },
+    /// TOC is inconsistent (bad offset, implausible count).
+    CorruptToc { reason: String },
 }
 
 impl std::fmt::Display for ReadError {
@@ -47,6 +49,9 @@ impl std::fmt::Display for ReadError {
                 reason,
             } => {
                 write!(f, "corrupt section 0x{section_type:02X}: {reason}")
+            }
+            ReadError::CorruptToc { reason } => {
+                write!(f, "corrupt TOC: {reason}")
             }
         }
     }
@@ -105,16 +110,38 @@ pub fn read_lsm(r: &mut (impl Read + Seek)) -> Result<LsmModel> {
     let mut pad = [0u8; 40];
     r.read_exact(&mut pad)?;
 
+    // Validate TOC offset: must be ≥ 64 (past the file header).
+    if _toc_offset < 64 {
+        return Err(ReadError::CorruptToc {
+            reason: format!("TOC offset {_toc_offset} is inside the file header"),
+        });
+    }
+
     // Seek to TOC.
     r.seek(SeekFrom::Start(_toc_offset))?;
 
     let toc_count_total = read_u32(r)?;
+    if toc_count_total > 1024 {
+        return Err(ReadError::CorruptToc {
+            reason: format!("implausible TOC count {toc_count_total}"),
+        });
+    }
     let mut sections: Vec<SectionDesc> = Vec::with_capacity(toc_count_total as usize);
     for _ in 0..toc_count_total {
+        let st = read_u32(r)?;
+        let off = read_u64(r)?;
+        let len = read_u64(r)?;
+        // Section data must not reside inside the 64-byte file header.
+        if off < FILE_HEADER_SIZE as u64 {
+            return Err(ReadError::CorruptToc {
+                reason: format!("section 0x{st:02X} offset {off} is inside the file header"),
+            });
+        }
         sections.push(SectionDesc {
-            section_type: read_u32(r)?,
-            offset: read_u64(r)?,
-            length: read_u64(r)?,
+            section_type: st,
+            offset: off,
+            #[allow(dead_code)]
+            length: len,
         });
     }
 

@@ -93,6 +93,8 @@ fn cmd_info(file: &std::path::Path, format: OutputFormat) {
                 let bb = p.model.bounds();
                 let json = serde_json::json!({
                     "source_format": p.model.header.source_format,
+                    "source_path": p.model.header.source_path,
+                    "parser_version": p.model.header.parser_version,
                     "node_count": p.model.scene.nodes.len(),
                     "geometry_count": p.model.geometries.len(),
                     "material_count": p.model.materials.len(),
@@ -100,6 +102,12 @@ fn cmd_info(file: &std::path::Path, format: OutputFormat) {
                     "bounds": if bb.is_valid() {
                         serde_json::json!({"min":[bb.min.x,bb.min.y,bb.min.z],"max":[bb.max.x,bb.max.y,bb.max.z]})
                     } else { serde_json::Value::Null },
+                    "metadata": {
+                        "units": p.model.metadata.units,
+                        "author": p.model.metadata.author,
+                        "description": p.model.metadata.description,
+                    },
+                    "custom": p.model.metadata.custom,
                     "warnings": p.warnings.iter().map(|w| format!("{w:?}")).collect::<Vec<_>>(),
                 });
                 println!("{}", serde_json::to_string_pretty(&json).unwrap());
