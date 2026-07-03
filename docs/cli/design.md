@@ -194,8 +194,8 @@ mmforge batch-convert -o out/ --continue-on-error a.stl bad.stl
 **输出冲突策略**:
 - 两个不同输入映射到同一输出文件名 → status=conflict
 - 输出文件已存在 → status=conflict
-- 默认 (无 --continue-on-error): 汇总冲突后不做转换，退出 1
-- --continue-on-error: 跳过冲突项，转换非冲突文件，最终退出 1 (如有冲突)
+- 默认 (无 --continue-on-error): 所有冲突项列为 conflict，非冲突项列为 skipped，不做任何转换，退出 1
+- --continue-on-error: 跳过冲突项，转换非冲突文件，最终退出 1 (如有冲突或错误)
 
 **JSON 汇总字段**:
 
@@ -203,14 +203,22 @@ mmforge batch-convert -o out/ --continue-on-error a.stl bad.stl
 {
   "results": [
     {"file":"a.stl","output":"out/a.lsm","status":"ok","size_bytes":561,"error":null},
-    {"file":"b.stl","output":"out/b.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with ..."}
+    {"file":"b.stl","output":"out/b.lsm","status":"conflict","size_bytes":null,"error":"output path conflicts with ..."},
+    {"file":"c.stl","output":"out/c.lsm","status":"skipped","size_bytes":null,"error":null}
   ],
-  "total": 2,
+  "total": 3,
   "converted": 1,
   "failed": 0,
-  "conflicts": 1
+  "conflicts": 1,
+  "skipped": 1
 }
 ```
+
+**Status values**:
+- `ok` — converted successfully
+- `error` — parse or write failed
+- `conflict` — output path collision or existing file
+- `skipped` — not converted because another input in the batch had a conflict (only without `--continue-on-error`)
 
 ### 3.4 validate — 验证文件
 
