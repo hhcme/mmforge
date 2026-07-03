@@ -106,3 +106,67 @@ Unknown extension sections (≥0x10) continue to be silently skipped.
 - Streaming section reader with length-capped read (prevent OOM from malformed
   length fields)
 - Add committed `.lsm` fixtures from IGES/DXF/STEP source files
+
+## 4. Review Fixes (commit `59367d8`)
+
+### Section length bounds enforcement
+
+`SectionDesc.length` is no longer `#[allow(dead_code)]`.  Every section entry
+is validated:
+- `offset + length ≤ file_size` (with `checked_add` overflow guard)
+- `offset` must not overlap the TOC region (`offset ≥ toc_offset + toc_size`)
+- `offset` must be ≥ 64 (past the file header)
+
+New `calculate_toc_size()` computes the precise TOC span for overlap checking.
+
+### `LimitedReader` — bounded section reads
+
+Each section is read through a `LimitedReader` wrapper that caps the total
+readable bytes to the declared `length`.  Section parsers that attempt to read
+past the declared boundary get an EOF (`Ok(0)`), preventing them from consuming
+data from adjacent sections.
+
+### Duplicate core sections rejected
+
+Previously duplicate core sections silently overwrote each other (last-wins).
+Now they raise `ReadError::DuplicateSection { section_type, name }`.
+
+### Malformed input tests (+5 new)
+
+| Test | Input | Expected |
+|------|-------|----------|
+| `section_offset_crossing_into_toc_rejected` | Section at TOC offset | "overlaps TOC" |
+| `section_offset_plus_length_exceeds_file` | Section length 99999 in 200B file | "exceeds file size" |
+| `section_offset_plus_length_overflow` | `u64::MAX-10 + 20` overflow | "exceeds file size" |
+| `duplicate_core_section_rejected` | Two Header sections | "duplicate core section" |
+| `section_limited_reader_stops_at_boundary` | Round-trip validates LimitedReader | OK |
+
+### Golden test: byte-for-byte hash
+
+Changed from field-level assertions to stable 64-bit hash comparison:
+1. Reconstruct `golden_model()` using `ModelBuilder`
+2. `write_lsm` to buffer
+3. `hash_bytes(&reconstructed)` vs `hash_bytes(&committed_golden_file)`
+4. Any binary format change = hash mismatch
+
+### validate --format json metadata
+
+`mmforge validate --format json` now includes:
+```json
+{
+  "source_format": "STL",
+  "source_path": "fixture/sample.stl",
+  "metadata": {"units": "mm", "author": "...", "description": "..."},
+  "custom": {"generator": "mmforge-golden-gen"},
+  "node_count": 2,
+  "triangle_count": 1
+}
+```
+
+### Updated test counts
+
+| Test | Prev | Current | Δ |
+|------|------|---------|---|
+| LSM (core) | 15 | **19** | +4 |
+| Total locked | 304 | **308** |
+| Total OCCT | 310 | **314** |
