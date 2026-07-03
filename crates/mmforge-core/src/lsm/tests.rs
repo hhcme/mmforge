@@ -100,6 +100,18 @@ mod tests {
     }
 
     #[test]
+    fn metadata_units_preserved() {
+        let mut model = sample_model();
+        model.metadata.units = Some("mm".into());
+        let mut buf = Vec::new();
+        let mut cursor = std::io::Cursor::new(&mut buf);
+        write_lsm(&model, &mut cursor).unwrap();
+
+        let loaded = read_lsm(&mut std::io::Cursor::new(&buf)).unwrap();
+        assert_eq!(loaded.metadata.units.as_deref(), Some("mm"));
+    }
+
+    #[test]
     fn unknown_section_skipped() {
         let model = sample_model();
         let mut buf = Vec::new();

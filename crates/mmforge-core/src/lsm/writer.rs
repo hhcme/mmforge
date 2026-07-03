@@ -55,7 +55,6 @@ fn write_header_section(
     write_string(w, &model.header.source_format)?;
     write_string(w, model.header.source_path.as_deref().unwrap_or(""))?;
     write_string(w, &model.header.parser_version)?;
-    write_string(w, model.metadata.units.as_deref().unwrap_or(""))?;
     let length = w.stream_position()? - offset;
     toc.push(TocEntry {
         section_type: section::HEADER,
@@ -222,6 +221,7 @@ fn write_metadata_section(
     toc: &mut Vec<TocEntry>,
 ) -> std::io::Result<()> {
     let offset = w.stream_position()?;
+    write_string(w, metadata.units.as_deref().unwrap_or(""))?;
     write_string(w, metadata.author.as_deref().unwrap_or(""))?;
     write_string(w, metadata.description.as_deref().unwrap_or(""))?;
     write_array_header(w, metadata.custom.len() as u32)?;

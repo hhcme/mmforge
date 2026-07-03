@@ -546,7 +546,9 @@ name = "mmforge-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "glam",
  "mmforge-core",
+ "serde_json",
 ]
 
 [[package]]

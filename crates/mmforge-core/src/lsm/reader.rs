@@ -171,7 +171,6 @@ fn read_header_section(r: &mut impl Read) -> Result<ModelHeader> {
     let source_format = read_string(r)?;
     let source_path = read_string(r)?;
     let parser_version = read_string(r)?;
-    let _units_count = read_u32(r)?;
     Ok(ModelHeader {
         source_format,
         source_path: if source_path.is_empty() {
@@ -346,6 +345,8 @@ fn read_material(r: &mut impl Read) -> Result<Material> {
 }
 
 fn read_metadata_section(r: &mut impl Read) -> Result<Metadata> {
+    let units = read_string(r)?;
+    let units = if units.is_empty() { None } else { Some(units) };
     let author = read_string(r)?;
     let description = read_string(r)?;
     let description = if description.is_empty() {
@@ -361,6 +362,7 @@ fn read_metadata_section(r: &mut impl Read) -> Result<Metadata> {
         custom.insert(k, v);
     }
     Ok(Metadata {
+        units,
         author: if author.is_empty() {
             None
         } else {
@@ -368,7 +370,6 @@ fn read_metadata_section(r: &mut impl Read) -> Result<Metadata> {
         },
         description,
         custom,
-        units: None,
     })
 }
 

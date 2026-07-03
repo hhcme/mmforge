@@ -105,7 +105,10 @@ fn cmd_info(file: &std::path::Path, format: OutputFormat) {
                 println!("{}", serde_json::to_string_pretty(&json).unwrap());
             }
         },
-        Err(e) => eprintln!("error: {e}"),
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -243,17 +246,38 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
 
 fn parse_stl(path: &std::path::Path) -> Result<Parsed, String> {
     let data = std::fs::read(path).map_err(|e| format!("read: {e}"))?;
-    let is_binary = data.len() >= 84
-        && &data[0..5] == b"solid"
-        && !std::str::from_utf8(&data[0..80])
-            .unwrap_or("")
-            .contains("facet");
 
-    if is_binary {
+    if binary_length_valid(&data) {
         parse_binary_stl(&data)
-    } else {
+    } else if is_probably_ascii(&data) {
         parse_ascii_stl(&data)
+    } else {
+        Err("not a valid STL file (neither binary nor ASCII)".into())
     }
+}
+
+/// Check if the file length matches the binary STL formula:
+///   file_size == 84 + triangle_count * 50
+/// with up to 80 bytes of trailing padding tolerated.
+fn binary_length_valid(data: &[u8]) -> bool {
+    if data.len() < 84 {
+        return false;
+    }
+    let tri_count = u32::from_le_bytes([data[80], data[81], data[82], data[83]]) as usize;
+    if tri_count == 0 || tri_count >= 100_000_000 {
+        return false;
+    }
+    let expected = 84 + tri_count * 50;
+    data.len() >= expected && (data.len() - expected) <= 80
+}
+
+/// ASCII STL files start with "solid" (case-insensitive).
+fn is_probably_ascii(data: &[u8]) -> bool {
+    if data.len() < 5 {
+        return false;
+    }
+    let prefix = &data[..5];
+    prefix.eq_ignore_ascii_case(b"solid")
 }
 
 fn parse_binary_stl(data: &[u8]) -> Result<Parsed, String> {
