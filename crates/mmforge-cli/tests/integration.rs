@@ -578,3 +578,45 @@ fn batch_convert_partial_failure_json() {
     assert_eq!(v["results"][0]["status"], "ok");
     assert_eq!(v["results"][1]["status"], "error");
 }
+
+/// Two files from different directories with same stem must trigger conflict.
+#[test]
+fn batch_convert_output_conflict_detected() {
+    let a = temp_stl(1);
+    // Create a second file with the same stem in a different dir.
+    let sub = tempfile::tempdir().unwrap();
+    let b_path = sub.path().join(a.path().file_name().unwrap());
+    std::fs::copy(a.path(), &b_path).unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+
+    let out = Command::new(mmforge_bin())
+        .args([
+            "batch-convert",
+            "-o",
+            out_dir.path().to_str().unwrap(),
+            a.path().to_str().unwrap(),
+            b_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("CONFLICT"));
+}
+
+/// Zero inputs must exit non-zero and not create output dir.
+#[test]
+fn batch_convert_zero_inputs_exits_nonzero() {
+    let out_dir = tempfile::tempdir().unwrap();
+    // Start with empty dir, then remove it — batch-convert shouldn't recreate.
+    let sub = out_dir.path().join("sub");
+    let out = Command::new(mmforge_bin())
+        .args(["batch-convert", "-o", sub.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        !sub.exists(),
+        "output dir must not be created for zero inputs"
+    );
+}

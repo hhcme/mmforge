@@ -2,23 +2,63 @@
 
 Command-line interface for MMForge model inspection and conversion.
 
-## Current Commands
+## Commands
 
-```
-mmforge version    Display version and build information
-```
+### `mmforge version`
+Display version and build information.
 
-## Planned Commands (Phase 7)
+### `mmforge info <file> [--format json]`
+Detect format, parse, and print model metadata and statistics.
+Supports `.stl` (ASCII/binary), `.lsm`, `.lsmc`, `.step` (stub), `.iges` (stub), `.dxf` (stub).
+Exit code 0 on success, 1 on parse error.
 
-```
-mmforge info       Detect format and print model metadata/stats
-mmforge validate   Parse and validate references, topology, warnings
-mmforge convert    Convert between formats via LSM runtime model
-mmforge benchmark  Measure parse/tessellate/render-packet timings
+### `mmforge validate <file> [--format json]`
+Parse, validate references, and report issues.
+Exit code 0 if valid, 1 if issues or parse error.
+
+### `mmforge convert <file> [-o output] [--compress zstd]`
+Convert a source file to `.lsm` (or `.lsmc` with `--compress zstd`).
+Default output: `<file>.lsm`.  `--compress` requires `.lsmc` output extension.
+
+### `mmforge benchmark <file> [-i N] [--format json]`
+Benchmark parse times over N iterations (default 5).
+Reports min, max, median, avg in milliseconds.
+
+### `mmforge batch-convert -o <dir> [--compress zstd] [--format json] [--continue-on-error] <files...>`
+Batch-convert multiple files into a single output directory.
+
+| Option | Description |
+|--------|-------------|
+| `-o <dir>` | Output directory (created automatically) |
+| `--compress zstd` | Produce compressed `.lsmc` output |
+| `--format json` | Machine-readable JSON summary |
+| `--continue-on-error` | Continue processing after individual failures |
+
+Output naming: `input.stl` -> `<dir>/input.lsm` (uses file stem).
+
+**Exit codes**: 0 = all converted, 1 = errors or conflicts.
+
+**Conflict detection**: If two different input files map to the same output
+name (e.g., `a/d.stl` and `b/d.stl`), the command detects the conflict before
+any conversion and exits with an error.  Use `--continue-on-error` to skip
+conflicting pairs and continue with non-conflicting files.
+
+**JSON summary fields**:
+
+```json
+{
+  "results": [
+    {"file": "...", "output": "...", "status": "ok|error|conflict", "size_bytes": N, "error": null}
+  ],
+  "total": 3,
+  "converted": 2,
+  "failed": 1
+}
 ```
 
 ## Usage
 
 ```bash
-cargo run --bin mmforge -- version
+cargo run --bin mmforge -- info model.stl
+cargo run --bin mmforge -- batch-convert -o out/ model1.stl model2.stl
 ```

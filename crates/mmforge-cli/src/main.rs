@@ -511,10 +511,10 @@ fn cmd_batch_convert(
     format: OutputFormat,
     continue_on_error: bool,
 ) {
-    std::fs::create_dir_all(output_dir).unwrap_or_else(|e| {
-        eprintln!("error: cannot create output directory: {e}");
+    if files.is_empty() {
+        eprintln!("error: no input files specified");
         std::process::exit(1);
-    });
+    }
 
     let compress_ext = match compress {
         Some("zstd") | Some("zst") => "lsmc",
@@ -525,8 +525,11 @@ fn cmd_batch_convert(
         }
     };
 
-    let mut results: Vec<BatchResult> = Vec::new();
-    let mut failed = false;
+    // Pre-compute all output paths and detect conflicts.
+    let mut planned: Vec<(&PathBuf, std::path::PathBuf)> = Vec::with_capacity(files.len());
+    let mut seen: std::collections::HashMap<std::path::PathBuf, usize> =
+        std::collections::HashMap::new();
+    let mut has_conflict = false;
 
     for input in files {
         let stem = input
@@ -534,8 +537,34 @@ fn cmd_batch_convert(
             .and_then(|s| s.to_str())
             .unwrap_or("output");
         let output = output_dir.join(format!("{stem}.{compress_ext}"));
+        if let Some(&prev_idx) = seen.get(&output) {
+            has_conflict = true;
+            eprintln!(
+                "CONFLICT {} → {} (already mapped from {})",
+                input.display(),
+                output.display(),
+                files[prev_idx].display()
+            );
+        } else {
+            seen.insert(output.clone(), planned.len());
+        }
+        planned.push((input, output));
+    }
+    if has_conflict {
+        eprintln!("error: output file conflicts detected — resolve before continuing");
+        std::process::exit(1);
+    }
 
-        match convert_one(input, &output, compress.is_some()) {
+    std::fs::create_dir_all(output_dir).unwrap_or_else(|e| {
+        eprintln!("error: cannot create output directory: {e}");
+        std::process::exit(1);
+    });
+
+    let mut results: Vec<BatchResult> = Vec::new();
+    let mut failed = false;
+
+    for (input, output) in &planned {
+        match convert_one(input, output, compress.is_some()) {
             Ok(size) => {
                 results.push(BatchResult {
                     file: input.display().to_string(),
