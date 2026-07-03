@@ -93,8 +93,7 @@ Unknown extension sections (≥0x10) continue to be silently skipped.
 
 ## Known Limitations
 
-- **No section length bound check** — a section claiming 1 TB of data would
-  OOM on read.  A streaming reader with length-capped read would address this.
+- **Section length bound check** — `offset + length ≤ file_size` with overflow guard; `LimitedReader` enforces per-section read cap; offset must not overlap TOC region. ✅ Fixed in Round 4.
 - **No CRC or checksum** — bit flips in the TOC or section data are not detected.
 - **Drawing2D geometry** is still opaque in v1 (stub serialization).
 - **Compressed `.lsmc`** is still trait-only; no LZ4/ZSTD codec shipped.

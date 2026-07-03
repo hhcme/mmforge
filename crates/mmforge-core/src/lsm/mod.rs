@@ -28,6 +28,7 @@
 mod binary;
 pub mod compress;
 pub mod constants;
+pub mod lsmc;
 pub mod reader;
 #[cfg(test)]
 mod tests;

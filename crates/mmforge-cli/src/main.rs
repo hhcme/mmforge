@@ -32,6 +32,8 @@ enum Commands {
         file: PathBuf,
         #[arg(short, long)]
         output: Option<PathBuf>,
+        #[arg(long)]
+        compress: Option<String>,
     },
     Benchmark {
         file: PathBuf,
@@ -54,7 +56,11 @@ fn main() {
         Commands::Version => cmd_version(),
         Commands::Info { file, format } => cmd_info(&file, format),
         Commands::Validate { file, format } => cmd_validate(&file, format),
-        Commands::Convert { file, output } => cmd_convert(&file, output.as_deref()),
+        Commands::Convert {
+            file,
+            output,
+            compress,
+        } => cmd_convert(&file, output.as_deref(), compress.as_deref()),
         Commands::Benchmark {
             file,
             iterations,
@@ -169,7 +175,7 @@ fn cmd_validate(file: &std::path::Path, format: OutputFormat) {
     }
 }
 
-fn cmd_convert(file: &std::path::Path, output: Option<&std::path::Path>) {
+fn cmd_convert(file: &std::path::Path, output: Option<&std::path::Path>, compress: Option<&str>) {
     let parsed = match detect_and_parse(file) {
         Ok(p) => p,
         Err(e) => {
@@ -177,17 +183,29 @@ fn cmd_convert(file: &std::path::Path, output: Option<&std::path::Path>) {
             std::process::exit(1);
         }
     };
+    let default_ext = match compress {
+        Some("zstd") | Some("zst") => "lsmc",
+        _ => "lsm",
+    };
     let out = output
         .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| file.with_extension("lsm"));
+        .unwrap_or_else(|| file.with_extension(default_ext));
     let mut f = std::fs::File::create(&out).unwrap_or_else(|e| {
         eprintln!("error creating {}: {e}", out.display());
         std::process::exit(1)
     });
-    let size = mmforge_core::lsm::write_lsm(&parsed.model, &mut f).unwrap_or_else(|e| {
-        eprintln!("error writing LSM: {e}");
-        std::process::exit(1)
-    });
+
+    let size = if out.extension().and_then(|e| e.to_str()) == Some("lsmc") {
+        mmforge_core::lsm::lsmc::write_lsmc(&parsed.model, &mut f).unwrap_or_else(|e| {
+            eprintln!("error writing LSMC: {e}");
+            std::process::exit(1)
+        })
+    } else {
+        mmforge_core::lsm::write_lsm(&parsed.model, &mut f).unwrap_or_else(|e| {
+            eprintln!("error writing LSM: {e}");
+            std::process::exit(1)
+        })
+    };
     println!("wrote {} ({size} bytes)", out.display());
 }
 
@@ -241,7 +259,7 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
         .to_lowercase();
 
     // LSM binary format — read directly, no format detection needed.
-    if ext == "lsm" {
+    if ext == "lsm" || ext == "lsmc" {
         return parse_lsm(path);
     }
 
@@ -275,9 +293,17 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
 }
 
 fn parse_lsm(path: &std::path::Path) -> Result<Parsed, String> {
-    let mut file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
-    let mut reader = std::io::BufReader::new(&mut file);
-    let model = mmforge_core::lsm::read_lsm(&mut reader).map_err(|e| format!("lsm read: {e}"))?;
+    let data = std::fs::read(path).map_err(|e| format!("open: {e}"))?;
+    // If magic is LSMC, decompress first.
+    let model = if data.len() >= 4 && &data[..4] == b"LSMC" {
+        let dec = mmforge_core::lsm::lsmc::read_lsmc_decompressed(&mut std::io::Cursor::new(&data))
+            .map_err(|e| format!("lsmc read: {e}"))?;
+        mmforge_core::lsm::read_lsm(&mut std::io::Cursor::new(&dec))
+            .map_err(|e| format!("lsm read: {e}"))?
+    } else {
+        mmforge_core::lsm::read_lsm(&mut std::io::Cursor::new(&data))
+            .map_err(|e| format!("lsm read: {e}"))?
+    };
     Ok(Parsed {
         model,
         warnings: vec![],
@@ -479,7 +505,7 @@ mod tests {
 
         // Convert
         let lsm_path = stl.path().with_extension("lsm");
-        cmd_convert(stl.path(), Some(&lsm_path));
+        cmd_convert(stl.path(), Some(&lsm_path), None);
         assert!(lsm_path.exists());
 
         // Info on LSM
@@ -501,7 +527,7 @@ mod tests {
     fn lsm_info_json_output() {
         let f = write_temp_stl_ascii();
         let lsm_path = f.path().with_extension("lsm");
-        cmd_convert(f.path(), Some(&lsm_path));
+        cmd_convert(f.path(), Some(&lsm_path), None);
 
         let p = detect_and_parse(&lsm_path).unwrap();
         let bb = p.model.bounds();
@@ -521,7 +547,7 @@ mod tests {
     fn lsm_validate_clean() {
         let f = write_temp_stl_ascii();
         let lsm_path = f.path().with_extension("lsm");
-        cmd_convert(f.path(), Some(&lsm_path));
+        cmd_convert(f.path(), Some(&lsm_path), None);
 
         let p = detect_and_parse(&lsm_path).unwrap();
         assert!(p.model.validate_references().is_empty());

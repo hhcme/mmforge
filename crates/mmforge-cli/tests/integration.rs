@@ -223,3 +223,114 @@ fn benchmark_json_output_stable() {
     let _: serde_json::Value =
         serde_json::from_str(&stdout).expect("benchmark output should be valid JSON");
 }
+
+// ----------------------------------------------------------------
+// LSMC compressed format tests
+// ----------------------------------------------------------------
+
+#[test]
+fn convert_to_lsmc_then_info_exit_zero() {
+    let stl = temp_stl(1);
+    let lsmc_path = stl.path().with_extension("lsmc");
+
+    let cvt = Command::new(mmforge_bin())
+        .args([
+            "convert",
+            stl.path().to_str().unwrap(),
+            "--compress",
+            "zstd",
+            "-o",
+            lsmc_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        cvt.status.success(),
+        "convert to lsmc failed: {}",
+        String::from_utf8_lossy(&cvt.stderr)
+    );
+
+    let info = Command::new(mmforge_bin())
+        .args(["info", lsmc_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        info.status.success(),
+        "lsmc info failed: {}",
+        String::from_utf8_lossy(&info.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&info.stdout);
+    assert!(stdout.contains("STL"));
+    assert!(stdout.contains("triangles: 1"));
+}
+
+#[test]
+fn convert_to_lsmc_then_validate_json() {
+    let stl = temp_stl(1);
+    let lsmc_path = stl.path().with_extension("lsmc");
+
+    Command::new(mmforge_bin())
+        .args([
+            "convert",
+            stl.path().to_str().unwrap(),
+            "--compress",
+            "zstd",
+            "-o",
+            lsmc_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    let out = Command::new(mmforge_bin())
+        .args(["validate", lsmc_path.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert_eq!(v["valid"], true);
+    assert_eq!(v["triangle_count"], 1);
+}
+
+#[test]
+fn lsmc_bad_magic_exit_nonzero() {
+    let mut f = tempfile::Builder::new().suffix(".lsmc").tempfile().unwrap();
+    f.write_all(b"XXXXjunkcompress").unwrap();
+    let out = Command::new(mmforge_bin())
+        .args(["info", f.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("bad magic") || stderr.contains("error"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn source_to_lsmc_to_info_json_round_trip() {
+    let stl = temp_stl(2);
+    let lsmc_path = stl.path().with_extension("lsmc");
+
+    Command::new(mmforge_bin())
+        .args([
+            "convert",
+            stl.path().to_str().unwrap(),
+            "--compress",
+            "zstd",
+            "-o",
+            lsmc_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    let out = Command::new(mmforge_bin())
+        .args(["info", lsmc_path.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert_eq!(v["triangle_count"], 2);
+    assert_eq!(v["source_format"], "STL");
+    assert!(v["bounds"]["min"].is_array());
+}
