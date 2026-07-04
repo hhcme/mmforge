@@ -12,7 +12,7 @@ struct ContentView: View {
         HSplitView {
             if sidebarVisible {
                 StructureSidebar(viewModel: viewModel)
-                    .frame(minWidth: 180, idealWidth: 220, maxWidth: 300)
+                    .frame(minWidth: 180, idealWidth: 220, maxWidth: 320)
             }
 
             ViewportContainer(viewModel: viewModel)
@@ -27,29 +27,33 @@ struct ContentView: View {
             }
         }
         .toolbar {
-            ToolbarItemGroup(placement: .navigation) {
+            // Navigation toolbar items
+            ToolbarItem(placement: .navigation) {
                 Button(action: { sidebarVisible.toggle() }) {
-                    Label("Toggle Sidebar", systemImage: "sidebar.left")
+                    Label("Sidebar", systemImage: "sidebar.left")
                 }
                 .help("Show or hide the structure sidebar")
-                .keyboardShortcut("s", modifiers: .command)
+                .keyboardShortcut("S", modifiers: .command)
                 .accessibilityLabel(sidebarVisible ? "Hide sidebar" : "Show sidebar")
             }
 
+            // Principal toolbar items (centered)
             ToolbarItemGroup(placement: .principal) {
+                // Camera controls
                 Button(action: { viewModel.fitToView() }) {
                     Label("Fit", systemImage: "arrow.up.left.and.arrow.down.right")
                 }
-                .help("Fit the model to the viewport (F)")
+                .help("Fit the model to the viewport (⌘F)")
                 .keyboardShortcut("f", modifiers: .command)
                 .accessibilityLabel("Fit model to viewport")
 
                 Button(action: { viewModel.resetCamera() }) {
                     Label("Home", systemImage: "house")
                 }
-                .help("Reset camera to default view (H)")
+                .help("Reset camera to default view")
                 .accessibilityLabel("Reset camera")
 
+                // Named views
                 Menu {
                     Button("Front") { viewModel.setNamedView(.front) }
                     Button("Back") { viewModel.setNamedView(.back) }
@@ -59,17 +63,27 @@ struct ContentView: View {
                     Button("Bottom") { viewModel.setNamedView(.bottom) }
                     Divider()
                     Button("Isometric") { viewModel.setNamedView(.isometric) }
+                    Divider()
+                    Button("Perspective/Orthographic") {
+                        viewModel.toggleProjection()
+                    }
+                    .keyboardShortcut("P", modifiers: [.command, .shift])
                 } label: {
                     Label("View", systemImage: "cube")
                 }
                 .help("Standard view directions")
                 .accessibilityLabel("Standard view directions")
 
-                Picker("", selection: $viewModel.renderMode) {
-                    Image(systemName: "cube").tag(RenderMode.solid)
-                    Image(systemName: "square.dashed").tag(RenderMode.wireframe)
-                    Image(systemName: "cube.fill").tag(RenderMode.solidWireframe)
-                    Image(systemName: "cube.transparent").tag(RenderMode.transparent)
+                // Render mode picker with labels per macOS HIG
+                Picker("Render Mode", selection: $viewModel.renderMode) {
+                    Label("Solid", systemImage: "cube")
+                        .tag(RenderMode.solid)
+                    Label("Wireframe", systemImage: "square.dashed")
+                        .tag(RenderMode.wireframe)
+                    Label("Solid+Wire", systemImage: "cube.fill")
+                        .tag(RenderMode.solidWireframe)
+                    Label("X-Ray", systemImage: "cube.transparent")
+                        .tag(RenderMode.transparent)
                 }
                 .pickerStyle(.segmented)
                 .help("Render mode: Solid / Wireframe / Solid+Wire / Transparent")
@@ -78,20 +92,41 @@ struct ContentView: View {
                     viewModel.setRenderMode(newMode)
                 }
 
+                // Measurement mode toggle
                 Button(action: { viewModel.toggleMeasurementMode() }) {
-                    Image(systemName: viewModel.measurementMode ? "ruler.fill" : "ruler")
+                    Label("Measure", systemImage: viewModel.measurementMode ? "ruler.fill" : "ruler")
                 }
-                .help("Toggle point-to-point measurement mode")
+                .help("Toggle point-to-point measurement mode (⌘M)")
+                .keyboardShortcut("M", modifiers: .command)
                 .accessibilityLabel(viewModel.measurementMode
                                     ? "Exit measurement mode" : "Enter measurement mode")
             }
 
+            // Primary action toolbar items (right side)
             ToolbarItemGroup(placement: .primaryAction) {
-                Button(action: { inspectorVisible.toggle() }) {
-                    Label("Toggle Inspector", systemImage: "sidebar.right")
+                // Clipping toggle
+                Button(action: { viewModel.toggleClipping() }) {
+                    Label("Clip", systemImage: viewModel.clipEnabled ? "scissors.badge.ellipsis" : "scissors")
                 }
-                .help("Show or hide the inspector panel")
-                .keyboardShortcut("i", modifiers: .command)
+                .help("Toggle clipping plane (⌘K)")
+                .keyboardShortcut("K", modifiers: .command)
+                .accessibilityLabel(viewModel.clipEnabled ? "Disable clipping" : "Enable clipping")
+
+                // Export
+                Button(action: { viewModel.exportImage() }) {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .help("Export current viewport as image (⌘E)")
+                .keyboardShortcut("e", modifiers: .command)
+                .disabled(!viewModel.isLoaded)
+                .accessibilityLabel("Export image")
+
+                // Inspector toggle
+                Button(action: { inspectorVisible.toggle() }) {
+                    Label("Inspector", systemImage: "sidebar.right")
+                }
+                .help("Show or hide the inspector panel (⌘I)")
+                .keyboardShortcut("I", modifiers: .command)
                 .accessibilityLabel(inspectorVisible ? "Hide inspector" : "Show inspector")
             }
         }
@@ -129,35 +164,5 @@ struct ContentView: View {
             }
         }
         return true
-    }
-}
-
-// MARK: - Selection / Visibility menu commands
-
-struct SelectionCommands: View {
-    @ObservedObject var viewModel: DocumentViewModel
-
-    var body: some View {
-        Group {
-            Button("Select Root") {
-                viewModel.selectNode(0)
-            }
-            .keyboardShortcut("a", modifiers: [.command, .shift])
-            .disabled(!viewModel.isLoaded)
-
-            Divider()
-
-            Button("Hide Selection") {
-                viewModel.hideSelectedNode()
-            }
-            .keyboardShortcut("h", modifiers: .command)
-            .disabled(viewModel.selectedIndex == nil)
-
-            Button("Show All") {
-                viewModel.setAllNodesVisible()
-            }
-            .keyboardShortcut("h", modifiers: [.command, .shift])
-            .disabled(viewModel.hiddenNodeIndices.isEmpty)
-        }
     }
 }

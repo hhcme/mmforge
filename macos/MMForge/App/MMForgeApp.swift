@@ -145,7 +145,7 @@ struct CameraCommandsView: View {
             Button("Toggle Perspective/Orthographic") {
                 viewModel?.toggleProjection()
             }
-            .keyboardShortcut("P", modifiers: .command)
+            .keyboardShortcut("P", modifiers: [.command, .shift])
         }
     }
 }

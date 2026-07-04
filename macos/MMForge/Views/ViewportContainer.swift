@@ -16,7 +16,12 @@ struct ViewportContainer: View {
             case .empty:
                 EmptyStateView()
             case .loading:
-                LoadingStateView()
+                LoadingStateView(
+                    stage: viewModel.parseStage,
+                    progress: viewModel.parseProgress,
+                    onCancel: { viewModel.cancelParse() },
+                    fileExtension: viewModel.loadingFileExtension
+                )
             case .loaded:
                 if viewModel.is2DDrawing {
                     Drawing2DViewRepresentable(
@@ -64,15 +69,80 @@ struct EmptyStateView: View {
 }
 
 struct LoadingStateView: View {
+    let stage: String
+    let progress: Double
+    let onCancel: (() -> Void)?
+    let fileExtension: String
+
+    init(stage: String = "", progress: Double = 0,
+         onCancel: (() -> Void)? = nil, fileExtension: String = "step") {
+        self.stage = stage
+        self.progress = progress
+        self.onCancel = onCancel
+        self.fileExtension = fileExtension
+    }
+
+    private var formatName: String {
+        switch fileExtension.lowercased() {
+        case "step", "stp": return "STEP"
+        case "iges", "igs": return "IGES"
+        case "stl": return "STL"
+        case "gltf", "glb": return "glTF"
+        case "dxf": return "DXF"
+        default: return fileExtension.uppercased()
+        }
+    }
+
     var body: some View {
         VStack(spacing: 16) {
-            ProgressView()
-                .scaleEffect(1.5)
-            Text("Parsing STEP file…")
-                .font(.body)
+            Spacer()
+
+            Image(systemName: "gearshape.arrow.triangle.2.circlepath")
+                .font(.system(size: 36))
                 .foregroundStyle(.secondary)
+                .symbolEffect(.pulse, options: .repeating)
+
+            VStack(spacing: 4) {
+                Text("Opening \(formatName) File")
+                    .font(.title3)
+                    .foregroundStyle(.primary)
+
+                if !stage.isEmpty {
+                    Text(stage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if progress > 0 {
+                VStack(spacing: 6) {
+                    ProgressView(value: progress, total: 1.0)
+                        .frame(maxWidth: 280)
+                        .controlSize(.small)
+                    Text("\(Int(progress * 100))%")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                }
+                .accessibilityLabel("\(Int(progress * 100)) percent complete")
+            } else {
+                ProgressView()
+                    .scaleEffect(1.0)
+                    .controlSize(.small)
+            }
+
+            if let onCancel {
+                Button("Cancel") {
+                    onCancel()
+                }
+                .keyboardShortcut(.escape, modifiers: [])
+                .disabled(progress >= 1.0 && !stage.isEmpty)
+            }
+
+            Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityLabel("Loading \(formatName) file")
     }
 }
 

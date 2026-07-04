@@ -7,27 +7,38 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A10001 /* MMForgeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10001; };
-		A10002 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10002; };
-		A10003 /* MMForgeDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10003; };
-		A10004 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10004; };
-		A10005 /* StructureSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10005; };
-		A10006 /* InspectorPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10006; };
-		A10007 /* ViewportContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10007; };
-		A10008 /* MetalViewPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10008; };
-		A10009 /* RustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10009; };
-		A10010 /* Colors.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10010; };
-		A10011 /* MetalRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10013; };
-		A10012 /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = B10014; };
-		A10013 /* Picking.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10016; };
-		A10014 /* PickingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10017; };
-		A10015 /* SectionFill.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10018; };
-		A10016 /* DrawingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10019; };
-		A10017 /* TransformTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10020; };
-		A10018 /* Annotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10021; };
-		A10019 /* AnnotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10022; };
-		A10020 /* AsyncParseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10023; };
+		A10001 /* MMForgeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10001 /* MMForgeApp.swift */; };
+		A10002 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10002 /* AppDelegate.swift */; };
+		A10003 /* MMForgeDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10003 /* MMForgeDocument.swift */; };
+		A10004 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10004 /* ContentView.swift */; };
+		A10005 /* StructureSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10005 /* StructureSidebar.swift */; };
+		A10006 /* InspectorPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10006 /* InspectorPanel.swift */; };
+		A10007 /* ViewportContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10007 /* ViewportContainer.swift */; };
+		A10008 /* MetalViewPlaceholder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10008 /* MetalViewPlaceholder.swift */; };
+		A10009 /* RustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10009 /* RustBridge.swift */; };
+		A10010 /* Colors.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10010 /* Colors.swift */; };
+		A10011 /* MetalRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10013 /* MetalRenderer.swift */; };
+		A10012 /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = B10014 /* Shaders.metal */; };
+		A10013 /* Picking.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10016 /* Picking.swift */; };
+		A10014 /* PickingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10017 /* PickingTests.swift */; };
+		A10015 /* SectionFill.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10018 /* SectionFill.swift */; };
+		A10016 /* DrawingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10019 /* DrawingView.swift */; };
+		A10017 /* TransformTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10020 /* TransformTests.swift */; };
+		A10018 /* Annotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10021 /* Annotation.swift */; };
+		A10019 /* AnnotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10022 /* AnnotationTests.swift */; };
+		A10020 /* AsyncParseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10023 /* AsyncParseTests.swift */; };
+		A10022 /* ProductizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10026 /* ProductizationTests.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		F1000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F10002 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F10001;
+			remoteInfo = MMForge;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		B10001 /* MMForgeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MMForgeApp.swift; sourceTree = "<group>"; };
@@ -44,6 +55,7 @@
 		B10012 /* MMForge-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "MMForge-Bridging-Header.h"; sourceTree = "<group>"; };
 		B10013 /* MetalRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalRenderer.swift; sourceTree = "<group>"; };
 		B10014 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
+		B10015 /* mmforge_bridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = mmforge_bridge.h; sourceTree = "<group>"; };
 		B10016 /* Picking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Picking.swift; sourceTree = "<group>"; };
 		B10017 /* PickingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickingTests.swift; sourceTree = "<group>"; };
 		B10018 /* SectionFill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionFill.swift; sourceTree = "<group>"; };
@@ -52,7 +64,7 @@
 		B10021 /* Annotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Annotation.swift; sourceTree = "<group>"; };
 		B10022 /* AnnotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationTests.swift; sourceTree = "<group>"; };
 		B10023 /* AsyncParseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AsyncParseTests.swift; sourceTree = "<group>"; };
-		B10015 /* mmforge_bridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = mmforge_bridge.h; sourceTree = "<group>"; };
+		B10026 /* ProductizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductizationTests.swift; sourceTree = "<group>"; };
 		C10001 /* MMForge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MMForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C10002 /* MMForgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MMForgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -68,7 +80,7 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		E10001 /* Root */ = {
+		E10001 = {
 			isa = PBXGroup;
 			children = (
 				E10002 /* MMForge */,
@@ -175,6 +187,7 @@
 				B10020 /* TransformTests.swift */,
 				B10022 /* AnnotationTests.swift */,
 				B10023 /* AsyncParseTests.swift */,
+				B10026 /* ProductizationTests.swift */,
 			);
 			path = MMForgeTests;
 			sourceTree = "<group>";
@@ -233,7 +246,7 @@
 				en,
 				Base,
 			);
-			mainGroup = E10001 /* Root */;
+			mainGroup = E10001;
 			productRefGroup = E10008 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -244,6 +257,23 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		H10001 /* Build Rust Bridge */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust Bridge";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}\"\ncd \"${SRCROOT}/..\"\n\n# OCCT paths — override via environment if installed elsewhere.\nexport OCCT_INCLUDE_DIR=\"${OCCT_INCLUDE_DIR:-/opt/homebrew/include/opencascade}\"\nexport OCCT_LIB_DIR=\"${OCCT_LIB_DIR:-/opt/homebrew/lib}\"\nexport OCCT_LIBS=\"TKernel;TKMath;TKG3d;TKBRep;TKTopAlgo;TKGeomAlgo;TKGeomBase;TKShHealing;TKMesh;TKBO;TKBool;TKXSBase;TKDESTEP;TKDEIGES;TKXCAF;TKCAF;TKCDF;TKLCAF;TKStd;TKStdL;TKXmlXCAF;TKService\"\nexport MMFORGE_SHIM_DIR=\"${MMFORGE_SHIM_DIR:-${SRCROOT}/../crates/mmforge-geometry/shim/build}\"\n\n# Fail fast: OCCT include dir must exist.\nif [ ! -d \"${OCCT_INCLUDE_DIR}\" ]; then\necho \"error: OCCT_INCLUDE_DIR='${OCCT_INCLUDE_DIR}' does not exist. Install OpenCASCADE or set OCCT_INCLUDE_DIR.\"\nexit 1\nfi\n\n# Fail fast: OCCT lib dir must exist.\nif [ ! -d \"${OCCT_LIB_DIR}\" ]; then\necho \"error: OCCT_LIB_DIR='${OCCT_LIB_DIR}' does not exist. Install OpenCASCADE or set OCCT_LIB_DIR.\"\nexit 1\nfi\n\n# Fail fast: shim archive must exist.\nif [ ! -f \"${MMFORGE_SHIM_DIR}/libmmforge_occt_shim.a\" ]; then\necho \"error: libmmforge_occt_shim.a not found at '${MMFORGE_SHIM_DIR}'. Build the shim first:\"\necho \"  cd crates/mmforge-geometry/shim && mkdir build && cd build && cmake .. && cmake --build .\"\nexit 1\nfi\n\necho \"Building mmforge-bridge with OCCT support.\"\necho \"  OCCT_INCLUDE_DIR=${OCCT_INCLUDE_DIR}\"\necho \"  OCCT_LIB_DIR=${OCCT_LIB_DIR}\"\necho \"  MMFORGE_SHIM_DIR=${MMFORGE_SHIM_DIR}\"\n\ncargo build --release -p mmforge-bridge --features occt 2>&1\ncp target/release/libmmforge_bridge.a \"${BUILT_PRODUCTS_DIR}/\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		F10004 /* Sources */ = {
@@ -269,9 +299,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-/* End PBXSourcesBuildPhase section */
-
-/* Begin PBXSourcesBuildPhase section */
 		F10007 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -280,6 +307,7 @@
 				A10017 /* TransformTests.swift in Sources */,
 				A10019 /* AnnotationTests.swift in Sources */,
 				A10020 /* AsyncParseTests.swift in Sources */,
+				A10022 /* ProductizationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -292,34 +320,6 @@
 			targetProxy = F1000A /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
-
-/* Begin PBXContainerItemProxy section */
-		F1000A /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = F10002 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = F10001;
-			remoteInfo = MMForge;
-		};
-/* End PBXContainerItemProxy section */
-
-/* Begin PBXShellScriptBuildPhase section */
-		H10001 /* Build Rust Bridge */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-			);
-			name = "Build Rust Bridge";
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\ncd \"${SRCROOT}/..\"\n\n# OCCT paths — override via environment if installed elsewhere.\nexport OCCT_INCLUDE_DIR=\"${OCCT_INCLUDE_DIR:-/opt/homebrew/include/opencascade}\"\nexport OCCT_LIB_DIR=\"${OCCT_LIB_DIR:-/opt/homebrew/lib}\"\nexport OCCT_LIBS=\"TKernel;TKMath;TKG3d;TKBRep;TKTopAlgo;TKGeomAlgo;TKGeomBase;TKShHealing;TKMesh;TKBO;TKBool;TKXSBase;TKDESTEP;TKDEIGES;TKXCAF;TKCAF;TKCDF;TKLCAF;TKStd;TKStdL;TKXmlXCAF;TKService\"\nexport MMFORGE_SHIM_DIR=\"${MMFORGE_SHIM_DIR:-${SRCROOT}/../crates/mmforge-geometry/shim/build}\"\n\n# Fail fast: OCCT include dir must exist.\nif [ ! -d \"${OCCT_INCLUDE_DIR}\" ]; then\necho \"error: OCCT_INCLUDE_DIR='${OCCT_INCLUDE_DIR}' does not exist. Install OpenCASCADE or set OCCT_INCLUDE_DIR.\"\nexit 1\nfi\n\n# Fail fast: OCCT lib dir must exist.\nif [ ! -d \"${OCCT_LIB_DIR}\" ]; then\necho \"error: OCCT_LIB_DIR='${OCCT_LIB_DIR}' does not exist. Install OpenCASCADE or set OCCT_LIB_DIR.\"\nexit 1\nfi\n\n# Fail fast: shim archive must exist.\nif [ ! -f \"${MMFORGE_SHIM_DIR}/libmmforge_occt_shim.a\" ]; then\necho \"error: libmmforge_occt_shim.a not found at '${MMFORGE_SHIM_DIR}'. Build the shim first:\"\necho \"  cd crates/mmforge-geometry/shim && mkdir build && cd build && cmake .. && cmake --build .\"\nexit 1\nfi\n\necho \"Building mmforge-bridge with OCCT support.\"\necho \"  OCCT_INCLUDE_DIR=${OCCT_INCLUDE_DIR}\"\necho \"  OCCT_LIB_DIR=${OCCT_LIB_DIR}\"\necho \"  MMFORGE_SHIM_DIR=${MMFORGE_SHIM_DIR}\"\n\ncargo build --release -p mmforge-bridge --features occt 2>&1\ncp target/release/libmmforge_bridge.a \"${BUILT_PRODUCTS_DIR}/\"\n";
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
 		G10001 /* Debug */ = {
@@ -381,6 +381,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MMForge/Resources/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 MMForge Contributors. MIT OR Apache-2.0.";
@@ -392,7 +393,7 @@
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(BUILT_PRODUCTS_DIR)",
-					"/opt/homebrew/lib",
+					/opt/homebrew/lib,
 				);
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
@@ -437,6 +438,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MMForge/Resources/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 MMForge Contributors. MIT OR Apache-2.0.";
@@ -448,7 +450,7 @@
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(BUILT_PRODUCTS_DIR)",
-					"/opt/homebrew/lib",
+					/opt/homebrew/lib,
 				);
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
@@ -486,9 +488,6 @@
 			};
 			name = Release;
 		};
-/* End XCBuildConfiguration section */
-
-/* Begin XCBuildConfiguration section */
 		G10005 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -554,7 +553,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
 	};
 	rootObject = F10002 /* Project object */;
 }

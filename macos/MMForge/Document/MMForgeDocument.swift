@@ -19,6 +19,8 @@ extension UTType {
 struct AppPreferences {
     @AppStorage("exportFormat") static var exportFormat: String = "png"
     @AppStorage("exportScale") static var exportScale: Double = 1.0
+    /// Persist the last render mode across document opens.
+    @AppStorage("renderMode") static var renderMode: Int = RenderMode.solid.rawValue
 }
 
 // MARK: - Measurement
@@ -98,7 +100,7 @@ final class DocumentViewModel: ObservableObject {
     @Published var stats: RenderPacketDTO.ModelStats?
     @Published var selectedIndex: Int?
     @Published var hiddenNodeIndices: Set<Int> = []
-    @Published var renderMode: RenderMode = .solid
+    @Published var renderMode: RenderMode = .init(rawValue: AppPreferences.renderMode) ?? .solid
     @Published var clipEnabled: Bool = false
     @Published var clipAxis: Int = 2  // 0=X, 1=Y, 2=Z
     @Published var clipDistance: Float = 0.0
@@ -129,6 +131,8 @@ final class DocumentViewModel: ObservableObject {
     // Parse progress (stage + fraction)
     @Published var parseStage: String = ""
     @Published var parseProgress: Double = 0  // 0..1
+    /// File extension being loaded (for format-aware UI during loading).
+    @Published var loadingFileExtension: String = ""
 
     // Color override state
     @Published var nodeColorOverrides: [Int: simd_float4] = [:]
@@ -237,6 +241,7 @@ final class DocumentViewModel: ObservableObject {
         annotations = []
         pendingAnnotationPoint = nil
         pendingPolygonPoints = []
+        loadingFileExtension = ""
     }
 
     func parseFile(data: Data, fileExtension: String = "step") {
@@ -265,6 +270,7 @@ final class DocumentViewModel: ObservableObject {
         // Write to temp file with the ORIGINAL extension so Rust format
         // detection works correctly (STL requires .stl, etc.).
         let ext = fileExtension.isEmpty ? "step" : fileExtension
+        loadingFileExtension = ext
         let tmpURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("mmforge_\(UUID().uuidString).\(ext)")
         do {
@@ -465,6 +471,13 @@ extension DocumentViewModel {
         guard let doc = rustDoc else { return }
         guard renderer != nil else {
             pendingStreamingDTO = dto
+            parseStage = ""
+            parseProgress = 1
+            state = .loaded(
+                triangleCount: dto.triangleCount,
+                meshCount: dto.meshes.count,
+                nodeCount: dto.nodeNames.count
+            )
             return
         }
         startStreamingUpload(dto: dto)
@@ -604,6 +617,24 @@ extension DocumentViewModel {
         renderer?.fitToView()
     }
 
+    /// Cancel the in-flight parse job.  Resets to empty state.
+    ///
+    /// Increments parseGeneration so any in-flight completion or progress
+    /// callback that fires after this point is discarded as stale.
+    func cancelParse() {
+        parseGeneration += 1
+        if let token = currentCancelToken {
+            mmf_cancel_token_cancel(token)
+        }
+        if let job = currentJob {
+            mmf_open_job_cancel(job)
+        }
+        freeCurrentDocument()
+        state = .empty
+        parseStage = ""
+        parseProgress = 0
+    }
+
     // MARK: - Camera / View
 
     func setNamedView(_ view: MetalRenderer.NamedView) {
@@ -682,6 +713,51 @@ extension DocumentViewModel {
         hiddenNodeIndices = hidden
         renderer?.setHiddenNodes(hiddenNodeIndices)
         refreshSectionFill()
+    }
+
+    /// Isolate a specific node by index.
+    func isolateNode(_ index: Int) {
+        selectNode(index)
+        var keepVisible = Set<Int>()
+        collectDescendants(index, into: &keepVisible)
+        var hidden = Set<Int>()
+        for (i, node) in nodes.enumerated() {
+            if node.hasGeometry && !keepVisible.contains(i) {
+                hidden.insert(i)
+            }
+        }
+        hiddenNodeIndices = hidden
+        renderer?.setHiddenNodes(hiddenNodeIndices)
+        refreshSectionFill()
+    }
+
+    /// Hide all geometry nodes except the given one.
+    func hideAllExcept(_ index: Int) {
+        var hidden = Set<Int>()
+        for (i, node) in nodes.enumerated() {
+            if node.hasGeometry && i != index {
+                hidden.insert(i)
+            }
+        }
+        hiddenNodeIndices = hidden
+        renderer?.setHiddenNodes(hiddenNodeIndices)
+        refreshSectionFill()
+    }
+
+    /// Expand a node and all its descendants in the tree.
+    func expandDescendants(_ index: Int) {
+        var toExpand = Set<Int>()
+        collectDescendants(index, into: &toExpand)
+        for i in toExpand where hasChildren(i) {
+            expandedIndices.insert(i)
+        }
+    }
+
+    /// Collapse a node and all its descendants in the tree.
+    func collapseDescendants(_ index: Int) {
+        var toCollapse = Set<Int>()
+        collectDescendants(index, into: &toCollapse)
+        expandedIndices.subtract(toCollapse)
     }
 
     /// Hide all nodes except the selected one (alias for toolbar).
@@ -1135,6 +1211,7 @@ extension DocumentViewModel {
     func setRenderMode(_ mode: RenderMode) {
         renderMode = mode
         renderer?.renderMode = mode
+        AppPreferences.renderMode = mode.rawValue
     }
 
     // MARK: - Clipping Plane

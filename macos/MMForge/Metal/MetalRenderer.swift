@@ -113,6 +113,9 @@ struct Uniforms {
     var highlightColor: simd_float4
     var clipPlane: simd_float4
     var renderMode: UInt32
+    var padding0: UInt32 = 0
+    var padding1: UInt32 = 0
+    var padding2: UInt32 = 0
 }
 
 struct GPUMesh {

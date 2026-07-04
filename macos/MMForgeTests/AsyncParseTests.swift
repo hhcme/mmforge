@@ -12,6 +12,12 @@ final class AsyncParseTests: XCTestCase {
 
     // MARK: - Helpers
 
+    func testMetalUniformLayoutMatchesShaderABI() {
+        XCTAssertEqual(MemoryLayout<Uniforms>.size, 192)
+        XCTAssertEqual(MemoryLayout<Uniforms>.stride, 192)
+        XCTAssertEqual(MemoryLayout<Uniforms>.alignment, 16)
+    }
+
     /// Minimal valid ASCII STL content.
     private var validSTLData: Data {
         let stl = """
@@ -371,6 +377,35 @@ final class AsyncParseTests: XCTestCase {
         wait(for: [loadExpectation], timeout: 10.0)
         XCTAssertTrue(loadedStateReached, "deferred streaming should reach .loaded")
         XCTAssertTrue(vm.nodeNames.count > 0, "should have nodes after deferred streaming")
+        cancellable.cancel()
+    }
+
+    /// Verify that deferred streaming publishes a loaded shell state before
+    /// renderer binding.  SwiftUI only creates the Metal view in `.loaded`;
+    /// staying in `.loading` here deadlocks the real app on large models.
+    @MainActor
+    func testDeferredStreamingPublishesLoadedBeforeRendererBinding() {
+        let vm = DocumentViewModel()
+        vm._testForceStreaming = true
+        let loadExpectation = expectation(description: "loaded shell state before renderer bind")
+        var loadedStateReached = false
+        let cancellable = vm.$state
+            .filter { state in
+                if case .loaded = state { return true }
+                if case .error = state { return true }
+                return false
+            }
+            .first()
+            .sink { state in
+                if case .loaded = state { loadedStateReached = true }
+                loadExpectation.fulfill()
+            }
+
+        vm.parseFile(data: validSTLData, fileExtension: "stl")
+
+        wait(for: [loadExpectation], timeout: 10.0)
+        XCTAssertTrue(loadedStateReached, "deferred streaming must leave .loading before renderer exists")
+        XCTAssertTrue(vm.nodeNames.count > 0, "should publish parsed nodes before renderer binding")
         cancellable.cancel()
     }
 

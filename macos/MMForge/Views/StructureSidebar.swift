@@ -184,7 +184,7 @@ struct StructureSidebar: View {
         return HStack(spacing: 4) {
             // Indentation
             Spacer()
-                .frame(width: CGFloat(indentLevel(for: index)) * 12)
+                .frame(width: CGFloat(indentLevel(for: index)) * 16)
 
             // Disclosure triangle (if has children)
             if hasKids {
@@ -201,14 +201,30 @@ struct StructureSidebar: View {
             }
 
             // Icon
+            let isAssembly = !node.hasGeometry && hasKids && node.parentIndex >= 0
             Image(systemName: nodeIcon(node: node))
-                .foregroundStyle(node.hasGeometry ? Color.accentColor : Color.secondary)
+                .foregroundStyle(
+                    node.hasGeometry ? Color.accentColor :
+                    isAssembly ? Color.orange : Color.secondary
+                )
                 .frame(width: 16)
 
             // Name
             Text(node.name)
                 .lineLimit(1)
                 .truncationMode(.tail)
+                .fontWeight(node.hasGeometry ? .regular :
+                            isAssembly ? .semibold : .regular)
+
+            // Assembly badge
+            if isAssembly {
+                Text("\(viewModel.childrenOf(index).count)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 3)
+                    .background(RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.secondary.opacity(0.12)))
+            }
 
             Spacer()
 
@@ -219,7 +235,7 @@ struct StructureSidebar: View {
                           ? "eye.slash" : "eye")
                         .font(.caption)
                         .foregroundStyle(viewModel.hiddenNodeIndices.contains(index)
-                                         ? .secondary : .tertiary)
+                                          ? .secondary : .tertiary)
                 }
                 .buttonStyle(.plain)
                 .help(viewModel.hiddenNodeIndices.contains(index)
@@ -230,6 +246,7 @@ struct StructureSidebar: View {
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
+        .contextMenu { nodeContextMenu(index: index) }
         .onTapGesture(count: 2) {
             if node.hasGeometry {
                 viewModel.toggleNodeVisibility(index)
@@ -244,8 +261,63 @@ struct StructureSidebar: View {
             return "folder.fill"
         } else if node.hasGeometry {
             return "cube"
+        } else if isAssemblyNode(node) {
+            return "rectangle.3.group"
         } else {
             return "folder"
+        }
+    }
+
+    private func isAssemblyNode(_ node: RenderPacketDTO.NodeInfo) -> Bool {
+        !node.hasGeometry
+    }
+
+    /// Context menu for a node row.
+    @ViewBuilder
+    private func nodeContextMenu(index: Int) -> some View {
+        let node = viewModel.nodes[index]
+        let hasKids = viewModel.hasChildren(index)
+
+        Group {
+            if node.hasGeometry {
+                Button(viewModel.hiddenNodeIndices.contains(index)
+                       ? "Show Part" : "Hide Part") {
+                    viewModel.toggleNodeVisibility(index)
+                }
+
+                Divider()
+                Button("Show Only This Part") {
+                    viewModel.isolateNode(index)
+                }
+                Button("Hide Other Parts") {
+                    viewModel.hideAllExcept(index)
+                }
+            }
+
+            if hasKids {
+                Divider()
+                Button("Expand All Children") {
+                    viewModel.expandDescendants(index)
+                }
+                Button("Collapse All Children") {
+                    viewModel.collapseDescendants(index)
+                }
+            }
+
+            Divider()
+
+            if node.hasGeometry {
+                Button("Select in Viewport") {
+                    viewModel.selectNode(index)
+                }
+                .disabled(viewModel.selectedIndex == index)
+
+                if let _ = viewModel.nodeColorOverrides[index] {
+                    Button("Reset Color") {
+                        viewModel.setNodeColor(index, color: nil)
+                    }
+                }
+            }
         }
     }
 

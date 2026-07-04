@@ -68,114 +68,127 @@ struct InspectorPanel: View {
     // MARK: - Model Stats
 
     private var modelStatsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        DisclosureGroup(isExpanded: .constant(true)) {
+            VStack(alignment: .leading, spacing: 6) {
+                if let stats = viewModel.stats {
+                    LabeledContent("Nodes", value: "\(stats.nodeCount)")
+                    LabeledContent("Geometries", value: "\(stats.geometryCount)")
+                    LabeledContent("Meshes", value: "\(stats.meshCount)")
+                    LabeledContent("Triangles", value: formatNumber(stats.triangleCount))
+                    LabeledContent("Materials", value: "\(stats.materialCount)")
+                }
+            }
+            .font(.callout)
+        } label: {
             Text("Model")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
-
-            if let stats = viewModel.stats {
-                LabeledContent("Nodes", value: "\(stats.nodeCount)")
-                LabeledContent("Geometries", value: "\(stats.geometryCount)")
-                LabeledContent("Meshes", value: "\(stats.meshCount)")
-                LabeledContent("Triangles", value: formatNumber(stats.triangleCount))
-                LabeledContent("Materials", value: "\(stats.materialCount)")
-            }
         }
     }
 
     // MARK: - Selected Node
 
     private func selectedNodeSection(node: RenderPacketDTO.NodeInfo, index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Selection")
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
+        VStack(alignment: .leading, spacing: 12) {
+            DisclosureGroup(isExpanded: .constant(true)) {
+                VStack(alignment: .leading, spacing: 6) {
+                    LabeledContent("Name", value: node.name)
 
-            LabeledContent("Name", value: node.name)
+                    if node.parentIndex >= 0 && node.parentIndex < viewModel.nodes.count {
+                        LabeledContent("Parent", value: viewModel.nodes[node.parentIndex].name)
+                    } else if node.parentIndex < 0 {
+                        LabeledContent("Parent", value: "Root")
+                    }
 
-            if node.parentIndex >= 0 && node.parentIndex < viewModel.nodes.count {
-                LabeledContent("Parent", value: viewModel.nodes[node.parentIndex].name)
-            } else if node.parentIndex < 0 {
-                LabeledContent("Parent", value: "Root")
-            }
+                    let children = viewModel.childrenOf(index)
+                    if !children.isEmpty {
+                        LabeledContent("Children", value: "\(children.count)")
+                    }
 
-            // Hierarchy info
-            let children = viewModel.childrenOf(index)
-            if !children.isEmpty {
-                LabeledContent("Children", value: "\(children.count)")
-            }
+                    let depth = nodeDepth(index)
+                    LabeledContent("Depth", value: "\(depth)")
 
-            // Depth
-            let depth = nodeDepth(index)
-            LabeledContent("Depth", value: "\(depth)")
-
-            // Visibility (only meaningful for geometry nodes)
-            if node.hasGeometry {
-                let isHidden = viewModel.hiddenNodeIndices.contains(index)
-                LabeledContent("Visible", value: isHidden ? "No" : "Yes")
-            } else {
-                // Assembly node: check if any descendant geometry is visible.
-                let hasVisibleDescendants = nodeHasVisibleDescendants(index)
-                LabeledContent("Descendants Visible", value: hasVisibleDescendants ? "Yes" : "No")
+                    if node.hasGeometry {
+                        let isHidden = viewModel.hiddenNodeIndices.contains(index)
+                        LabeledContent("Visible", value: isHidden ? "No" : "Yes")
+                    } else {
+                        let hasVisibleDescendants = nodeHasVisibleDescendants(index)
+                        LabeledContent("Descendants Visible", value: hasVisibleDescendants ? "Yes" : "No")
+                    }
+                }
+                .font(.callout)
+            } label: {
+                Text("Node")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
             }
 
             Divider()
 
-            // Geometry info
-            Text("Geometry")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .accessibilityAddTraits(.isHeader)
+            DisclosureGroup(isExpanded: .constant(true)) {
+                VStack(alignment: .leading, spacing: 6) {
+                    LabeledContent("Has Geometry", value: node.hasGeometry ? "Yes" : "No")
 
-            LabeledContent("Has Geometry", value: node.hasGeometry ? "Yes" : "No")
+                    if let geomLabel = node.geometryLabel {
+                        LabeledContent("Label", value: geomLabel)
+                    }
 
-            if let geomLabel = node.geometryLabel {
-                LabeledContent("Label", value: geomLabel)
+                    if node.geometryId >= 0 {
+                        LabeledContent("Geometry ID", value: "\(node.geometryId)")
+                    }
+
+                    if node.meshIndex >= 0 {
+                        LabeledContent("Mesh Index", value: "\(node.meshIndex)")
+                    }
+                }
+                .font(.callout)
+            } label: {
+                Text("Geometry")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
             }
 
-            if node.geometryId >= 0 {
-                LabeledContent("Geometry ID", value: "\(node.geometryId)")
-            }
-
-            if node.meshIndex >= 0 {
-                LabeledContent("Mesh Index", value: "\(node.meshIndex)")
-            }
-
-            // Bounding box
             if let bmin = node.boundsMin, let bmax = node.boundsMax {
                 Divider()
-                Text("Bounding Box")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .accessibilityAddTraits(.isHeader)
-                let size = bmax - bmin
-                LabeledContent("Min", value: formatVec3(bmin))
-                LabeledContent("Max", value: formatVec3(bmax))
-                LabeledContent("Size", value: formatVec3(size))
-                let diag = computeDiagonal(size)
-                LabeledContent("Diagonal", value: String(format: "%.2f", diag))
+                DisclosureGroup {
+                    VStack(alignment: .leading, spacing: 6) {
+                        let size = bmax - bmin
+                        LabeledContent("Min", value: formatVec3(bmin))
+                        LabeledContent("Max", value: formatVec3(bmax))
+                        LabeledContent("Size", value: formatVec3(size))
+                        let diag = computeDiagonal(size)
+                        LabeledContent("Diagonal", value: String(format: "%.2f", diag))
+                    }
+                    .font(.callout)
+                } label: {
+                    Text("Bounding Box")
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                }
             }
 
-            // Color override (for geometry nodes)
             if node.hasGeometry {
                 Divider()
-                Text("Appearance")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .accessibilityAddTraits(.isHeader)
+                DisclosureGroup(isExpanded: .constant(true)) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ColorPicker("Color", selection: nodeColorBinding(index: index))
+                            .accessibilityHint("Override the node color in the viewport")
 
-                ColorPicker("Color", selection: nodeColorBinding(index: index))
-                    .accessibilityHint("Override the node color in the viewport")
-
-                let hasOverride = viewModel.nodeColorOverrides[index] != nil
-                if hasOverride {
-                    Button("Reset Color") {
-                        viewModel.setNodeColor(index, color: nil)
+                        let hasOverride = viewModel.nodeColorOverrides[index] != nil
+                        if hasOverride {
+                            Button("Reset Color") {
+                                viewModel.setNodeColor(index, color: nil)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(.accentColor)
+                            .font(.caption)
+                            .accessibilityLabel("Reset color to default")
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .foregroundColor(.accentColor)
-                    .font(.caption)
-                    .accessibilityLabel("Reset color to default")
+                } label: {
+                    Text("Appearance")
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
                 }
             }
         }
@@ -483,78 +496,99 @@ struct InspectorPanel: View {
     private var settingsView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                // Render Mode
-                VStack(alignment: .leading, spacing: 8) {
+                DisclosureGroup(isExpanded: .constant(true)) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Picker("Mode", selection: $viewModel.renderMode) {
+                            Text("Solid").tag(RenderMode.solid)
+                            Text("Wireframe").tag(RenderMode.wireframe)
+                            Text("Solid+Wire").tag(RenderMode.solidWireframe)
+                            Text("Transparent").tag(RenderMode.transparent)
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityLabel("Render mode")
+                        .onChange(of: viewModel.renderMode) { _, newMode in
+                            viewModel.setRenderMode(newMode)
+                        }
+                    }
+                } label: {
                     Text("Render Mode")
                         .font(.headline)
                         .accessibilityAddTraits(.isHeader)
-
-                    Picker("Mode", selection: $viewModel.renderMode) {
-                        Text("Solid").tag(RenderMode.solid)
-                        Text("Wireframe").tag(RenderMode.wireframe)
-                        Text("Solid+Wire").tag(RenderMode.solidWireframe)
-                        Text("Transparent").tag(RenderMode.transparent)
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityLabel("Render mode")
-                    .onChange(of: viewModel.renderMode) { _, newMode in
-                        viewModel.setRenderMode(newMode)
-                    }
                 }
 
                 Divider()
 
-                // Clipping Plane
-                VStack(alignment: .leading, spacing: 8) {
+                DisclosureGroup(isExpanded: .constant(true)) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Enable Clipping", isOn: Binding(
+                            get: { viewModel.clipEnabled },
+                            set: { viewModel.setClipEnabled($0) }
+                        ))
+                        .accessibilityHint("Enable or disable the clipping plane")
+
+                        if viewModel.clipEnabled {
+                            Picker("Axis", selection: Binding(
+                                get: { viewModel.clipAxis },
+                                set: { viewModel.setClipAxis($0) }
+                            )) {
+                                Text("X").tag(0)
+                                Text("Y").tag(1)
+                                Text("Z").tag(2)
+                            }
+                            .pickerStyle(.segmented)
+                            .accessibilityLabel("Clipping axis")
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Distance: \(String(format: "%.1f", viewModel.clipDistance))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Slider(
+                                    value: Binding(
+                                        get: { viewModel.clipDistance },
+                                        set: { viewModel.setClipDistance($0) }
+                                    ),
+                                    in: -100...100,
+                                    step: 0.5
+                                )
+                                .accessibilityLabel("Clipping distance")
+                                .accessibilityValue("\(String(format: "%.1f", viewModel.clipDistance))")
+                            }
+                        }
+                    }
+                } label: {
                     Text("Clipping Plane")
                         .font(.headline)
                         .accessibilityAddTraits(.isHeader)
-
-                    Toggle("Enable Clipping", isOn: Binding(
-                        get: { viewModel.clipEnabled },
-                        set: { viewModel.setClipEnabled($0) }
-                    ))
-                    .accessibilityHint("Enable or disable the clipping plane")
-
-                    if viewModel.clipEnabled {
-                        Picker("Axis", selection: Binding(
-                            get: { viewModel.clipAxis },
-                            set: { viewModel.setClipAxis($0) }
-                        )) {
-                            Text("X").tag(0)
-                            Text("Y").tag(1)
-                            Text("Z").tag(2)
-                        }
-                        .pickerStyle(.segmented)
-                        .accessibilityLabel("Clipping axis")
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Distance: \(String(format: "%.1f", viewModel.clipDistance))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Slider(
-                                value: Binding(
-                                    get: { viewModel.clipDistance },
-                                    set: { viewModel.setClipDistance($0) }
-                                ),
-                                in: -100...100,
-                                step: 0.5
-                            )
-                            .accessibilityLabel("Clipping distance")
-                            .accessibilityValue("\(String(format: "%.1f", viewModel.clipDistance))")
-                        }
-                    }
                 }
 
                 Divider()
 
-                Text("MMForge")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                LabeledContent("Version", value: RustBridge.shared.coreVersion())
+                DisclosureGroup {
+                    VStack(alignment: .leading, spacing: 4) {
+                        LabeledContent("Version", value: RustBridge.shared.coreVersion())
+                        if let stats = viewModel.stats {
+                            LabeledContent("Memory", value: formatBytes(estimatedMemory(stats)))
+                        }
+                    }
+                    .font(.callout)
+                } label: {
+                    Text("About")
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                }
             }
             .padding(12)
         }
+    }
+
+    private func estimatedMemory(_ stats: RenderPacketDTO.ModelStats) -> Int {
+        stats.triangleCount * 3 * (6 * 4 + 3 * 4) + stats.nodeCount * 256
+    }
+
+    private func formatBytes(_ bytes: Int) -> String {
+        if bytes >= 1_048_576 { return String(format: "%.1f MB", Double(bytes) / 1_048_576) }
+        if bytes >= 1_024 { return String(format: "%.1f KB", Double(bytes) / 1_024) }
+        return "\(bytes) B"
     }
 
     // MARK: - Layers
