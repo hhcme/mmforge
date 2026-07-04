@@ -195,16 +195,7 @@ struct InspectorPanel: View {
     }
 
     private func nodeDepth(_ index: Int) -> Int {
-        var depth = 0
-        var current = index
-        while current >= 0 && current < viewModel.nodes.count {
-            let parent = viewModel.nodes[current].parentIndex
-            if parent < 0 { break }
-            depth += 1
-            current = parent
-            if depth > 50 { break }
-        }
-        return depth
+        viewModel.nodeDepth(index)
     }
 
     /// Whether any descendant geometry of a node is visible (not hidden).
@@ -219,10 +210,8 @@ struct InspectorPanel: View {
 
     private func collectDescendants(_ index: Int, into set: inout Set<Int>) {
         set.insert(index)
-        for (i, node) in viewModel.nodes.enumerated() {
-            if node.parentIndex == index {
-                collectDescendants(i, into: &set)
-            }
+        for child in viewModel.childrenOf(index) {
+            collectDescendants(child, into: &set)
         }
     }
 

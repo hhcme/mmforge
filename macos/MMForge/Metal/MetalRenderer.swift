@@ -220,6 +220,16 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     var hiddenNodeIndices: Set<Int> = []
     /// Frame-local frustum cull mask (rebuilt each frame, never persists).
     private var frustumCulledIndices: Set<Int> = []
+    /// Cached camera state for frustum skip when stationary.
+    private struct CamHash: Equatable {
+        var aspect: Float; var yaw: Float; var pitch: Float
+        var dist: Float; var tx: Float; var ty: Float; var tz: Float
+    }
+    private var lastFrustumCamHash = CamHash(aspect: -1, yaw: 0, pitch: 0, dist: 0, tx: 0, ty: 0, tz: 0)
+    /// Count of frustum-cull skips since last cache invalidation (DEBUG-only).
+#if DEBUG
+    private(set) var frustumSkipCount: Int = 0
+#endif
     var renderMode: RenderMode = .solid
     var clipPlane: simd_float4 = simd_float4(0, 0, 0, -999999)
 
@@ -388,24 +398,28 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     func upload(positions: UnsafePointer<Float>, normals: UnsafePointer<Float>,
                 vertexCount: Int, indices: UnsafePointer<UInt32>, indexCount: Int,
                 nodeIndex: Int, boundsMin: simd_float3, boundsMax: simd_float3) {
-        let stride = vertexCount * 3 * MemoryLayout<Float>.size
-        guard let vb = device.makeBuffer(length: stride * 2, options: .storageModeShared) else { return }
-        let ptr = vb.contents().bindMemory(to: Float.self, capacity: vertexCount * 6)
+        let posBytes = vertexCount * 3 * MemoryLayout<Float>.size
+        let totalBytes = posBytes * 2
+        guard let vb = device.makeBuffer(length: totalBytes, options: .storageModeShared) else { return }
+        // Interleave positions and normals in 12-byte chunks per vertex,
+        // matching the vertexDescriptor stroke=24, offset(normal)=12 layout.
+        let stride = 6 * MemoryLayout<Float>.size  // 24 bytes per vertex
+        let chunk  = 3 * MemoryLayout<Float>.size  // 12 bytes per pos/normal triplet
+        let dst = vb.contents()
         for i in 0..<vertexCount {
-            ptr[i * 6 + 0] = positions[i * 3 + 0]
-            ptr[i * 6 + 1] = positions[i * 3 + 1]
-            ptr[i * 6 + 2] = positions[i * 3 + 2]
-            ptr[i * 6 + 3] = normals[i * 3 + 0]
-            ptr[i * 6 + 4] = normals[i * 3 + 1]
-            ptr[i * 6 + 5] = normals[i * 3 + 2]
+            dst.advanced(by: i * stride).copyMemory(from: positions.advanced(by: i * 3), byteCount: chunk)
+            dst.advanced(by: i * stride + chunk).copyMemory(from: normals.advanced(by: i * 3), byteCount: chunk)
         }
         let ibSize = indexCount * MemoryLayout<UInt32>.size
         guard let ib = device.makeBuffer(bytes: indices, length: ibSize, options: .storageModeShared) else { return }
 
-        // Copy positions/indices to CPU arrays for BVH picking.
-        let cpuPositions = Array(UnsafeBufferPointer(start: positions, count: vertexCount * 3))
-        let cpuIndices = Array(UnsafeBufferPointer(start: indices, count: indexCount))
-        let bvh = buildMeshBVH(positions: cpuPositions, indices: cpuIndices)
+        invalidateFrustumCache()
+
+        // Build BVH directly from the input pointers — no intermediate Swift Array copy.
+        let bvh = buildMeshBVH2(
+            positions: positions, vertexCount: vertexCount,
+            indices: indices, indexCount: indexCount
+        )
 
         gpuMeshes.append(GPUMesh(
             vertexBuffer: vb, indexBuffer: ib, indexCount: indexCount,
@@ -418,12 +432,26 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     func setSceneBounds(min: simd_float3, max: simd_float3) {
         sceneBounds = (min, max)
         camera.fit(center: (min + max) * 0.5, radius: length(max - min) * 0.5)
+        invalidateFrustumCache()
     }
 
     func clearMeshes() {
         gpuMeshes.removeAll()
         selectedNodeIndex = nil
         hiddenNodeIndices = []
+        invalidateFrustumCache()
+    }
+
+    /// Read-only access to GPU mesh list (DEBUG-only, for testing vertex layout).
+#if DEBUG
+    func getGPUMeshes() -> [GPUMesh] { gpuMeshes }
+#endif
+
+    private func invalidateFrustumCache() {
+        lastFrustumCamHash = CamHash(aspect: -1, yaw: 0, pitch: 0, dist: 0, tx: 0, ty: 0, tz: 0)
+#if DEBUG
+        frustumSkipCount = 0
+#endif
     }
 
     // MARK: - Measurement overlay
@@ -539,13 +567,21 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     // MARK: - Frustum Culling
 
-    /// Update the frame-local frustum cull mask.  This does NOT modify
-    /// `gpuMeshes[*].visible` — it populates `frustumCulledIndices` which
-    /// `drawPass` checks alongside `visible` each frame.
-    ///
-    /// Call once per frame (typically inside `draw(in:)`).
+    /// Update the frame-local frustum cull mask.  Skips recomputation if
+    /// the camera is stationary (same yaw/pitch/dist/target as last frame).
     func updateFrustumCulling(aspect: Float) {
-        let vp = camera.projectionMatrix(aspect: aspect) * camera.viewMatrix
+        let cam = camera
+        let h = CamHash(aspect: aspect, yaw: cam.yaw, pitch: cam.pitch,
+                        dist: cam.distance, tx: cam.target.x, ty: cam.target.y, tz: cam.target.z)
+        if h == lastFrustumCamHash {
+#if DEBUG
+            frustumSkipCount += 1
+#endif
+            return
+        }
+        lastFrustumCamHash = h
+
+        let vp = cam.projectionMatrix(aspect: aspect) * cam.viewMatrix
         let frustum = FrustumPlanes(from: vp)
         var culled = Set<Int>()
         for (i, mesh) in gpuMeshes.enumerated() {
@@ -686,10 +722,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             // Solid pass
             drawPass(encoder: encoder, pipeline: solidPipeline, mvp: mvp,
                      highlightTint: highlightTint, mode: 0, depthWrite: true, fillMode: .fill)
-            // Wireframe overlay (no depth write)
+            // Wireframe overlay — depth bias prevents surface z-fighting.
+            encoder.setDepthBias(0.001, slopeScale: 1.0, clamp: 0.001)
             drawPass(encoder: encoder, pipeline: wireframePipeline, mvp: mvp,
                      highlightTint: simd_float4(0, 0, 0, 0), mode: 1,
                      depthWrite: false, fillMode: .lines)
+            encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
 
         case .transparent:
             // Back-to-front sorting for correct alpha blending.

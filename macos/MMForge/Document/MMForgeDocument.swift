@@ -155,8 +155,25 @@ final class DocumentViewModel: ObservableObject {
     fileprivate var streamingTask: Task<Void, Never>?
     /// Increments on each parseFile call; stale async results are discarded.
     fileprivate var parseGeneration: UInt64 = 0
+    /// Temp file URL from current/last parse — cleaned up in cancelParse/deinit.
+    fileprivate var _parseTmpURL: URL?
     /// If true, forces streaming mode even for small models (testing only).
     var _testForceStreaming = false
+
+    // MARK: - Structure tree acceleration
+
+    /// Pre-built children lookup: parentNodeIndex -> [childIndices].  Built once
+    /// after nodes are populated; O(1) lookup replaces O(n) scans in
+    /// hasChildren/childrenOf/collectDescendants.
+    fileprivate var _childrenMap: [Int: [Int]] = [:]
+    /// Pre-built node depth cache: nodeIndex -> tree depth.  Built once
+    /// after nodes are populated.
+    fileprivate var _nodeDepth: [Int: Int] = [:]
+    /// Published snapshot of visible indices.  Rebuilt only when nodes,
+    /// expandedIndices, or searchText change.
+    @Published var _cachedVisibleIndices: [Int] = []
+    /// Lazy-rebuild sentinel: triggers cache recomputation when node count changes.
+    private var _lastNodeCount: Int = -1
 
     /// Whether the current document is a 2D drawing (DXF).
     var is2DDrawing: Bool {
@@ -242,6 +259,10 @@ final class DocumentViewModel: ObservableObject {
         pendingAnnotationPoint = nil
         pendingPolygonPoints = []
         loadingFileExtension = ""
+        _childrenMap = [:]
+        _nodeDepth = [:]
+        _cachedVisibleIndices = []
+        if let url = _parseTmpURL { try? FileManager.default.removeItem(at: url); _parseTmpURL = nil }
     }
 
     func parseFile(data: Data, fileExtension: String = "step") {
@@ -273,6 +294,7 @@ final class DocumentViewModel: ObservableObject {
         loadingFileExtension = ext
         let tmpURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("mmforge_\(UUID().uuidString).\(ext)")
+        _parseTmpURL = tmpURL
         do {
             try data.write(to: tmpURL)
         } catch {
@@ -382,6 +404,7 @@ private func parseCompletionCallback(
             vm.stats = dto.stats
             vm.initLayerState()
             vm.expandedIndices = [0]
+            vm.rebuildTreeCaches()
 
             if vm.shouldStream(dto) {
                 vm.uploadStreaming(dto: dto)
@@ -751,6 +774,7 @@ extension DocumentViewModel {
         for i in toExpand where hasChildren(i) {
             expandedIndices.insert(i)
         }
+        refreshVisibleIndices()
     }
 
     /// Collapse a node and all its descendants in the tree.
@@ -758,6 +782,7 @@ extension DocumentViewModel {
         var toCollapse = Set<Int>()
         collectDescendants(index, into: &toCollapse)
         expandedIndices.subtract(toCollapse)
+        refreshVisibleIndices()
     }
 
     /// Hide all nodes except the selected one (alias for toolbar).
@@ -765,13 +790,11 @@ extension DocumentViewModel {
         isolateSelectedNode()
     }
 
-    /// Recursively collect a node and all its descendants.
+    /// Recursively collect a node and all its descendants — uses children map.
     private func collectDescendants(_ index: Int, into set: inout Set<Int>) {
         set.insert(index)
-        for (i, node) in nodes.enumerated() {
-            if node.parentIndex == index {
-                collectDescendants(i, into: &set)
-            }
+        for child in childrenOf(index) {
+            collectDescendants(child, into: &set)
         }
     }
 
@@ -1134,28 +1157,95 @@ extension DocumentViewModel {
         } else {
             expandedIndices.insert(index)
         }
+        refreshVisibleIndices()
     }
 
     /// Expand all nodes.
     func expandAll() {
         expandedIndices = Set(nodes.indices)
+        refreshVisibleIndices()
     }
 
     /// Collapse all nodes.
     func collapseAll() {
         expandedIndices = []
+        refreshVisibleIndices()
+    }
+
+    /// Rebuild children map and depth cache after nodes change.
+    /// Must be called whenever `nodes` is populated or mutated.
+    func rebuildTreeCaches() {
+        var cmap: [Int: [Int]] = [:]
+        var depth: [Int: Int] = [:]
+        for (i, node) in nodes.enumerated() {
+            let p = node.parentIndex
+            if p >= 0 {
+                cmap[p, default: []].append(i)
+            }
+        }
+        // Cursor-based BFS to compute depth in one pass (avoids O(n) removeFirst).
+        var queue: [Int] = nodes.indices.filter { nodes[$0].parentIndex < 0 }
+        for root in queue { depth[root] = 0 }
+        var head = 0
+        while head < queue.count {
+            let cur = queue[head]; head += 1
+            let d = depth[cur]!
+            for child in cmap[cur] ?? [] {
+                depth[child] = d + 1
+                queue.append(child)
+            }
+        }
+        _childrenMap = cmap
+        _nodeDepth = depth
+        _lastNodeCount = nodes.count
+        refreshVisibleIndices()
+    }
+
+    /// Recompute _cachedVisibleIndices from current search/expand state.
+    /// Uses DFS preorder to produce stable depth-first order matching
+    /// the structure tree expectation: Root → A → A1 → B (not BFS).
+    func refreshVisibleIndices() {
+        guard !nodes.isEmpty else { _cachedVisibleIndices = []; return }
+        if searchText.isEmpty {
+            // DFS preorder via cursor-based stack.
+            var result: [Int] = []
+            let roots = nodes.indices.filter { nodes[$0].parentIndex < 0 }
+            // Push roots in reverse so first root is processed first (stack LIFO).
+            var stack: [Int] = roots.reversed()
+            while !stack.isEmpty {
+                let i = stack.removeLast()
+                result.append(i)
+                if expandedIndices.contains(i), let kids = _childrenMap[i] {
+                    // Push children in reverse index order so lower indices
+                    // are processed first (preorder).
+                    stack.append(contentsOf: kids.reversed())
+                }
+            }
+            _cachedVisibleIndices = result
+        } else {
+            var visible = Set<Int>()
+            for i in nodes.indices where matchesSearch(i) {
+                visible.insert(i)
+                var p = nodes[i].parentIndex
+                while p >= 0 {
+                    visible.insert(p)
+                    p = nodes[p].parentIndex
+                }
+            }
+            _cachedVisibleIndices = nodes.indices.filter { visible.contains($0) }
+        }
     }
 
     /// Whether a node's children should be visible in the tree.
+    /// Uses cached depth: a node is visible (outside search mode) if its
+    /// ancestor chain is all expanded up to root.
     func isNodeVisibleInTree(_ index: Int) -> Bool {
-        // Root is always visible.
         let node = nodes[index]
         guard node.parentIndex >= 0 else { return true }
-        // Check if all ancestors are expanded.
-        var current = node.parentIndex
-        while current >= 0 && current < nodes.count {
-            if !expandedIndices.contains(current) { return false }
-            current = nodes[current].parentIndex
+        var cur = node.parentIndex
+        while cur >= 0 {
+            if !expandedIndices.contains(cur) { return false }
+            cur = nodes[cur].parentIndex
         }
         return true
     }
@@ -1164,49 +1254,43 @@ extension DocumentViewModel {
     func matchesSearch(_ index: Int) -> Bool {
         guard !searchText.isEmpty else { return true }
         let node = nodes[index]
-        if node.name.localizedCaseInsensitiveContains(searchText) {
-            return true
-        }
+        if node.name.localizedCaseInsensitiveContains(searchText) { return true }
         if let label = node.geometryLabel,
-           label.localizedCaseInsensitiveContains(searchText) {
-            return true
-        }
+           label.localizedCaseInsensitiveContains(searchText) { return true }
         return false
     }
 
-    /// Indices of visible (expanded + matching search) nodes for the sidebar.
+    /// Cached visible indices.  Read-only from SwiftUI; rebuild triggered
+    /// explicitly via refreshVisibleIndices() or rebuildTreeCaches().
     var visibleNodeIndices: [Int] {
-        guard !nodes.isEmpty else { return [] }
-        if searchText.isEmpty {
-            // No search filter — show expanded/collapsed tree.
-            return nodes.indices.filter { isNodeVisibleInTree($0) }
-        } else {
-            // Search mode — show matching nodes and their ancestors.
-            var visible = Set<Int>()
-            for i in nodes.indices where matchesSearch(i) {
-                visible.insert(i)
-                // Also show all ancestors.
-                var parent = nodes[i].parentIndex
-                while parent >= 0 && parent < nodes.count {
-                    visible.insert(parent)
-                    parent = nodes[parent].parentIndex
-                }
-            }
-            return nodes.indices.filter { visible.contains($0) }
+        _cachedVisibleIndices
+    }
+
+    /// O(1) children lookup.  Lazily rebuilds caches if nodes changed.
+    func childrenOf(_ index: Int) -> [Int] {
+        _rebuildIfNodesChanged()
+        return _childrenMap[index] ?? []
+    }
+
+    /// O(1) has-children check.  Lazily rebuilds caches if nodes changed.
+    func hasChildren(_ index: Int) -> Bool {
+        _rebuildIfNodesChanged()
+        return _childrenMap[index] != nil
+    }
+
+    /// O(1) depth lookup.  Returns 0 for roots or uncached nodes.
+    func nodeDepth(_ index: Int) -> Int {
+        _rebuildIfNodesChanged()
+        return _nodeDepth[index] ?? 0
+    }
+
+    /// Dirty flag: lazily rebuilds caches when nodes change.
+    private func _rebuildIfNodesChanged() {
+        if nodes.count != _lastNodeCount {
+            rebuildTreeCaches()
+            _lastNodeCount = nodes.count
         }
     }
-
-    /// Children indices of a given node.
-    func childrenOf(_ index: Int) -> [Int] {
-        nodes.indices.filter { nodes[$0].parentIndex == index }
-    }
-
-    /// Whether a node has any children.
-    func hasChildren(_ index: Int) -> Bool {
-        nodes.contains { $0.parentIndex == index }
-    }
-
-    // MARK: - Render Mode
 
     func setRenderMode(_ mode: RenderMode) {
         renderMode = mode

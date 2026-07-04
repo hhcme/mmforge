@@ -596,16 +596,16 @@ final class ProductizationTests: XCTestCase {
                                      geometryId: 0, meshIndex: 0,
                                      geometryLabel: nil, boundsMin: nil, boundsMax: nil),
         ]
+        vm.rebuildTreeCaches()
 
         // Root is always visible; child at depth 1 is not because root is collapsed.
         let visible = vm.visibleNodeIndices
-        XCTAssertEqual(visible.sorted(), [0])
+        XCTAssertEqual(visible, [0])
     }
 
     @MainActor
     func testVisibleNodeIndices_withExpandedRoot() {
         let vm = DocumentViewModel()
-        vm.expandedIndices = [0]
         vm.nodes = [
             RenderPacketDTO.NodeInfo(name: "Root", parentIndex: -1, hasGeometry: false,
                                      geometryId: -1, meshIndex: -1,
@@ -618,8 +618,158 @@ final class ProductizationTests: XCTestCase {
                                      geometryLabel: nil, boundsMin: nil, boundsMax: nil),
         ]
         vm.expandedIndices = [0, 1]
+        vm.rebuildTreeCaches()
 
-        let visible = vm.visibleNodeIndices.sorted()
+        let visible = vm.visibleNodeIndices
         XCTAssertEqual(visible, [0, 1, 2])
+    }
+
+    // MARK: - Vertex Layout Test
+
+    /// Verify that upload() interleaves positions and normals correctly
+    /// for the vertex descriptor (attribute0=float3@0, attribute1=float3@12, stride=24).
+    func testMetalUpload_interleavedVertexLayout() {
+        guard let device = MTLCreateSystemDefaultDevice() else { return }
+        let view = MTKView(frame: NSRect(x: 0, y: 0, width: 10, height: 10), device: device)
+        guard let renderer = MetalRenderer(mtkView: view) else { return }
+
+        // Known values for 3 vertices.
+        let positions: [Float] = [0, 0, 0,  2, 0, 0,  0, 3, 0]
+        let normals:   [Float] = [0, 0, 1,  0, 0, 1,  0, 0, 1]
+        let indices:  [UInt32] = [0, 1, 2]
+
+        positions.withUnsafeBufferPointer { p in
+            normals.withUnsafeBufferPointer { n in
+                indices.withUnsafeBufferPointer { idx in
+                    renderer.upload(
+                        positions: p.baseAddress!, normals: n.baseAddress!,
+                        vertexCount: 3, indices: idx.baseAddress!, indexCount: 3,
+                        nodeIndex: 0, boundsMin: .zero, boundsMax: .zero
+                    )
+                }
+            }
+        }
+
+        // Read back vertex buffer contents via GPU mesh list.
+        // MetalRenderer stores GPU meshes internally; we access the
+        // first mesh's vertex buffer (storageModeShared → CPU-readable).
+        let meshes = renderer.getGPUMeshes()
+        guard !meshes.isEmpty else { return }
+        let vb = meshes[0].vertexBuffer
+        let raw = vb.contents().bindMemory(to: Float.self, capacity: vb.length / 4)
+
+        // Expected interleaved layout: [p0, p0, p0, n0, n0, n0,  p1, p1, p1, n1, n1, n1, ...]
+        XCTAssertEqual(raw[0], 0, accuracy: 1e-6, "v0 pos.x")
+        XCTAssertEqual(raw[1], 0, accuracy: 1e-6, "v0 pos.y")
+        XCTAssertEqual(raw[2], 0, accuracy: 1e-6, "v0 pos.z")
+        XCTAssertEqual(raw[3], 0, accuracy: 1e-6, "v0 nrm.x")
+        XCTAssertEqual(raw[4], 0, accuracy: 1e-6, "v0 nrm.y")
+        XCTAssertEqual(raw[5], 1, accuracy: 1e-6, "v0 nrm.z")
+
+        XCTAssertEqual(raw[6], 2, accuracy: 1e-6, "v1 pos.x")
+        XCTAssertEqual(raw[7], 0, accuracy: 1e-6, "v1 pos.y")
+        XCTAssertEqual(raw[8], 0, accuracy: 1e-6, "v1 pos.z")
+        XCTAssertEqual(raw[9], 0, accuracy: 1e-6, "v1 nrm.x")
+        XCTAssertEqual(raw[10], 0, accuracy: 1e-6, "v1 nrm.y")
+        XCTAssertEqual(raw[11], 1, accuracy: 1e-6, "v1 nrm.z")
+
+        XCTAssertEqual(raw[12], 0, accuracy: 1e-6, "v2 pos.x")
+        XCTAssertEqual(raw[13], 3, accuracy: 1e-6, "v2 pos.y")
+        XCTAssertEqual(raw[14], 0, accuracy: 1e-6, "v2 pos.z")
+        XCTAssertEqual(raw[15], 0, accuracy: 1e-6, "v2 nrm.x")
+        XCTAssertEqual(raw[16], 0, accuracy: 1e-6, "v2 nrm.y")
+        XCTAssertEqual(raw[17], 1, accuracy: 1e-6, "v2 nrm.z")
+    }
+
+    // MARK: - Frustum Cache Test
+
+    func testFrustumCache_invalidatedOnClear() {
+        guard let device = MTLCreateSystemDefaultDevice() else { return }
+        let view = MTKView(frame: NSRect(x: 0, y: 0, width: 10, height: 10), device: device)
+        guard let renderer = MetalRenderer(mtkView: view) else { return }
+
+        let p: [Float] = [0, 0, 0, 1, 0, 0, 0, 1, 0]
+        let n: [Float] = [0, 0, 1, 0, 0, 1, 0, 0, 1]
+        let idx: [UInt32] = [0, 1, 2]
+        p.withUnsafeBufferPointer { pp in
+            n.withUnsafeBufferPointer { np in
+                idx.withUnsafeBufferPointer { ip in
+                    renderer.upload(positions: pp.baseAddress!, normals: np.baseAddress!,
+                                    vertexCount: 3, indices: ip.baseAddress!, indexCount: 3,
+                                    nodeIndex: 0, boundsMin: .zero, boundsMax: .zero)
+                }
+            }
+        }
+
+        // First call: culling should run (hash = sentinel initially, now set to current).
+        renderer.updateFrustumCulling(aspect: 1.0)
+        XCTAssertEqual(renderer.frustumSkipCount, 0, "first cull should not skip")
+
+        // Second call with same aspect: hash matches → skip.
+        renderer.updateFrustumCulling(aspect: 1.0)
+        XCTAssertEqual(renderer.frustumSkipCount, 1, "second cull with same camera should skip")
+
+        // Third call also skips.
+        renderer.updateFrustumCulling(aspect: 1.0)
+        XCTAssertEqual(renderer.frustumSkipCount, 2, "third cull should also skip")
+
+        // clearMeshes must invalidate cache.
+        renderer.clearMeshes()
+        XCTAssertEqual(renderer.frustumSkipCount, 0, "clearMeshes must reset skip count")
+    }
+
+    // MARK: - DFS Preorder Test
+
+    /// Verify that visibleNodeIndices uses DFS preorder, not BFS.
+    /// Tree: Root(0) → A(1) → A1(3), Root → B(2).
+    /// With Root+A expanded: preorder = [Root, A, A1, B]; BFS = [Root, A, B, A1].
+    @MainActor
+    func testVisibleNodeIndices_dfsPreorder() {
+        let vm = DocumentViewModel()
+        vm.nodes = [
+            RenderPacketDTO.NodeInfo(name: "Root", parentIndex: -1, hasGeometry: false,
+                                     geometryId: -1, meshIndex: -1,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+            RenderPacketDTO.NodeInfo(name: "A", parentIndex: 0, hasGeometry: false,
+                                     geometryId: -1, meshIndex: -1,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+            RenderPacketDTO.NodeInfo(name: "B", parentIndex: 0, hasGeometry: true,
+                                     geometryId: 0, meshIndex: 0,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+            RenderPacketDTO.NodeInfo(name: "A1", parentIndex: 1, hasGeometry: true,
+                                     geometryId: 1, meshIndex: 1,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+        ]
+        vm.expandedIndices = [0, 1]  // Root + A expanded, B just show name.
+        vm.rebuildTreeCaches()
+
+        let visible = vm.visibleNodeIndices
+        // Preorder DFS: Root(0) → A(1) → A1(3) → B(2).
+        XCTAssertEqual(visible, [0, 1, 3, 2], "DFS preorder: Root, A, A1, B")
+    }
+
+    /// Verify that collapse of A hides A1 but not B.
+    @MainActor
+    func testVisibleNodeIndices_collapseHidesGrandchild() {
+        let vm = DocumentViewModel()
+        vm.nodes = [
+            RenderPacketDTO.NodeInfo(name: "Root", parentIndex: -1, hasGeometry: false,
+                                     geometryId: -1, meshIndex: -1,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+            RenderPacketDTO.NodeInfo(name: "A", parentIndex: 0, hasGeometry: false,
+                                     geometryId: -1, meshIndex: -1,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+            RenderPacketDTO.NodeInfo(name: "B", parentIndex: 0, hasGeometry: true,
+                                     geometryId: 0, meshIndex: 0,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+            RenderPacketDTO.NodeInfo(name: "A1", parentIndex: 1, hasGeometry: true,
+                                     geometryId: 1, meshIndex: 1,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+        ]
+        vm.expandedIndices = [0]  // Root expanded, A collapsed.
+        vm.rebuildTreeCaches()
+
+        let visible = vm.visibleNodeIndices
+        XCTAssertEqual(visible, [0, 1, 2], "A collapsed hides A1")
     }
 }

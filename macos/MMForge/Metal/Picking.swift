@@ -182,15 +182,84 @@ func rayAABB(ray: Ray, bmin: simd_float3, bmax: simd_float3,
 
 // MARK: - BVH Builder
 
-/// Build a BVH from triangle soup.
-///
-/// Input validation:
-/// - `positions.count` must be a multiple of 3 (xyz triples).
-/// - `indices.count` must be a multiple of 3 (triangle triples).
-/// - Each index must be < `positions.count / 3`.
-/// - Invalid triangles are silently skipped.
-///
-/// Returns an empty BVH if no valid triangles remain after filtering.
+/// Build a BVH directly from unsafe pointers — avoids intermediate
+/// Swift Array copies compared to `buildMeshBVH`.
+func buildMeshBVH2(
+    positions: UnsafePointer<Float>, vertexCount: Int,
+    indices: UnsafePointer<UInt32>, indexCount: Int
+) -> MeshBVH {
+    guard vertexCount > 0, indexCount > 0, indexCount % 3 == 0 else {
+        return MeshBVH(nodes: [], sortedTriIndices: [],
+                       positions: [], indices: [])
+    }
+    let triCount = indexCount / 3
+
+    // Per-triangle metadata (sorted during build).
+    struct TriInfo {
+        var centroid: simd_float3
+        var boundsMin: simd_float3
+        var boundsMax: simd_float3
+        var originalIndex: Int
+    }
+
+    var triInfos: [TriInfo] = []
+    triInfos.reserveCapacity(triCount)
+    for i in 0..<triCount {
+        let i0 = Int(indices[i * 3])
+        let i1 = Int(indices[i * 3 + 1])
+        let i2 = Int(indices[i * 3 + 2])
+        guard i0 < vertexCount, i1 < vertexCount, i2 < vertexCount else { continue }
+        let v0 = simd_float3(positions[i0*3], positions[i0*3+1], positions[i0*3+2])
+        let v1 = simd_float3(positions[i1*3], positions[i1*3+1], positions[i1*3+2])
+        let v2 = simd_float3(positions[i2*3], positions[i2*3+1], positions[i2*3+2])
+        let bmin = simd_min(v0, simd_min(v1, v2))
+        let bmax = simd_max(v0, simd_max(v1, v2))
+        triInfos.append(TriInfo(centroid: (v0+v1+v2)/3, boundsMin: bmin, boundsMax: bmax, originalIndex: i))
+    }
+
+    guard !triInfos.isEmpty else {
+        return MeshBVH(nodes: [], sortedTriIndices: [], positions: [], indices: [])
+    }
+    let validTriCount = triInfos.count
+
+    // Single copy for BVH storage.
+    let storedPositions = Array(UnsafeBufferPointer(start: positions, count: vertexCount * 3))
+    let storedIndices = Array(UnsafeBufferPointer(start: indices, count: indexCount))
+
+    var nodes: [BVHNode] = []; nodes.reserveCapacity(validTriCount*2)
+    var sortedIndices: [Int] = []; sortedIndices.reserveCapacity(validTriCount)
+
+    func build(begin: Int, end: Int) -> Int {
+        let ni = nodes.count
+        nodes.append(BVHNode(boundsMin:.zero, boundsMax:.zero, leftChild:0, rightChild:0, triIndex:0, triCount:0))
+        var nmin = simd_float3(Float.infinity, Float.infinity, Float.infinity)
+        var nmax = simd_float3(-Float.infinity, -Float.infinity, -Float.infinity)
+        for i in begin..<end { nmin = simd_min(nmin, triInfos[i].boundsMin); nmax = simd_max(nmax, triInfos[i].boundsMax) }
+        let count = end - begin
+        if count <= 4 {
+            let ti = sortedIndices.count
+            for i in begin..<end { sortedIndices.append(triInfos[i].originalIndex) }
+            nodes[ni] = BVHNode(boundsMin:nmin, boundsMax:nmax, leftChild:0, rightChild:0, triIndex:ti, triCount:count)
+            return ni
+        }
+        let extent = nmax - nmin
+        let axis: Int
+        if extent.x >= extent.y && extent.x >= extent.z { axis = 0 }
+        else if extent.y >= extent.z { axis = 1 }
+        else { axis = 2 }
+        let mid = (begin + end)/2
+        triInfos[begin..<end].sort { a,b in a.centroid[axis] < b.centroid[axis] }
+        let left = build(begin:begin, end:mid)
+        let right = build(begin:mid, end:end)
+        nodes[ni] = BVHNode(boundsMin:nmin, boundsMax:nmax, leftChild:left, rightChild:right, triIndex:0, triCount:0)
+        return ni
+    }
+
+    _ = build(begin: 0, end: validTriCount)
+    return MeshBVH(nodes: nodes, sortedTriIndices: sortedIndices, positions: storedPositions, indices: storedIndices)
+}
+
+/// Build a BVH from Swift arrays (original API kept for tests).
 func buildMeshBVH(positions: [Float], indices: [UInt32]) -> MeshBVH {
     // Validate positions layout.
     guard positions.count % 3 == 0 else {

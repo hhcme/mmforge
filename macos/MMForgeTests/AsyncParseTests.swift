@@ -512,4 +512,134 @@ final class AsyncParseTests: XCTestCase {
         XCTAssertTrue(finalTriangleCount > 0, "should have a valid triangle count")
         loadCancellable.cancel()
     }
+
+    // MARK: - Smoke: Format Support & State Transitions
+
+    /// Valid STL → .loaded with 1+ nodes and positive triangle count.
+    @MainActor
+    func testSmoke_STL_validFile_reachesLoaded() {
+        let vm = DocumentViewModel()
+        let e = expectation(description: "loaded")
+        var reachedLoaded = false
+        let c = vm.$state.filter { s in
+            if case .loaded = s { return true }
+            if case .error = s { return true }
+            return false
+        }.first().sink { s in
+            if case .loaded = s { reachedLoaded = true }
+            e.fulfill()
+        }
+        vm.parseFile(data: validSTLData, fileExtension: "stl")
+        wait(for: [e], timeout: 10.0)
+        XCTAssertTrue(reachedLoaded, "valid STL must reach .loaded")
+        XCTAssertGreaterThan(vm.nodeNames.count, 0, "STL must produce nodes")
+        XCTAssertGreaterThan(vm.nodes.count, 0, "STL must produce structure")
+        c.cancel()
+    }
+
+    /// Invalid/garbage data → .error without crash.
+    @MainActor
+    func testSmoke_invalidData_reachesError() {
+        let vm = DocumentViewModel()
+        let e = expectation(description: "error")
+        var msg: String = ""
+        let c = vm.$state.filter { s in
+            if case .error(let m) = s { msg = m; return true }
+            return false
+        }.first().sink { _ in e.fulfill() }
+        vm.parseFile(data: Data([0xDE, 0xAD, 0xBE, 0xEF]), fileExtension: "step")
+        wait(for: [e], timeout: 10.0)
+        XCTAssertFalse(msg.isEmpty, "error must have a message")
+        c.cancel()
+    }
+
+    /// Parse → freeCurrentDocument → state.clean.
+    @MainActor
+    func testSmoke_parseThenCancel_stateClean() {
+        let vm = DocumentViewModel()
+        let e = expectation(description: "loaded")
+        let c = vm.$state.filter { s in
+            if case .loaded = s { return true }
+            if case .error = s { return true }
+            return false
+        }.first().sink { _ in e.fulfill() }
+        vm.parseFile(data: validSTLData, fileExtension: "stl")
+        wait(for: [e], timeout: 10.0)
+        vm.cancelParse()
+        XCTAssertEqual(vm.state, .empty)
+        XCTAssertTrue(vm.nodeNames.isEmpty)
+        XCTAssertTrue(vm.nodes.isEmpty)
+        XCTAssertEqual(vm.visibleNodeIndices, [])
+        c.cancel()
+    }
+
+    /// DXF data → correctly detected and loaded as 2D drawing.
+    @MainActor
+    func testSmoke_DXF_validData_loadsAs2DDrawing() {
+        let dxf = Data("""
+        0
+        SECTION
+        2
+        ENTITIES
+        0
+        LINE
+        10
+        0.0
+        20
+        0.0
+        30
+        0.0
+        11
+        1.0
+        21
+        1.0
+        31
+        0.0
+        0
+        ENDSEC
+        0
+        EOF
+        """.utf8)
+        let vm = DocumentViewModel()
+        let e = expectation(description: "loaded")
+        var loaded = false
+        let c = vm.$state.filter { s in
+            if case .loaded = s { return true }
+            if case .error = s { return true }
+            return false
+        }.first().sink { s in
+            if case .loaded = s { loaded = true }
+            e.fulfill()
+        }
+        vm.parseFile(data: dxf, fileExtension: "dxf")
+        wait(for: [e], timeout: 10.0)
+        XCTAssertTrue(loaded, "DXF should load successfully")
+        XCTAssertTrue(vm.is2DDrawing, "should be detected as 2D drawing")
+        XCTAssertGreaterThan(vm.drawCommands.count, 0, "DXF must have draw commands")
+        c.cancel()
+    }
+
+    /// parseFile with empty data → .empty immediately.
+    @MainActor
+    func testSmoke_emptyDataImmediateEmpty() {
+        let vm = DocumentViewModel()
+        vm.parseFile(data: Data(), fileExtension: "step")
+        XCTAssertEqual(vm.state, .empty)
+    }
+
+    /// Verify loadingFileExtension is set correctly.
+    @MainActor
+    func testSmoke_loadingFileExtensionPropagated() {
+        let vm = DocumentViewModel()
+        vm.parseFile(data: validSTLData, fileExtension: "stl")
+        XCTAssertEqual(vm.loadingFileExtension, "stl")
+        let e = expectation(description: "done")
+        let c = vm.$state.filter { s in
+            if case .loaded = s { return true }
+            if case .error = s { return true }
+            return false
+        }.first().sink { _ in e.fulfill() }
+        wait(for: [e], timeout: 10.0)
+        c.cancel()
+    }
 }

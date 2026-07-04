@@ -53,18 +53,24 @@ struct ViewportContainer: View {
 
 struct EmptyStateView: View {
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             Image(systemName: "cube.transparent")
                 .font(.system(size: 48))
                 .foregroundStyle(.tertiary)
             Text("No Model Loaded")
                 .font(.title2)
                 .foregroundStyle(.secondary)
-            Text("Open a STEP file to begin.")
-                .font(.body)
-                .foregroundStyle(.tertiary)
+            VStack(spacing: 4) {
+                Text("Drag and drop or use ⌘O to open a file.")
+                    .font(.body)
+                    .foregroundStyle(.tertiary)
+                Text("Supported: STEP, STL, glTF/GLB, IGES, DXF")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityLabel("No model loaded. Supported formats: STEP, STL, glTF, IGES, DXF")
     }
 }
 
@@ -150,10 +156,10 @@ struct ErrorStateView: View {
     let message: String
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle")
+            Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 48))
                 .foregroundStyle(.orange)
-            Text("Error")
+            Text("Unable to Open File")
                 .font(.title2)
                 .foregroundStyle(.primary)
             Text(message)
@@ -161,8 +167,12 @@ struct ErrorStateView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 400)
+            Text("Try opening a different file or check the file format.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityLabel("Error: \(message)")
     }
 }
 

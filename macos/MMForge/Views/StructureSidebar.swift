@@ -28,6 +28,9 @@ struct StructureSidebar: View {
                         .textFieldStyle(.roundedBorder)
                         .font(.caption)
                         .accessibilityLabel("Search nodes")
+                        .onChange(of: viewModel.searchText) { _, _ in
+                            viewModel.refreshVisibleIndices()
+                        }
                     if !viewModel.searchText.isEmpty {
                         Button(action: { viewModel.searchText = "" }) {
                             Image(systemName: "xmark.circle.fill")
@@ -322,16 +325,7 @@ struct StructureSidebar: View {
     }
 
     private func indentLevel(for index: Int) -> Int {
-        var level = 0
-        var current = index
-        while current >= 0 && current < viewModel.nodes.count {
-            let parent = viewModel.nodes[current].parentIndex
-            if parent < 0 { break }
-            level += 1
-            current = parent
-            if level > 10 { break }
-        }
-        return level
+        viewModel.nodeDepth(index)
     }
 
     private func nodeAccessibilityLabel(index: Int) -> String {
