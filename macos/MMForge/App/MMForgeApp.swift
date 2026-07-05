@@ -21,13 +21,6 @@ struct MMForgeApp: App {
                 SelectionCommandsView()
             }
         }
-
-        #if DEBUG
-        Window("Debug Console", id: "debug-console") {
-            Text("Debug Console Placeholder")
-                .frame(minWidth: 400, minHeight: 300)
-        }
-        #endif
     }
 }
 

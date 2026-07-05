@@ -31,6 +31,7 @@
             <array>
                 <string>com.mmforge.step</string>
                 <string>com.mmforge.stl</string>
+                <string>public.standard-tesselated-geometry-format</string>
                 <string>com.mmforge.gltf</string>
                 <string>com.mmforge.glb</string>
                 <string>com.mmforge.iges</string>
@@ -66,6 +67,7 @@
             <key>UTTypeConformsTo</key>
             <array>
                 <string>public.data</string>
+                <string>public.standard-tesselated-geometry-format</string>
             </array>
             <key>UTTypeTagSpecification</key>
             <dict>
@@ -84,6 +86,7 @@
             <key>UTTypeConformsTo</key>
             <array>
                 <string>public.data</string>
+                <string>public.json</string>
             </array>
             <key>UTTypeTagSpecification</key>
             <dict>
