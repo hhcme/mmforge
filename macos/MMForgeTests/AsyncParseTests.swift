@@ -642,4 +642,185 @@ final class AsyncParseTests: XCTestCase {
         wait(for: [e], timeout: 10.0)
         c.cancel()
     }
+
+    // MARK: - DXF Spatial Query Use-After-Free Safety
+
+    /// Verify that the generation-guarded spatial query closure returns nil
+    /// after the document is freed (via cancelParse), preventing UAF.
+    @MainActor
+    func testDXF_spatialQueryReturnsNilAfterCancel() {
+        let dxf = Data("""
+        0
+        SECTION
+        2
+        ENTITIES
+        0
+        LINE
+        10
+        0.0
+        20
+        0.0
+        30
+        0.0
+        11
+        1.0
+        21
+        1.0
+        31
+        0.0
+        0
+        ENDSEC
+        0
+        EOF
+        """.utf8)
+        let vm = DocumentViewModel()
+        let e = expectation(description: "DXF loaded")
+        let c = vm.$state.filter { s in
+            if case .loaded = s { return true }
+            if case .error = s { return true }
+            return false
+        }.first().sink { _ in e.fulfill() }
+        vm.parseFile(data: dxf, fileExtension: "dxf")
+        wait(for: [e], timeout: 10.0)
+        c.cancel()
+
+        // Snapshot the spatial query closure while document is alive.
+        let query = vm.spatialQueryFunc
+        XCTAssertNotNil(query, "spatialQueryFunc should be non-nil for loaded DXF")
+
+        // Verify the query works while doc is alive.
+        let beforeCancel = query?(0, 0, 100, 100)
+        XCTAssertNotNil(beforeCancel, "spatial query should succeed before cancel")
+
+        // Free the document.
+        vm.cancelParse()
+        XCTAssertEqual(vm.state, .empty)
+
+        // The closure must now return nil because the generation mismatches.
+        let afterCancel = query?(0, 0, 100, 100)
+        XCTAssertNil(afterCancel, "spatial query must return nil after document freed")
+    }
+
+    /// Verify that reopening a DXF file produces a new spatial query closure
+    /// and the old one returns nil (generation mismatch).
+    @MainActor
+    func testDXF_reopen_invalidatesOldLease() {
+        let dxf = Data("""
+        0
+        SECTION
+        2
+        ENTITIES
+        0
+        LINE
+        10
+        0.0
+        20
+        0.0
+        30
+        0.0
+        11
+        1.0
+        21
+        1.0
+        31
+        0.0
+        0
+        ENDSEC
+        0
+        EOF
+        """.utf8)
+        let vm = DocumentViewModel()
+
+        let e1 = expectation(description: "first DXF loaded")
+        let c1 = vm.$state.filter { s in
+            if case .loaded = s { return true }
+            return false
+        }.first().sink { _ in e1.fulfill() }
+        vm.parseFile(data: dxf, fileExtension: "dxf")
+        wait(for: [e1], timeout: 10.0)
+        c1.cancel()
+
+        let query1 = vm.spatialQueryFunc
+        XCTAssertNotNil(query1, "first spatialQueryFunc should be non-nil")
+
+        // Clear and reopen: cancelPars ensures state == .empty, so the
+        // next Combine subscription won't fire prematurely on the stale
+        // .loaded state from the first parse.
+        vm.cancelParse()
+        XCTAssertEqual(vm.state, .empty)
+        XCTAssertNil(vm.spatialQueryFunc)
+
+        let e2 = expectation(description: "second DXF loaded")
+        let c2 = vm.$state.filter { s in
+            if case .loaded = s { return true }
+            if case .error = s { return true }
+            return false
+        }.first().sink { _ in e2.fulfill() }
+        vm.parseFile(data: dxf, fileExtension: "dxf")
+        wait(for: [e2], timeout: 10.0)
+        c2.cancel()
+
+        // Old closure must return nil (generation mismatch after reopen).
+        let oldResult = query1?(0, 0, 100, 100)
+        XCTAssertNil(oldResult, "old spatial query must return nil after reopen")
+
+        // New closure must still work.
+        let query2 = vm.spatialQueryFunc
+        XCTAssertNotNil(query2, "new spatialQueryFunc should be non-nil")
+        let newResult = query2?(0, 0, 100, 100)
+        XCTAssertNotNil(newResult, "new spatial query should succeed")
+    }
+
+    /// Verify that spawning a new Drawing2DView after DXF close doesn't
+    /// cause a crash (the spatialQueryFunc is nil when no doc is loaded).
+    @MainActor
+    func testDXF_closeThenSpawnView_noCrash() {
+        let dxf = Data("""
+        0
+        SECTION
+        2
+        ENTITIES
+        0
+        LINE
+        10
+        0.0
+        20
+        0.0
+        30
+        0.0
+        11
+        1.0
+        21
+        1.0
+        31
+        0.0
+        0
+        ENDSEC
+        0
+        EOF
+        """.utf8)
+        let vm = DocumentViewModel()
+
+        let e = expectation(description: "DXF loaded")
+        let c = vm.$state.filter { s in
+            if case .loaded = s { return true }
+            if case .error = s { return true }
+            return false
+        }.first().sink { _ in e.fulfill() }
+        vm.parseFile(data: dxf, fileExtension: "dxf")
+        wait(for: [e], timeout: 10.0)
+        c.cancel()
+
+        // Close the document.
+        vm.cancelParse()
+        XCTAssertEqual(vm.state, .empty)
+        XCTAssertNil(vm.spatialQueryFunc)
+
+        // Create a Drawing2DView in the "empty" state — must not crash.
+        let view = Drawing2DView()
+        view.spatialQueryFunc = vm.spatialQueryFunc  // nil
+        view.drawCommands = vm.drawCommands          // []
+        XCTAssertNil(view.spatialQueryFunc)
+        XCTAssertEqual(view.drawCommands.count, 0)
+    }
 }

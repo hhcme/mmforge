@@ -514,12 +514,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         var meshData: [(positions: UnsafePointer<Float>, indices: UnsafePointer<UInt32>,
                         vertexCount: Int, indexCount: Int)] = []
         for mesh in gpuMeshes where mesh.visible {
-            let posPtr = UnsafePointer<Float>(
-                mesh.vertexBuffer.contents().bindMemory(to: Float.self,
-                    capacity: mesh.vertexBuffer.length / MemoryLayout<Float>.size))
-            let idxPtr = UnsafePointer<UInt32>(
-                mesh.indexBuffer.contents().bindMemory(to: UInt32.self,
-                    capacity: mesh.indexCount))
+            let posPtr = UnsafePointer(mesh.vertexBuffer.contents().assumingMemoryBound(to: Float.self))
+            let idxPtr = UnsafePointer(mesh.indexBuffer.contents().assumingMemoryBound(to: UInt32.self))
             let vertCount = mesh.vertexBuffer.length / (6 * MemoryLayout<Float>.size)
             meshData.append((posPtr, idxPtr, vertCount, mesh.indexCount))
         }

@@ -36,8 +36,13 @@ class Drawing2DView: NSView {
         didSet { needsDisplay = true }
     }
 
-    /// Document pointer for spatial queries (borrowed from DocumentViewModel).
-    var documentPointer: OpaquePointer?
+    /// Generation-guarded spatial query closure (from DocumentViewModel).
+    ///
+    /// `nil` means spatial index is unavailable — `spatiallyCulledCommands`
+    /// falls back to drawing all commands.  The closure is safe to store
+    /// because it validates `parseGeneration` before each query, preventing
+    /// use-after-free when the underlying Rust document is freed.
+    var spatialQueryFunc: ((Double, Double, Double, Double) -> [Int]?)?
 
     /// Annotations to render as overlay.
     var annotations: [Annotation] = [] {
@@ -302,7 +307,7 @@ class Drawing2DView: NSView {
     /// Returns `nil` when the spatial index is unavailable (fallback to full draw).
     /// Returns `[]` when the viewport legitimately contains no visible commands.
     private func spatiallyCulledCommands(scale: CGFloat) -> [DrawCommandDTO]? {
-        guard let doc = documentPointer, !drawCommands.isEmpty else {
+        guard let queryFn = spatialQueryFunc, !drawCommands.isEmpty else {
             return nil // fallback
         }
 
@@ -322,10 +327,11 @@ class Drawing2DView: NSView {
         let vpMinY = min(wBL.y, wTR.y)
         let vpMaxY = max(wBL.y, wTR.y)
 
-        // Query spatial index.  nil = index unavailable, [] = nothing visible.
-        guard let indices = RustBridge.shared.spatialQuery(
-            doc, minX: vpMinX, minY: vpMinY, maxX: vpMaxX, maxY: vpMaxY) else {
-            return nil // spatial index unavailable → fallback to full draw
+        // Query spatial index via generation-guarded closure.
+        // nil = index unavailable (document freed or no spatial index),
+        // [] = nothing visible in this viewport.
+        guard let indices = queryFn(vpMinX, vpMinY, vpMaxX, vpMaxY) else {
+            return nil
         }
 
         // Map indices to commands, filtering out-of-bounds.
@@ -1081,7 +1087,7 @@ struct Drawing2DViewRepresentable: NSViewRepresentable {
     let drawCommands: [DrawCommandDTO]
     let drawingInfo: Drawing2DInfo?
     let layerVisibilityOverrides: [String: Bool]
-    let documentPointer: OpaquePointer?
+    let spatialQueryFunc: ((Double, Double, Double, Double) -> [Int]?)?
     let annotations: [Annotation]
     let measurementMode: Bool
     let measurementType: MeasurementType
@@ -1102,7 +1108,7 @@ struct Drawing2DViewRepresentable: NSViewRepresentable {
         nsView.drawCommands = drawCommands
         nsView.drawingInfo = drawingInfo
         nsView.layerVisibilityOverrides = layerVisibilityOverrides
-        nsView.documentPointer = documentPointer
+        nsView.spatialQueryFunc = spatialQueryFunc
         nsView.annotations = annotations
         nsView.measurementMode = measurementMode
         nsView.measurementType = measurementType

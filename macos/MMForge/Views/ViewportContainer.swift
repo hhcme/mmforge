@@ -28,7 +28,7 @@ struct ViewportContainer: View {
                         drawCommands: viewModel.drawCommands,
                         drawingInfo: viewModel.drawing2DInfo,
                         layerVisibilityOverrides: viewModel.layerVisibility,
-                        documentPointer: viewModel.rustDoc,
+                        spatialQueryFunc: viewModel.spatialQueryFunc,
                         annotations: viewModel.annotations,
                         measurementMode: viewModel.measurementMode,
                         measurementType: viewModel.measurementType,
@@ -238,8 +238,8 @@ struct MetalViewWrapper: NSViewRepresentable {
             let point = gesture.location(in: view)
             let viewSize = view.bounds.size
 
-            // Check measurement mode and pick on main thread to avoid
-            // actor-isolation issues.
+            // Gesture recognizers fire on main, but @objc methods are nonisolated.
+            // Dispatch back for actor isolation to access @MainActor viewModel.
             DispatchQueue.main.async {
                 if viewModel.measurementMode {
                     if let worldPoint = renderer.pickWorldPoint(at: viewSize, point: point) {
@@ -280,7 +280,7 @@ struct MetalViewWrapper: NSViewRepresentable {
         @objc func handleMagnify(_ gesture: NSMagnificationGestureRecognizer) {
             guard let renderer else { return }
             if gesture.state == .changed {
-                renderer.zoom(delta: Float(gesture.magnification) * 10)
+                renderer.zoom(delta: Float(gesture.magnification) * 2)
                 gesture.magnification = 0
             }
         }

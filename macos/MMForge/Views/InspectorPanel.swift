@@ -689,7 +689,8 @@ struct InspectorPanel: View {
                 return Color(red: 0.7, green: 0.7, blue: 0.72) // default grey
             },
             set: { newColor in
-                let nsColor = NSColor(newColor)
+                // Convert to sRGB so getRed always succeeds regardless of source color space.
+                let nsColor = NSColor(newColor).usingColorSpace(.sRGB) ?? NSColor(newColor)
                 var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
                 nsColor.getRed(&r, green: &g, blue: &b, alpha: &a)
                 let color = simd_float4(Float(r), Float(g), Float(b), Float(a))

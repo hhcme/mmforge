@@ -205,6 +205,8 @@ private func triangulateContour(
     var triples: [(Int, Int, Int)] = []
     triples.reserveCapacity(n - 2)
 
+    var cleanupUsed = false
+
     while indices.count > 3 {
         let m = indices.count
         var earFound = false
@@ -234,7 +236,15 @@ private func triangulateContour(
                 break
             }
         }
-        if !earFound { break }
+        if !earFound {
+            if !cleanupUsed {
+                indices = cleanIndices(indices, pts2D: pts2D)
+                if indices.count < 3 { return [] }
+                cleanupUsed = true
+                continue
+            }
+            return []
+        }
     }
 
     if indices.count == 3 {
@@ -247,6 +257,62 @@ private func triangulateContour(
     }
 
     return triples
+}
+
+/// Remove consecutive near-duplicate and colinear points from a working
+/// index list that indexes into `pts2D`.  Produces a clean polygon for
+/// ear clipping, or an empty array when too few points remain.
+private func cleanIndices(_ indices: [Int], pts2D: [simd_float2]) -> [Int] {
+    guard indices.count >= 3 else { return indices }
+
+    var deduped: [Int] = [indices[0]]
+    for i in 1..<indices.count {
+        let prev = deduped.last!
+        let curr = indices[i]
+        let dx = pts2D[curr].x - pts2D[prev].x
+        let dy = pts2D[curr].y - pts2D[prev].y
+        if abs(dx) > 1e-10 || abs(dy) > 1e-10 {
+            deduped.append(curr)
+        }
+    }
+    if deduped.count >= 2 {
+        let first = deduped[0]
+        let last = deduped.last!
+        let dx = pts2D[last].x - pts2D[first].x
+        let dy = pts2D[last].y - pts2D[first].y
+        if abs(dx) < 1e-10 && abs(dy) < 1e-10 {
+            deduped.removeLast()
+        }
+    }
+    guard deduped.count >= 3 else { return [] }
+
+    let m = deduped.count
+    var result: [Int] = [deduped[0]]
+    for i in 1..<(m - 1) {
+        let prev = result.last!
+        let curr = deduped[i]
+        let next = deduped[i + 1]
+        let area = signedArea2D(pts2D[prev], pts2D[curr], pts2D[next])
+        if abs(area) > 1e-10 {
+            result.append(curr)
+        }
+    }
+    result.append(deduped.last!)
+
+    while result.count >= 3 {
+        let n2 = result.count
+        let area = signedArea2D(pts2D[result[n2 - 2]], pts2D[result[n2 - 1]], pts2D[result[0]])
+        if abs(area) > 1e-10 { break }
+        result.removeLast()
+    }
+    while result.count >= 3 {
+        let n2 = result.count
+        let area = signedArea2D(pts2D[result[n2 - 1]], pts2D[result[0]], pts2D[result[1]])
+        if abs(area) > 1e-10 { break }
+        result.remove(at: 0)
+    }
+
+    return result.count >= 3 ? result : []
 }
 
 // MARK: - Public helpers

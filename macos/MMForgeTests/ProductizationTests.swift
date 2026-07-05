@@ -772,4 +772,167 @@ final class ProductizationTests: XCTestCase {
         let visible = vm.visibleNodeIndices
         XCTAssertEqual(visible, [0, 1, 2], "A collapsed hides A1")
     }
+
+    // MARK: - Section Fill Degenerate Contour Cleanup Tests
+
+    /// Contour with duplicate consecutive vertices: ear clipping succeeds
+    /// directly because the contour is still well-formed (the zero-area ear
+    /// from the duplicated vertex is skipped, and the remaining polygon
+    /// ear-clips normally).  The cleanup fallback is not triggered — it only
+    /// runs when ear clipping completely stalls.
+    func testSectionFill_dupVertex_cleanedAndTriangulated() {
+        // A unit square at Z=0, but the (1,1) corner is duplicated.
+        let pts: [simd_float3] = [
+            simd_float3(0, 0, 0), simd_float3(1, 0, 0),
+            simd_float3(1, 1, 0), simd_float3(1, 1, 0), // duplicate
+            simd_float3(0, 1, 0),
+        ]
+        let n = pts.count
+        var verts: [Float] = []
+        var idxs: [UInt32] = []
+        for i in 0..<n {
+            let j = (i + 1) % n
+            let pi = pts[i]; let pj = pts[j]
+            let v0 = pi + simd_float3(0, 0, 1)
+            let v1 = pi - simd_float3(0, 0, 1)
+            let v2 = simd_float3(2 * pj.x - v0.x, 2 * pj.y - v0.y, -1)
+            let base = UInt32(i * 3)
+            verts += [v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z]
+            idxs += [base, base + 1, base + 2]
+        }
+
+        let result = computeSectionFill(
+            positions: verts, indices: idxs,
+            clipPlane: simd_float4(0, 0, 1, 0),
+            capColor: simd_float4(0.2, 0.6, 1.0, 0.7)
+        )
+        // 5-vertex contour → ear clipping succeeds directly.
+        // (5-2)=3 triangles × 3 verts × 8 floats = 72.
+        XCTAssertEqual(result.count, 72, "5-vertex with dup: 3 tris × 3 × 8 = 72")
+    }
+
+    /// Contour with collinear points on an edge: ear clipping still succeeds
+    /// directly (the collinear "ear" has zero area and is skipped).  The
+    /// cleanup fallback is not triggered — it only runs on complete stall.
+    func testSectionFill_collinearVertex_cleanedAndTriangulated() {
+        // A square at Z=0 with an extra collinear point (0.5,0) on the bottom edge.
+        let pts: [simd_float3] = [
+            simd_float3(0, 0, 0), simd_float3(0.5, 0, 0), // collinear on bottom
+            simd_float3(1, 0, 0), simd_float3(1, 1, 0),
+            simd_float3(0, 1, 0),
+        ]
+        let n = pts.count
+        var verts: [Float] = []
+        var idxs: [UInt32] = []
+        for i in 0..<n {
+            let j = (i + 1) % n
+            let pi = pts[i]; let pj = pts[j]
+            let v0 = pi + simd_float3(0, 0, 1)
+            let v1 = pi - simd_float3(0, 0, 1)
+            let v2 = simd_float3(2 * pj.x - v0.x, 2 * pj.y - v0.y, -1)
+            let base = UInt32(i * 3)
+            verts += [v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z]
+            idxs += [base, base + 1, base + 2]
+        }
+
+        let result = computeSectionFill(
+            positions: verts, indices: idxs,
+            clipPlane: simd_float4(0, 0, 1, 0),
+            capColor: simd_float4(0.2, 0.8, 0.4, 0.7)
+        )
+        // 5-vertex contour → ear clipping succeeds directly.
+        // (5-2)=3 triangles × 3 verts × 8 floats = 72.
+        XCTAssertEqual(result.count, 72, "5-vertex with collinear: 3 tris × 3 × 8 = 72")
+    }
+
+    /// A self-intersecting (bow-tie) contour at Z=0.  Although conceptually
+    /// self-intersecting, the ear-clipping algorithm interprets the 4 vertices
+    /// as a simple polygon — it finds a valid ear and produces 2 triangles.
+    /// Each triangle vertex must be finite and within bounds.
+    func testSectionFill_bowtie_earClipsAsSimplePolygon() {
+        // Bow-tie: (0,0)→(1,1)→(1,0)→(0,1). Self-intersecting in XY.
+        let pts: [simd_float3] = [
+            simd_float3(0, 0, 0), simd_float3(1, 1, 0),
+            simd_float3(1, 0, 0), simd_float3(0, 1, 0),
+        ]
+        let n = pts.count
+        var verts: [Float] = []
+        var idxs: [UInt32] = []
+        for i in 0..<n {
+            let j = (i + 1) % n
+            let pi = pts[i]; let pj = pts[j]
+            let v0 = pi + simd_float3(0, 0, 1)
+            let v1 = pi - simd_float3(0, 0, 1)
+            let v2 = simd_float3(2 * pj.x - v0.x, 2 * pj.y - v0.y, -1)
+            let base = UInt32(i * 3)
+            verts += [v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z]
+            idxs += [base, base + 1, base + 2]
+        }
+
+        let result = computeSectionFill(
+            positions: verts, indices: idxs,
+            clipPlane: simd_float4(0, 0, 1, 0),
+            capColor: simd_float4(1, 0, 0, 0.5)
+        )
+        // 4-vertex polygon → ear clipping succeeds → 2 tris × 3 verts × 8 = 48.
+        XCTAssertFalse(result.isEmpty, "bow-tie ear-clips successfully as simple polygon")
+        XCTAssertEqual(result.count, 48, "4 vertices: (4-2)=2 tris × 3 × 8 = 48")
+
+        // All vertex components must be finite and within [-1, 2] × [-1, 2] × [-1, 1].
+        for vi in stride(from: 0, to: result.count, by: 8) {
+            let x = result[vi], y = result[vi+1], z = result[vi+2]
+            XCTAssertTrue(x.isFinite && y.isFinite && z.isFinite,
+                          "vertex \(vi/8) components must be finite")
+            XCTAssertTrue(x >= -1 && x <= 2 && y >= -1 && y <= 2 && z >= -1 && z <= 1,
+                          "vertex \(vi/8) out of expected bounds: (\(x), \(y), \(z))")
+        }
+
+        // Vertices must lie on Z=0.
+        let normal = simd_float3(0, 0, 1)
+        for vi in stride(from: 0, to: result.count, by: 8) {
+            let p = simd_float3(result[vi], result[vi+1], result[vi+2])
+            XCTAssertEqual(dot(normal, p), 0, accuracy: 1e-4,
+                           "vertex \(vi/8) must lie on Z=0 plane")
+        }
+    }
+
+    /// A contour where ALL vertices are colinear in 2D projection:
+    /// every candidate ear has zero signed area, so ear clipping stalls
+    /// on the first pass.  `cleanIndices` removes all colinear midpoints,
+    /// leaving fewer than 3 points → the contour is skipped (empty result).
+    ///
+    /// This tests the cleanup+retry+skip path end-to-end.
+    func testSectionFill_hopelesslyDegenerate_skipped() {
+        // Four colinear points along X-axis at Z=0: (0,0)→(1,0)→(2,0)→(3,0).
+        // Chaining produces a closed contour but all vertices lie on one line.
+        // Ear clipping can't find any ear (all signed areas ≈ 0), cleanup
+        // removes the collinear midpoints, and fewer than 3 points remain.
+        let pts: [simd_float3] = [
+            simd_float3(0, 0, 0), simd_float3(1, 0, 0),
+            simd_float3(2, 0, 0), simd_float3(3, 0, 0),
+        ]
+        let n = pts.count
+        var verts: [Float] = []
+        var idxs: [UInt32] = []
+        for i in 0..<n {
+            let j = (i + 1) % n
+            let pi = pts[i]; let pj = pts[j]
+            let v0 = pi + simd_float3(0, 0, 1)
+            let v1 = pi - simd_float3(0, 0, 1)
+            let v2 = simd_float3(2 * pj.x - v0.x, 2 * pj.y - v0.y, -1)
+            let base = UInt32(i * 3)
+            verts += [v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z]
+            idxs += [base, base + 1, base + 2]
+        }
+
+        let result = computeSectionFill(
+            positions: verts, indices: idxs,
+            clipPlane: simd_float4(0, 0, 1, 0),
+            capColor: simd_float4(1, 0, 0, 0.5)
+        )
+        // All-colinear contou→ ear clipping stalls → cleanup removes
+        // collinear midpoints → fewer than 3 points remain → skipped.
+        XCTAssertTrue(result.isEmpty,
+                      "all-colinear contour must produce empty result (skipped)")
+    }
 }

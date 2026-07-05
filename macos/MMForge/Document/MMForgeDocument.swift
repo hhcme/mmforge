@@ -154,7 +154,8 @@ final class DocumentViewModel: ObservableObject {
     /// Active streaming Task handle — cancelled on new parse, freeCurrentDocument, deinit.
     fileprivate var streamingTask: Task<Void, Never>?
     /// Increments on each parseFile call; stale async results are discarded.
-    fileprivate var parseGeneration: UInt64 = 0
+    /// Also serves as the generation token for DocumentSpatialLease validation.
+    internal var parseGeneration: UInt64 = 0
     /// Temp file URL from current/last parse — cleaned up in cancelParse/deinit.
     fileprivate var _parseTmpURL: URL?
     /// If true, forces streaming mode even for small models (testing only).
@@ -193,6 +194,23 @@ final class DocumentViewModel: ObservableObject {
         return RustBridge.shared.drawCommands(doc)
     }
 
+    /// Generation-guarded spatial query function for 2D viewport culling.
+    ///
+    /// Returns a closure that safely accesses the spatial index, or `nil` if
+    /// no document is loaded or the document is not a 2D drawing.  The closure
+    /// checks `parseGeneration` before each query — if the document has been
+    /// freed and replaced, the generation won't match and `nil` is returned,
+    /// which triggers a full-draw fallback instead of a use-after-free.
+    var spatialQueryFunc: ((Double, Double, Double, Double) -> [Int]?)? {
+        guard let doc = rustDoc else { return nil }
+        let gen = parseGeneration
+        return { [weak self] minX, minY, maxX, maxY in
+            guard let self, self.parseGeneration == gen else { return nil }
+            return RustBridge.shared.spatialQuery(doc, minX: minX, minY: minY,
+                                                  maxX: maxX, maxY: maxY)
+        }
+    }
+
     var isLoaded: Bool {
         if case .loaded = state { return true }
         return false
@@ -204,14 +222,14 @@ final class DocumentViewModel: ObservableObject {
         renderer.renderMode = renderMode
         updateClipPlane()
         // Upload any pending mesh data that arrived before the renderer.
-        if let dto = pendingDTO {
+        let fullDTO = pendingDTO
+        let streamDTO = pendingStreamingDTO
         pendingDTO = nil
         pendingStreamingDTO = nil
+        if let dto = fullDTO {
             uploadToRenderer(dto: dto)
         }
-        // Resume a deferred streaming upload.
-        if let dto = pendingStreamingDTO {
-            pendingStreamingDTO = nil
+        if let dto = streamDTO {
             startStreamingUpload(dto: dto)
         }
     }
@@ -270,13 +288,8 @@ final class DocumentViewModel: ObservableObject {
         parseGeneration += 1
         let generation = parseGeneration
 
-        // Cancel any in-flight streaming upload (the generation bump above
-        // will also cause the task to bail out early, but explicit cancel is
-        // faster and prevents wasted upload work).
-        streamingTask?.cancel()
-        streamingTask = nil
-
-        // Clean up previous state (Rust doc, meshes, overlay, etc.).
+        // Clean up previous state first (cancels streaming task, frees Rust doc, clears caches).
+        // The generation bump above ensures stale callbacks are discarded.
         freeCurrentDocument()
 
         guard !data.isEmpty else {
@@ -321,8 +334,6 @@ final class DocumentViewModel: ObservableObject {
 
     deinit {
         streamingTask?.cancel()
-        // Release background job resources.  mmf_open_job_free is
-        // non-blocking (detaches the thread), so this is safe in deinit.
         if let job = currentJob {
             mmf_open_job_free(job)
         }
@@ -331,6 +342,9 @@ final class DocumentViewModel: ObservableObject {
         }
         if let doc = rustDoc {
             RustBridge.shared.freeDocument(doc)
+        }
+        if let url = _parseTmpURL {
+            try? FileManager.default.removeItem(at: url)
         }
     }
 }
