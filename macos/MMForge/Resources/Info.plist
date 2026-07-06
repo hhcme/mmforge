@@ -27,6 +27,8 @@
             <string>3D Model File</string>
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
             <key>LSItemContentTypes</key>
             <array>
                 <string>com.mmforge.step</string>
@@ -36,6 +38,8 @@
                 <string>com.mmforge.glb</string>
                 <string>com.mmforge.iges</string>
                 <string>com.mmforge.dxf</string>
+                <string>com.mmforge.lsm</string>
+                <string>com.mmforge.lsmc</string>
             </array>
         </dict>
     </array>
@@ -145,6 +149,40 @@
                 <key>public.filename-extension</key>
                 <array>
                     <string>dxf</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.mmforge.lsm</string>
+            <key>UTTypeDescription</key>
+            <string>MMForge Scene Model</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>lsm</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.mmforge.lsmc</string>
+            <key>UTTypeDescription</key>
+            <string>MMForge Scene Model (Compressed)</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>lsmc</string>
                 </array>
             </dict>
         </dict>

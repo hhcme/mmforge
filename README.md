@@ -4,7 +4,7 @@
 
 [中文文档](README_zh.md)
 
-![Project Status](https://img.shields.io/badge/status-Phase%200%20complete--%20Phase%201%20in%20progress-orange)
+![Project Status](https://img.shields.io/badge/status-macOS%20Alpha%20Trialable-yellow)
 ![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
 
 ---
@@ -82,17 +82,19 @@ MMForge is an open-source industrial model parsing and rendering solution. It ta
 
 | Format | Priority | Parser | Status |
 |--------|----------|--------|--------|
-| STEP (AP203/AP214) | P0 | OCCT | Planned |
-| glTF 2.0 | P0 | gltf-rs | Planned |
-| STL | P0 | Custom | Planned |
-| IGES | P1 | OCCT | Planned |
+| STEP (AP203/AP214) | P0 | OCCT | Parsed with OCCT; without OCCT shows build guidance |
+| glTF 2.0 / GLB | P0 | gltf-rs | Working (macOS app + bridge) |
+| STL (ASCII/Binary) | P0 | Custom | Working (macOS app, CLI) |
+| IGES | P1 | OCCT | Parsed with OCCT; without OCCT shows build guidance |
+| DXF | P0 | Custom | Working (macOS app, CLI) |
 | OBJ | P1 | Custom | Planned |
+| LSM / LSMC | — | Custom | CLI read/write; app can open .lsm/.lsmc |
 
 ### 2D Formats
 
 | Format | Priority | Parser | Status |
 |--------|----------|--------|--------|
-| DXF | P0 | Custom | Planned |
+| DXF | P0 | Custom | Working (macOS app, CLI) |
 | DWG | P1 | LibreDWG | Planned |
 
 ---
@@ -165,9 +167,17 @@ cargo clippy --workspace -- -D warnings
 cargo run --bin mmforge -- version
 ```
 
-### Build macOS App
+### Build macOS App (Xcode)
+
+Prerequisites:
+- **Xcode** 26+ (with macOS 26 SDK)
+- **Rust** stable toolchain in `~/.cargo/bin/`
 
 ```bash
+# Open the Xcode project
+open macos/MMForge.xcodeproj
+
+# Or build from CLI (Debug, no code signing)
 xcodebuild build \
   -project macos/MMForge.xcodeproj \
   -scheme MMForge \
@@ -177,6 +187,63 @@ xcodebuild build \
   CODE_SIGNING_REQUIRED=NO \
   CODE_SIGNING_ALLOWED=NO
 ```
+
+The built app is at `macos/build/Build/Products/Debug/MMForge.app`.
+
+### Run macOS Tests
+
+```bash
+xcodebuild test \
+  -project macos/MMForge.xcodeproj \
+  -scheme MMForge \
+  -derivedDataPath macos/build \
+  -destination 'platform=macOS'
+```
+
+### Package macOS App (Release + DMG)
+
+```bash
+# Release .app only (unsigned)
+bash macos/scripts/package.sh release
+
+# Release .app + DMG (unsigned)
+bash macos/scripts/package.sh dmg
+
+# Debug build + symlink
+bash macos/scripts/package.sh debug
+```
+
+The DMG is at `macos/build/MMForge-0.1.0-alpha.dmg`.
+
+### macOS Document Type Support
+
+The app registers as a viewer for these file types (Finder "Open With" +
+double-click to open):
+
+| Extension | Format | macOS UTI |
+|-----------|--------|-----------|
+| .step, .stp | STEP | `com.mmforge.step` |
+| .igs, .iges | IGES | `com.mmforge.iges` |
+| .stl | STL | `com.mmforge.stl` |
+| .gltf | glTF | `com.mmforge.gltf` |
+| .glb | glTF Binary | `com.mmforge.glb` |
+| .dxf | DXF Drawing | `com.mmforge.dxf` |
+| .lsm | LSM Model | `com.mmforge.lsm` |
+| .lsmc | LSM Compressed | `com.mmforge.lsmc` |
+
+### Known Limitations (macOS Alpha)
+
+- **No OCCT by default**: STEP and IGES files require OpenCASCADE.
+  Without OCCT the app shows build guidance.  With OCCT linked, STEP/IGES
+  parse and render B-Rep models.
+- **glTF CLI not supported**: The CLI (`mmforge`) supports STL and DXF
+  only.  glTF, STEP, IGES are available through the macOS bridge crate.
+- **Unsigned app**: The Debug build and Release DMG are unsigned.  macOS
+  Gatekeeper will block first launch — right-click → Open to bypass.
+- **No sandbox / Hardened Runtime**: Not configured for App Store or
+  notarized distribution yet.
+- **Metal GPU required**: Rendering needs Apple Silicon or Intel Mac with
+  Metal-capable GPU.
 
 ---
 
