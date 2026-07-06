@@ -64,70 +64,145 @@ detect_occt_runtime() {
 # Copy OCCT dylibs into the app bundle and rewrite load paths to @rpath.
 # This makes the app self-contained — it doesn't need OCCT installed.
 
+# ── Recursive dylib bundling ──────────────────────────────────────────
+# Collect ALL non-system dylibs needed by every binary in the app bundle
+# (main executable + existing dylibs in Frameworks/), copy them into
+# Frameworks/, and rewrite load paths to @rpath so the app is fully
+# self-contained (no /opt/homebrew, /usr/local, or Cellar paths).
+
+# Returns 0 if the path looks like a system library (should NOT be bundled).
+is_system_lib() {
+    local lib="$1"
+    case "$lib" in
+        /usr/lib/*|/System/Library/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 bundle_occt_dylibs() {
     local app_path="$1"
-    local occt_lib_dir="$2"
-
     local frameworks_dir="$app_path/Contents/Frameworks"
     mkdir -p "$frameworks_dir"
 
-    info "  [occt] Bundling OCCT runtime from $occt_lib_dir"
+    info "  [occt] Bundling dylibs (recursive transitive closure) …"
 
-    # List all OCCT dylibs referenced by the app.
-    local dylibs
-    dylibs=$(otool -L "$app_path/Contents/MacOS/$APP_NAME" \
-                   "$app_path/Contents/MacOS/$APP_NAME.debug.dylib" 2>/dev/null \
-        | grep -o '/.*/libTK[^ ]*\.dylib' | sort -u || true)
+    # Collect all binaries to scan: main executable + debug dylib + any .dylib in Frameworks/.
+    local scan_list
+    scan_list=$(find "$frameworks_dir" -name '*.dylib' -maxdepth 1 2>/dev/null || true)
+    if [ -f "$app_path/Contents/MacOS/$APP_NAME" ]; then
+        scan_list="$scan_list"$'\n'"$app_path/Contents/MacOS/$APP_NAME"
+    fi
+    if [ -f "$app_path/Contents/MacOS/$APP_NAME.debug.dylib" ]; then
+        scan_list="$scan_list"$'\n'"$app_path/Contents/MacOS/$APP_NAME.debug.dylib"
+    fi
 
-    if [ -z "$dylibs" ]; then
-        info "  [occt] No OCCT dylibs referenced — skipping bundle"
+    local total_copied=0
+    local changed=1
+
+    # Iterate until no new dylibs are discovered.
+    while [ "$changed" -eq 1 ]; do
+        changed=0
+
+        # Discover all non-system, non-@rpath deps from all scanned binaries.
+        local new_deps=""
+        while IFS= read -r bin; do
+            [ -z "$bin" ] && continue
+            [ -f "$bin" ] || continue
+            local deps
+            deps=$(otool -L "$bin" 2>/dev/null \
+                | grep -oE '/[^ ]+\.dylib' \
+                | grep -v '@rpath\|@loader_path\|@executable_path\|^/lib/\|^/usr/\|^/System/' \
+                || true)
+            while IFS= read -r dep; do
+                [ -z "$dep" ] && continue
+                if is_system_lib "$dep"; then continue; fi
+                local name
+                name=$(basename "$dep")
+                local dest="$frameworks_dir/$name"
+                if [ ! -f "$dest" ]; then
+                    new_deps="$new_deps"$'\n'"$dep"
+                fi
+            done <<< "$deps"
+        done <<< "$scan_list"
+
+        new_deps=$(echo "$new_deps" | sort -u | sed '/^$/d')
+
+        # Copy new deps.
+        while IFS= read -r dep; do
+            [ -z "$dep" ] && continue
+            if [ ! -f "$dep" ]; then
+                info "  [occt]   WARNING: not found: $dep"
+                continue
+            fi
+            local name
+            name=$(basename "$dep")
+            local dest="$frameworks_dir/$name"
+            cp "$dep" "$dest"
+            chmod 644 "$dest"
+            info "  [occt]   $name"
+            ((total_copied++)) || true
+            changed=1
+        done <<< "$new_deps"
+
+        # Update scan list to include newly copied dylibs.
+        scan_list=$(find "$frameworks_dir" -name '*.dylib' -maxdepth 1 2>/dev/null || true)
+    done
+
+    if [ "$total_copied" -eq 0 ]; then
+        info "  [occt] No new dylibs to copy"
+    else
+        info "  [occt] Copied $total_copied new dylibs"
+    fi
+
+    # Always rewrite load paths — even when no new dylibs were copied,
+    # previously-bundled dylibs may still need rewriting (e.g. main
+    # executable references them with absolute paths from the linker).
+
+    if ! ls "$frameworks_dir"/*.dylib &>/dev/null; then
+        info "  [occt] No dylibs in Frameworks/ — nothing to rewrite"
         return 0
     fi
 
-    local count=0
-    while IFS= read -r dylib_path; do
-        local name
-        name=$(basename "$dylib_path")
-        local dest="$frameworks_dir/$name"
-
-        if [ ! -f "$dest" ]; then
-            cp "$dylib_path" "$dest"
-            chmod 644 "$dest"
-            info "  [occt]   $name"
-            ((count++)) || true
-        fi
-    done <<< "$dylibs"
-
-    # Rewrite load commands from absolute paths to @rpath-relative.
     info "  [occt] Rewriting load paths to @rpath …"
-    local targets
-    targets=$(find "$frameworks_dir" -name 'libTK*.dylib' -maxdepth 1)
-    for target_bin in "$app_path/Contents/MacOS/$APP_NAME" \
-                       "$app_path/Contents/MacOS/$APP_NAME.debug.dylib"; do
-        if [ ! -f "$target_bin" ]; then continue; fi
-        while IFS= read -r old_path; do
-            local libname
-            libname=$(basename "$old_path")
-            install_name_tool -change "$old_path" "@rpath/$libname" "$target_bin" 2>/dev/null || true
-        done <<< "$dylibs"
-    done
 
-    # Fix the dylib IDs themselves (so they reference each other with @rpath).
-    for dylib_file in $targets; do
+    local all_dylibs
+    all_dylibs=$(find "$frameworks_dir" -name '*.dylib' -maxdepth 1 2>/dev/null || true)
+
+    # Build a lookup: basename → absolute path for each bundled dylib.
+    while IFS= read -r dylib_file; do
+        [ -z "$dylib_file" ] && continue
         local dylib_name
         dylib_name=$(basename "$dylib_file")
+        # Fix the dylib's own install name.
         install_name_tool -id "@rpath/$dylib_name" "$dylib_file" 2>/dev/null || true
-        # Rewrite inter-dylib references.
-        while IFS= read -r old_path; do
-            local ref_name
-            ref_name=$(basename "$old_path")
-            if [ "$ref_name" != "$dylib_name" ]; then
-                install_name_tool -change "$old_path" "@rpath/$ref_name" "$dylib_file" 2>/dev/null || true
-            fi
-        done <<< "$dylibs"
-    done
+    done <<< "$all_dylibs"
 
-    info "  [occt] Bundled $count dylibs into Frameworks/"
+    # For every binary (app + debug dylib + all bundled dylibs), rewrite
+    # each absolute homebrew/Cellar path to @rpath/libname.
+    local all_bins="$all_dylibs"$'\n'"$app_path/Contents/MacOS/$APP_NAME"
+    if [ -f "$app_path/Contents/MacOS/$APP_NAME.debug.dylib" ]; then
+        all_bins="$all_bins"$'\n'"$app_path/Contents/MacOS/$APP_NAME.debug.dylib"
+    fi
+
+    while IFS= read -r bin; do
+        [ -z "$bin" ] && continue
+        [ -f "$bin" ] || continue
+        local abs_deps
+        abs_deps=$(otool -L "$bin" 2>/dev/null \
+            | grep -oE '/[^ ]+\.dylib' \
+            | grep -v '@rpath\|@loader_path\|@executable_path\|^/usr/lib\|^/System\|^/lib/' \
+            || true)
+        while IFS= read -r old_path; do
+            [ -z "$old_path" ] && continue
+            local libname
+            libname=$(basename "$old_path")
+            install_name_tool -change "$old_path" "@rpath/$libname" "$bin" 2>/dev/null || true
+        done <<< "$abs_deps"
+    done <<< "$all_bins"
+
+    local final_count
+    final_count=$(ls "$frameworks_dir"/*.dylib 2>/dev/null | wc -l | tr -d ' ')
+    info "  [occt] Bundled $total_copied new + rewriting load paths; Frameworks/ now has $final_count dylibs"
 }
 
 # ── Ad-hoc code signing ───────────────────────────────────────────────
@@ -295,7 +370,7 @@ case "$CONFIG" in
         # Bundle OCCT if linked, then sign.
         occt_dir=""
         if occt_dir=$(detect_occt_runtime "Release"); then
-            bundle_occt_dylibs "$APP_PATH" "$occt_dir"
+            bundle_occt_dylibs "$APP_PATH"
         fi
         ad_hoc_sign "$APP_PATH"
         info
@@ -312,19 +387,16 @@ case "$CONFIG" in
         info "  5. xcrun notarytool submit MMForge.zip --apple-id … --team-id … --wait"
         info "  6. xcrun stapler staple \"$APP_PATH\""
         info
-        if [ -z "$occt_dir" ]; then
-            info "── OCCT Shim ──"
-            info "OCCT is NOT linked.  STEP/IGES will show build guidance."
-            info "To enable: install OCCT + build shim, then rebuild."
-            info "See: crates/mmforge-geometry/shim/README.md"
-        fi
+        info "── OCCT Shim ──"
+        info "OCCT support requires a pre-built shim library."
+        info "See: crates/mmforge-geometry/shim/README.md"
         ;;
     dmg)
         build_rust
         APP_PATH=$(build_app "Release")
         occt_dir=""
         if occt_dir=$(detect_occt_runtime "Release"); then
-            bundle_occt_dylibs "$APP_PATH" "$occt_dir"
+            bundle_occt_dylibs "$APP_PATH"
         fi
         ad_hoc_sign "$APP_PATH"
         create_dmg "$APP_PATH"

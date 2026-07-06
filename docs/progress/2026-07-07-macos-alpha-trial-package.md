@@ -23,7 +23,21 @@ This batch delivers macOS Debug/Release/DMG packaging with:
 
 ## 2. `macos/scripts/package.sh` — Enhanced
 
-### 2.1 New Functions
+### 2.1 OCCT Runtime Bundling (Recursive Transitive Closure)
+
+**Before**: Only copied `libTK*.dylib` from `/opt/homebrew/opt/opencascade/lib/`.
+Residual dependencies on `/opt/homebrew/opt/tbb/lib/libtbb.12.dylib`,
+`/opt/homebrew/opt/tbb/lib/libtbbmalloc.2.dylib`,
+`/opt/homebrew/opt/freetype/lib/libfreetype.6.dylib` were not resolved,
+making the app non-portable.
+
+**After**: `bundle_occt_dylibs` recursively discovers all non-system
+dylib dependencies of every binary in the app bundle, copies them into
+`Contents/Frameworks/`, and rewrites all load paths to `@rpath/`.
+Iterates until no new deps are found (transitive closure).
+
+Result: **0 Homebrew /usr/local / Cellar references** in all 27 binaries
+(main executable + 26 bundled dylibs).
 
 | Function | Purpose |
 |----------|---------|
@@ -62,7 +76,7 @@ $ otool -L macos/build/.../Release/MMForge.app/Contents/MacOS/MMForge \
         @rpath/libTKG3d.7.9.dylib
 
 $ ls macos/build/.../Release/MMForge.app/Contents/Frameworks/libTK*.dylib | wc -l
-22
+22  (plus libtbb.12.dylib, libtbbmalloc.2.dylib, libfreetype.6.dylib, libpng16.16.dylib → 26 total)
 
 $ codesign -dvv macos/build/.../Release/MMForge.app
 Signature=adhoc                                  ← ad-hoc, not un-signed
@@ -157,10 +171,10 @@ is needed (documented in package.sh output).
 | Debug .app builds | Automated | `package.sh debug` exit 0 |
 | Release .app builds | Automated | `package.sh release` exit 0 |
 | DMG builds | Automated | `package.sh dmg` exit 0 |
-| OCCT dylib bundling (22) | Code evidence | `otool -L` + `ls Frameworks/` |
+| OCCT transitive deps (27 binaries, 0 Homebrew refs) | Code evidence | `otool -L` recursive — all `@rpath/` |
 | Ad-hoc signing | Code evidence | `codesign -dvv` → `Signature=adhoc` |
-| GUI smoke test | Manual | `smoke-test.sh` opens files; visual inspection of render |
-| STEP rendering | Manual GUI | `open -a MMForge.app <file>.STEP` → geometry visible |
+| Launch smoke (8 formats) | Automated | `smoke-test.sh`: 7 passed, 0 failed, 1 skipped |
+| GUI rendering verification | Manual | Visual inspection of 3D viewport |
 
 ---
 
@@ -168,8 +182,8 @@ is needed (documented in package.sh output).
 
 | File | Δ | Change |
 |------|---|--------|
-| `macos/scripts/package.sh` | +246/−95 | OCCT bundle + ad-hoc sign + diagnostics; robust detect |
-| `macos/scripts/smoke-test.sh` | +100 (new) | Automated app-open smoke test for 8 formats |
+| `macos/scripts/package.sh` | +132/−52 | Recursive transitive dylib bundling, ad-hoc signing, diagnostics |
+| `macos/scripts/smoke-test.sh` | +31/−31 (rewrite) | Launch smoke; fix `set -e` + `((PASS++))` exit bug |
 | `docs/progress/2026-07-07-macos-alpha-trial-package.md` | +150 (new) | This report |
 
 ---
