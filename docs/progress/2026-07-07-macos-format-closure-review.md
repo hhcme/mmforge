@@ -2,7 +2,7 @@
 
 **Date**: 2026-07-07
 **Agent**: Opencode (deepseek-v4-pro)
-**Status**: COMPLETE — lsm_detector.rs +199/−17; 10 LSM tests, 350 workspace
+**Status**: COMPLETE — lsm_detector.rs +235/−23; 10 LSM tests, 350 workspace
 
 ---
 
@@ -17,7 +17,7 @@ be decompressed.
 
 ### Fix
 
-**File**: `crates/mmforge-bridge/src/lsm_detector.rs` (+75/−15)
+**File**: `crates/mmforge-bridge/src/lsm_detector.rs` (ffdc230: +194/−16; cumulative with 5aee00c: +235/−23)
 
 Extracted `parse_lsm_data(data, path)` and internal `to_format_tag()`:
 
