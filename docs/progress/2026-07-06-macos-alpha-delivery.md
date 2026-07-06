@@ -1,8 +1,55 @@
 # macOS Alpha Delivery — 2026-07-06
 
-**Date**: 2026-07-06
+**Date**: 2026-07-06 (review fixes applied)
 **Agent**: Opencode (deepseek-v4-pro)
-**Status**: COMPLETE — 4 files changed, +155/−16; packaging script + README update
+**Status**: COMPLETE — 6 files changed, +160/−55; review fixes for package.sh, OCCT, LSM/LSMC
+
+---
+
+## Review-Fix Pass
+
+### package.sh — stdout/stderr Separation (CRITICAL)
+
+**Before**: `build_app()` mixed log output and path output on stdout.
+`APP_PATH=$(build_app Debug)` captured `"==> Building …\n  [ok] …\n/path/to/app"`,
+causing `ln -s` to receive a multi-line garbage path ("File name too long").
+
+**After**: All informational output uses `info()` → `>&2`.  Only the
+result path is `echo`ed to stdout.  `xcodebuild` output also redirected `>&2`.
+
+### OCCT Strategy Alignment — Xcode Build Phase
+
+**Before**: Xcode's "Build Rust Bridge" phase (`project.pbxproj:274`)
+unconditionally required OCCT (`exit 1` if headers/libs/shim missing).
+`package.sh` used conditional OCCT detection.
+
+**After**: Xcode build phase now uses the same conditional logic as
+`package.sh`: detects `OCCT_INCLUDE_DIR`/`OCCT_LIB_DIR`/shim, and builds
+with `--features occt` only when all three are present.  Without OCCT,
+it builds the bridge without features — the app will show
+STEP/IGES guidance.
+
+Both `package.sh` and Xcode build phase use identical detection:
+`[ -d "$OCCT_INCL" ] && [ -d "$OCCT_LIB" ] && [ -f "$SHIM_A" ]`.
+
+### MMForgeDocument.readableContentTypes — LSM/LSMC
+
+**Before**: `readableContentTypes` listed only 7 types (step, stl, gltf,
+glb, iges, dxf).  `.lsm`/`.lsmc` files registered in Info.plist couldn't
+be opened via DocumentGroup because `DocumentGroup` filters by
+`readableContentTypes`.
+
+**After**: Added `.lsm` and `.lsmc` UTType extensions and included them
+in both the `custom` and `sys` arrays of `readableContentTypes`.
+The `DocumentGroup` now accepts drag-and-drop or `open -a` of
+`.lsm`/`.lsmc` files.  They currently show a parse error (bridge
+detection cascade doesn't include LSM magic bytes) but the app doesn't
+reject them.
+
+### LSM/LSMC Status Sync (README + Report)
+
+Updated README format table: "CLI: read/write; app: registered but
+parser not yet integrated".  Honest about the known gap.
 
 ---
 
@@ -181,14 +228,29 @@ Results verified visually by checking:
 
 ---
 
-## 7. Files Changed
+## 8. Files Changed
 
 | File | Δ | Change |
 |------|---|--------|
-| `macos/MMForge/Resources/Info.plist` | +41 | Added `com.mmforge.lsm` + `com.mmforge.lsmc` UTIs; added `LSHandlerRank` |
-| `macos/scripts/package.sh` | +119 (new) | Debug/Release/DMG packaging script |
-| `README.md` | +62/−16 | macOS build/test/package/format/limits docs; status badge; format table |
+| `macos/MMForge/Resources/Info.plist` | +41 | LSM/LSMC UTIs, LSHandlerRank |
+| `macos/MMForge/Document/MMForgeDocument.swift` | +4 | `.lsm` + `.lsmc` UTType + readableContentTypes |
+| `macos/MMForge.xcodeproj/project.pbxproj` | ~+5/−25 | Xcode build phase: conditional OCCT (no hard fail) |
+| `macos/scripts/package.sh` | +173 (new) | Debug/Release/DMG packaging; all logs to stderr |
+| `README.md` | +81/−16 | macOS build/test/package/limits docs |
 | `docs/progress/2026-07-06-macos-alpha-delivery.md` | +150 (new) | This report |
+
+## 9. Verification Suite
+
+| Command | Result |
+|---------|--------|
+| `plutil -lint macos/MMForge/Resources/Info.plist` | **OK** |
+| `xcodebuild test -project macos/MMForge.xcodeproj -scheme MMForge -derivedDataPath macos/build` | **155/155 pass** |
+| `cargo test --workspace` | **340 pass** |
+| `cargo clippy --workspace -- -D warnings` | **0 warnings** |
+| `cargo fmt --all --check` | **clean** |
+| `bash docs/scripts/perf-baseline.sh` | STEP/IGES/STL/DXF pass; glTF CLI NOT SUPPORTED |
+| `git diff --check` | **clean** |
+| `bash macos/scripts/package.sh debug` | **build + symlink OK** |
 
 ---
 

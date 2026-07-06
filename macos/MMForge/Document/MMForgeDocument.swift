@@ -11,6 +11,8 @@ extension UTType {
     static let glb  = UTType("com.mmforge.glb")!
     static let iges = UTType("com.mmforge.iges")!
     static let dxf  = UTType("com.mmforge.dxf")!
+    static let lsm  = UTType("com.mmforge.lsm")!
+    static let lsmc = UTType("com.mmforge.lsmc")!
 }
 
 // MARK: - App preferences (persisted via UserDefaults)
@@ -46,11 +48,11 @@ struct Measurement: Identifiable {
 /// The document type for MMForge model files.
 struct MMForgeDocument: FileDocument {
     static var readableContentTypes: [UTType] {
-        let custom: [UTType] = [.step, .stl, .gltf, .glb, .iges, .dxf]
+        let custom: [UTType] = [.step, .stl, .gltf, .glb, .iges, .dxf, .lsm, .lsmc]
         let sys: [UTType] = [
             "step", "stp", "stl", "STL",
             "gltf", "glb", "igs", "iges",
-            "dxf",
+            "dxf", "lsm", "lsmc",
         ].compactMap { UTType(filenameExtension: $0) }
         return custom + sys
     }

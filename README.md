@@ -88,7 +88,7 @@ MMForge is an open-source industrial model parsing and rendering solution. It ta
 | IGES | P1 | OCCT | Parsed with OCCT; without OCCT shows build guidance |
 | DXF | P0 | Custom | Working (macOS app, CLI) |
 | OBJ | P1 | Custom | Planned |
-| LSM / LSMC | — | Custom | CLI read/write; app can open .lsm/.lsmc |
+| LSM / LSMC | — | Custom | CLI: read/write; app: registered but parser not yet integrated |
 
 ### 2D Formats
 
