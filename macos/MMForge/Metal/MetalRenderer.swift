@@ -214,6 +214,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     var nodeColorOverrides: [Int: simd_float4] = [:]
 
     private var gpuMeshes: [GPUMesh] = []
+    /// nodeIndex → indices into gpuMeshes.  Built incrementally during upload,
+    /// cleared in clearMeshes().  Enables O(1) visibility toggle instead of
+    /// O(n) linear scan.
+    private var _nodeToMeshIndices: [Int: [Int]] = [:]
     private var sceneBounds: (min: simd_float3, max: simd_float3) = (.zero, .zero)
     private(set) var camera = CameraState()
 
@@ -443,6 +447,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             materialColor: materialColor,
             bvh: bvh
         ))
+        _nodeToMeshIndices[nodeIndex, default: []].append(gpuMeshes.count - 1)
     }
 
     func setSceneBounds(min: simd_float3, max: simd_float3) {
@@ -453,6 +458,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     func clearMeshes() {
         gpuMeshes.removeAll()
+        _nodeToMeshIndices.removeAll()
         selectedNodeIndex = nil
         hiddenNodeIndices = []
         invalidateFrustumCache()
@@ -610,15 +616,19 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     func setSelectedNode(_ index: Int?) { selectedNodeIndex = index }
 
     func setNodeVisible(_ index: Int, visible: Bool) {
-        for i in gpuMeshes.indices where gpuMeshes[i].nodeIndex == index {
+        guard let indices = _nodeToMeshIndices[index] else { return }
+        for i in indices {
             gpuMeshes[i].visible = visible
         }
     }
 
     func setHiddenNodes(_ indices: Set<Int>) {
         hiddenNodeIndices = indices
-        for i in gpuMeshes.indices {
-            gpuMeshes[i].visible = !indices.contains(gpuMeshes[i].nodeIndex)
+        for (nodeIdx, meshIndices) in _nodeToMeshIndices {
+            let vis = !indices.contains(nodeIdx)
+            for i in meshIndices {
+                gpuMeshes[i].visible = vis
+            }
         }
     }
 

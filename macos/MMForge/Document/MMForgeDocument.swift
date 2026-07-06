@@ -624,7 +624,7 @@ extension DocumentViewModel {
             parseProgress = 1
             state = .loaded(
                 triangleCount: dto.triangleCount,
-                meshCount: uploaded,
+                meshCount: dto.meshes.count,
                 nodeCount: dto.nodeNames.count
             )
             self.streamingTask = nil

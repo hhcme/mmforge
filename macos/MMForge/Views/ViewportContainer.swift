@@ -142,7 +142,6 @@ struct LoadingStateView: View {
                     onCancel()
                 }
                 .keyboardShortcut(.escape, modifiers: [])
-                .disabled(progress >= 1.0 && !stage.isEmpty)
             }
 
             Spacer()
@@ -249,17 +248,15 @@ struct MetalViewWrapper: NSViewRepresentable {
             let point = gesture.location(in: view)
             let viewSize = view.bounds.size
 
-            // Gesture recognizers fire on main, but @objc methods are nonisolated.
-            // Dispatch back for actor isolation to access @MainActor viewModel.
-            DispatchQueue.main.async {
-                if viewModel.measurementMode {
-                    if let worldPoint = renderer.pickWorldPoint(at: viewSize, point: point) {
-                        viewModel.addMeasurementPoint(worldPoint)
-                    }
-                } else {
-                    let picked = renderer.pickNode(at: viewSize, point: point)
-                    viewModel.selectNode(picked)
+            // Gesture recognizer selectors fire on the main thread.
+            // Access @MainActor viewModel directly — no dispatch needed.
+            if viewModel.measurementMode {
+                if let worldPoint = renderer.pickWorldPoint(at: viewSize, point: point) {
+                    viewModel.addMeasurementPoint(worldPoint)
                 }
+            } else {
+                let picked = renderer.pickNode(at: viewSize, point: point)
+                viewModel.selectNode(picked)
             }
         }
 
