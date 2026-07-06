@@ -243,13 +243,11 @@ struct MetalViewWrapper: NSViewRepresentable {
             if let m = scrollMonitor { NSEvent.removeMonitor(m) }
         }
 
-        @objc func handleClick(_ gesture: NSClickGestureRecognizer) {
+        @MainActor @objc func handleClick(_ gesture: NSClickGestureRecognizer) {
             guard let renderer, let viewModel, let view = gesture.view else { return }
             let point = gesture.location(in: view)
             let viewSize = view.bounds.size
 
-            // Gesture recognizer selectors fire on the main thread.
-            // Access @MainActor viewModel directly — no dispatch needed.
             if viewModel.measurementMode {
                 if let worldPoint = renderer.pickWorldPoint(at: viewSize, point: point) {
                     viewModel.addMeasurementPoint(worldPoint)

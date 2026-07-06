@@ -56,17 +56,18 @@ safe — `cancelParse` increments the generation counter, which discards
 all stale callbacks regardless of progress state.  The button is always
 available.
 
-### 2.4 I21 — Redundant DispatchQueue.main.async (LOW)
+### 2.4 I21 — `@MainActor` Isolation Fix (LOW)
 
-**File**: `ViewportContainer.swift:251-260`
+**File**: `ViewportContainer.swift:246`
 
-**Before**: `handleClick` wrapped `@MainActor viewModel` access in
-`DispatchQueue.main.async {}` because of a commented belief that
-`@objc` gesture selectors are nonisolated.
+**Before**: `handleClick` removed `DispatchQueue.main.async` but the
+`@objc` method was not `@MainActor`-annotated, causing a Swift
+concurrency isolation error when accessing `DocumentViewModel`
+(which is `@MainActor`).
 
-**After**: Removed the dispatch wrapper.  `NSClickGestureRecognizer`
-target-action selectors are called on the main thread.  Direct access
-to `@MainActor` properties is safe without an extra run-loop hop.
+**After**: Added `@MainActor @objc` to `handleClick`.  Gesture
+recognizers fire on the main thread, so this annotation is both
+correct and avoids a redundant run-loop hop.
 
 ### 2.5 I9 — Streaming Mesh Count Accuracy (MEDIUM)
 
@@ -135,9 +136,9 @@ codesign --verify --deep --strict → OK
 
 | File | Δ | Change |
 |------|---|--------|
-| `macos/MMForge/Metal/MetalRenderer.swift` | +16/−3 | O(1) nodeIndex→meshIndices dict |
-| `macos/MMForge/Views/ViewportContainer.swift` | +19/−12 | Cancel always enabled; remove DispatchQueue.main |
-| `macos/MMForge/Document/MMForgeDocument.swift` | +2/−1 | Fixed streaming mesh count |
+| `macos/MMForge/Views/ViewportContainer.swift` | +20/−13 | Cancel always enabled; `@MainActor @objc` on handleClick |
+| `macos/MMForge/Metal/MetalRenderer.swift`      | +16/−3  | O(1) nodeIndex→meshIndices dict |
+| `macos/MMForge/Document/MMForgeDocument.swift` | +2/−1   | Fixed streaming mesh count |
 
 ---
 
