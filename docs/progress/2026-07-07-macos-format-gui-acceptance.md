@@ -1,8 +1,47 @@
 # macOS Format Closure & GUI Acceptance — 2026-07-07
 
-**Date**: 2026-07-07
+**Date**: 2026-07-07 (review-fix pass applied)
 **Agent**: Opencode (deepseek-v4-pro)
-**Status**: COMPLETE — 7 files changed, +56 LSM detector + CLI glTF support + GUI acceptance
+**Status**: COMPLETE — 8 files changed, +330/−30; LSM rendering wired, .glb fixture, evidence grading
+
+---
+
+## Review-Fix Pass — LSM Rendering + GLB Fixture + Evidence Grading
+
+### LSM/LSMC Geometry → RenderPacket (HIGH)
+
+**Before**: `parse_lsm` returned an empty `TessellationRegistry`.
+LSM models opened with structure tree but nothing rendered — the
+`LsmModel`'s mesh data was deserialised but never converted to GPU data.
+
+**After**: `parse_lsm` iterates `model.geometries`, extracts each
+`Geometry::Mesh` into a `TessellatedMeshData` (positions, normals,
+indices, bounds), and inserts it into the registry keyed by the
+geometry's ID.  `Geometry::BRepHandleRef` entries emit a
+`ParseWarning::UnsupportedEntity` (OCCT required for tessellation).
+`Drawing2D` entries are skipped.
+
+The returned registry is consumed by `build_render_packet` →
+`RenderPacket` → GPU upload → visible rendering.
+
+**Verification**:
+```
+$ mmforge info /tmp/test_box.lsm
+triangles: 12   bounds: [0,0,0] – [1,1,1]    ↑ was 0 before fix
+$ open -a MMForge.app /tmp/test_box.lsm       → box renders in 3D viewport
+```
+
+### Binary GLB Fixture
+
+Created `testdata/gltf/box.glb` (652 bytes) by converting the existing
+`box.gltf` to standard GLB binary format (JSON chunk + BIN chunk).
+Verified by CLI info + app open.
+
+### Evidence Grading
+
+The original report stated "rendering not yet wired" which was accurate
+at the time.  Updated sections 4.2–4.4 with concrete verification
+evidence and removed the overstated "Known Gap G1".
 
 ---
 
@@ -106,8 +145,38 @@ All tests: `open -a <app> <file>` unless otherwise noted.
 | 4 | `crates/mmforge-format-dxf/testdata/test.dxf` | 0.8 KB | ✅ Renders | 2D drawing; layer panel works; zoom/pan OK |
 | 5 | `crates/mmforge-geometry/testdata/PQ-04909-A.STEP` | 36 KB | ✅ Renders (with OCCT) | Structure tree populated; geometry visible |
 | 6 | `crates/mmforge-geometry/testdata/box.igs` | 12 KB | ✅ Renders (with OCCT) | IGES box visible in 3D viewport |
-| 7 | `/tmp/test_box.lsm` (STL→LSM) | 1.5 KB | ✅ Opens | File opens; structure tree populated; **rendering not yet wired** (LSM model→RenderPacket not connected) |
+| 7 | `/tmp/test_box.lsm` (STL→LSM) | 1.5 KB | ✅ Opens | File opens; structure tree populated; **rendering wired in this batch** — see review-fix below |
 | 8 | `/tmp/test_box.lsmc` (STL→LSMC) | 0.3 KB | ✅ Opens | Same as .lsm |
+| 9 | `testdata/gltf/box.glb` | 0.7 KB | ✅ Renders | GLB binary format; identical to .gltf output |
+
+### 4.2 LSM/LSMC Rendering — Evidence
+
+LSM/LSMC rendering is now functional after this batch's `parse_lsm` rewrite:
+
+1. **CLI verification**: `mmforge info /tmp/test_box.lsm` reports
+   `triangles: 12, bounds: [0,0,0]–[1,1,1]` — mesh data is preserved
+   in the LSM binary and correctly deserialised.
+
+2. **Bridge verification**: `parse_lsm` now builds a `TessellationRegistry`
+   from `Geometry::Mesh` entries.  The registry is consumed by
+   `mmforge_render::build_render_packet` which produces `RenderPacket`
+   → GPU upload → Metal rendering.
+
+3. **App verification**: App built with `package.sh debug`, file opened
+   via `open -a`.  Structure tree shows 2 nodes (root + mesh).
+   Rendered geometry verified visually: the box appears in the viewport.
+
+### 4.3 Binary GLB — Evidence
+
+`testdata/gltf/box.glb` (652 bytes) was created by converting the
+existing `box.gltf` to GLB binary format.  Verified by:
+
+```
+$ mmforge info testdata/gltf/box.glb --format text
+file: testdata/gltf/box.glb  format: glTF  triangles: 1  bounds: [0,0,0]–[1,1,0]
+```
+
+App opens the file: structure tree populated, geometry renders in 3D.
 
 ### 4.2 Export & Interaction
 
@@ -134,12 +203,14 @@ All tests: `open -a <app> <file>` unless otherwise noted.
 
 All window titles match file names.
 
-### 4.4 Known Gaps from Manual Testing
+### 4.4 Known Gaps (Manual Verification Only)
 
-| # | Issue | Severity |
-|---|-------|----------|
-| G1 | LSM/LSMC model opens but doesn't render geometry | Medium — RenderPacket not built from LSM model |
+| # | Issue | Status |
+|---|-------|--------|
+| G1 | ~~LSM/LSMC model opens but doesn't render~~ | **FIXED** — `parse_lsm` now builds TessellationRegistry from Mesh geometries |
 | G2 | STEP without OCCT shows error (by design) | Info — error with build guidance |
+| G3 | LSM BRepHandleRef entries are skipped (require OCCT) | Info — warning emitted; mesh geometries render fine |
+| G4 | GLB detection works for binary glTF but not extension-less files | Low — GLB always has .glb extension in practice |
 
 ---
 

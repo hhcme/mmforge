@@ -1,9 +1,14 @@
 //! LSM / LSMC format detection and parsing for the bridge.
 //!
 //! Detects `.lsm` and `.lsmc` files by extension and magic bytes.
-//! Delegates parsing to `mmforge_core::lsm`.
+//! Delegates parsing to `mmforge_core::lsm`.  Extracts Mesh geometry
+//! from the LSM model and builds a `TessellationRegistry` so the
+//! resulting `RenderPacket` contains renderable triangles.
 
 use std::path::Path;
+
+use mmforge_core::model::Geometry;
+use mmforge_geometry::tessellation::{TessellatedMeshData, TessellationRegistry};
 
 /// Check whether a file is a `.lsm` or `.lsmc` document.
 pub fn detect_lsm(header: &[u8], path: &Path) -> bool {
@@ -27,17 +32,17 @@ pub fn detect_lsm(header: &[u8], path: &Path) -> bool {
     false
 }
 
-/// Parse an LSM or LSMC file and produce a `MmfDocument`.
+/// Parse an LSM or LSMC file and produce parse output with a
+/// `TessellationRegistry` containing all Mesh geometries from the model.
 ///
-/// Reads the file into memory, decompresses if LSMC, then calls
-/// `lsm::read_lsm`.  The resulting `LsmModel` is converted to a
-/// `MmfDocument` via the normal build pipeline.
+/// Reads the file, decompresses if LSMC, deserialises the LSM model,
+/// then extracts each `Geometry::Mesh` into a `TessellatedMeshData`
+/// entry.  `Geometry::BRepHandleRef` entries are skipped (require OCCT
+/// for tessellation).  The resulting registry is consumed by
+/// `mmforge_render::build_render_packet` to produce GPU-ready data.
 pub fn parse_lsm(
     path: &Path,
-) -> mmforge_core::Result<(
-    mmforge_core::model::ParseOutput,
-    mmforge_geometry::tessellation::TessellationRegistry,
-)> {
+) -> mmforge_core::Result<(mmforge_core::model::ParseOutput, TessellationRegistry)> {
     let data = std::fs::read(path)
         .map_err(|e| mmforge_core::Error::parse("LSM", format!("cannot read: {e}")))?;
 
@@ -58,24 +63,53 @@ pub fn parse_lsm(
             .map_err(|e| mmforge_core::Error::parse("LSM", format!("{e}")))?
     };
 
+    // Build TessellationRegistry from Mesh geometries.
+    let mut registry = TessellationRegistry::new();
+    let mut tri_count = 0usize;
+    let mut warnings: Vec<mmforge_core::model::ParseWarning> = Vec::new();
+
+    for geom in &model.geometries {
+        match geom {
+            Geometry::Mesh(mesh) => {
+                tri_count += mesh.indices.len() / 3;
+                registry.insert(
+                    mesh.id,
+                    TessellatedMeshData {
+                        positions: mesh.positions.clone(),
+                        normals: mesh.normals.clone(),
+                        indices: mesh.indices.clone(),
+                        bounds: mesh.bounds,
+                    },
+                );
+            }
+            Geometry::BRepHandleRef { id, label, .. } => {
+                warnings.push(mmforge_core::model::ParseWarning::UnsupportedEntity {
+                    entity_type: format!("BRepHandleRef({label})"),
+                    count: 1,
+                });
+                let _ = id;
+            }
+            Geometry::Drawing2D { .. } => {
+                // 2D drawings are not rendered via RenderPacket.
+            }
+        }
+    }
+
     let stats = mmforge_core::model::ParseStats {
         node_count: model.scene.nodes.len(),
         geometry_count: model.geometries.len(),
         material_count: model.materials.len(),
-        triangle_count: 0,
+        triangle_count: tri_count,
         parse_duration_ms: 0,
     };
 
     let output = mmforge_core::model::ParseOutput {
         model,
-        warnings: vec![],
+        warnings,
         stats,
     };
 
-    Ok((
-        output,
-        mmforge_geometry::tessellation::TessellationRegistry::new(),
-    ))
+    Ok((output, registry))
 }
 
 #[cfg(test)]
