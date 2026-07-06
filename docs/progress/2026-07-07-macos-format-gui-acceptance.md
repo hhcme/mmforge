@@ -222,7 +222,7 @@ All window titles match file names.
 | `bash macos/scripts/package.sh release` | **BUILD SUCCEEDED** |
 | `bash macos/scripts/package.sh dmg` | **BUILD SUCCEEDED** — 3.9 MB DMG |
 | `xcodebuild test ...` | **155/155 pass** |
-| `cargo test --workspace` | **343 pass** (56 bridge, 8 CLI, 30 integration, 97 core, 39 DXF, 6 IGES, 12 STEP, 6 geometry, 89 render) |
+| `cargo test --workspace` | **350 pass** (63 bridge, 8 CLI, 30 integration, 97 core, 39 DXF, 6 IGES, 12 STEP, 6 geometry, 89 render) |
 | `cargo clippy --workspace -- -D warnings` | **0 warnings** |
 | `cargo fmt --all --check` | **clean** |
 | `bash docs/scripts/perf-baseline.sh` | **ALL 5 FORMATS PASS** (glTF now supported!) |
