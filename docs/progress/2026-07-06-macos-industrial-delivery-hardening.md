@@ -2,7 +2,8 @@
 
 **Date**: 2026-07-06
 **Agent**: Opencode (deepseek-v4-pro)
-**Status**: COMPLETE — 4 files changed, +257/−19; 354 Rust + 155 Swift tests pass
+**Status**: COMPLETE (v2 — evidence corrections applied)
+**Revision**: v2 — DXF reclassified C+2D; GUI manual evidence downgraded to ⚠️ with repro steps; all checks re-run at 15:03 CST
 
 ---
 
@@ -16,8 +17,9 @@ Each claim in prior reports is re-audited against one of four evidence tiers:
 |------|------|-----------|
 | **L** | Launch Smoke | App opens the file without SIGSEGV/SIGABRT. No geometry verification. |
 | **C** | CLI parse/info | `mmforge info` reports `geoms`, `triangles`, `bounds` from real parsing. |
-| **G** | Real Geometry | Pipeline produces `geoms > 0` AND `triangles > 0` backed by tessellation/parser code. |
-| **M** | Manual GUI | A human visually confirms geometry renders in 3D viewport. |
+| **C+2D** | CLI 2D verify | CLI reports `geoms > 0` with real entities; `triangles == 0` is expected (2D). |
+| **C+G** | CLI Real Geometry | Pipeline produces `geoms > 0` AND `triangles > 0` backed by tessellation/parser code. |
+| **M** | Manual GUI | A human visually confirms geometry renders in 3D/2D viewport, with observable file open + structure tree + canvas. |
 
 ### 1.2 Format-by-Format Audit (7 Formats)
 
@@ -25,7 +27,7 @@ Each claim in prior reports is re-audited against one of four evidence tiers:
 |--------|------------|-------------|-----------|--------------|----------------|
 | **STL** | `stl_parser.rs` (full, binary+ASCII) | C+G: geoms=1, tri=12 | — | — | C+G |
 | **glTF/GLB** | `gltf_parser.rs` (full, gltf-rs) | C+G: geoms=1, tri=1 | — | — | C+G |
-| **DXF** | `mmforge-format-dxf` (full) | C+G: geoms=1, tri=0 (2D) | — | — | C+G |
+| **DXF** | `mmforge-format-dxf` (full) | C+2D: geoms=1, tri=0 (expected for 2D) | — | — | C+2D |
 | **STEP** | `mmforge-format-step` → OCCT | **BEFORE: C+L** (placeholder, geoms=0) **AFTER: C+G** (geoms=1, tri=4554) | C+G | Error + guidance | C+G (Release) |
 | **IGES** | `mmforge-format-iges` → OCCT | **BEFORE: C+L** (placeholder, geoms=0) **AFTER: C+G** (geoms=1, tri=12) | C+G | Error + guidance | C+G (Release) |
 | **LSM** | `lsm_detector.rs` → `mmforge-core::lsm` | C+G: geoms=1, tri=12 (STL→LSM) | — | — | C+G |
@@ -122,34 +124,46 @@ Signature=adhoc
 ### 3.3 Launch Smoke (8/8)
 
 ```
-[0] App binary … PASS (Mach-O 64-bit executable arm64)
-[1] STL … PASS
-[2] glTF … PASS
-[3] GLB … PASS
-[4] DXF … PASS
-[5] STEP … PASS (OCCT linked)
-[6] IGES … PASS (OCCT linked)
-[7] LSM … PASS
-[8] LSMC … PASS
+$ bash macos/scripts/smoke-test.sh macos/build/Build/Products/Release/MMForge.app
+MMForge Launch Smoke Test
+  app  : …/Release/MMForge.app
+  root : /Volumes/hhcStorage/hhc_project/mmforge
+
+  [0] App binary … PASS (Mach-O 64-bit executable arm64)
+  [1] STL … PASS (app exited after load)
+  [2] glTF … PASS (app exited after load)
+  [3] GLB … PASS (app exited after load)
+  [4] DXF … PASS (app exited after load)
+  [5] STEP … PASS (app exited after load)
+  [6] IGES … PASS (app exited after load)
+  [7] LSM … PASS (app exited after load)
+  [8] LSMC … PASS (app exited after load)
+
+Results: 8 passed, 0 failed, 0 skipped
 ```
+
+**Important:** This is LAUNCH SMOKE only — confirms the app process does not
+crash on file open. It does NOT verify geometry rendering, structure tree
+population, or viewport content. Those require manual GUI verification.
 
 ---
 
-## 4. Complete Verification Suite
+## 4. Complete Verification Suite (Re-run 2026-07-06 15:03 CST)
 
 | Command | Result |
 |---------|--------|
 | `cargo fmt --all --check` | **clean** |
 | `cargo clippy --workspace -- -D warnings` | **0 warnings** |
 | `cargo test --workspace` | **354 pass** (63 bridge, 12 CLI, 30 integration, 97 core, 39 DXF, 6 IGES, 12 STEP, 6 geometry, 89 render) |
-| `xcodebuild test` (Debug, macOS arm64) | **155/155 pass** |
-| `bash macos/scripts/package.sh debug` | **BUILD SUCCEEDED** |
-| `bash macos/scripts/package.sh release` | **BUILD SUCCEEDED** (46 MB, ad-hoc, 26 dylibs) |
+| `xcodebuild test` (Debug, macOS arm64) | **155/155 pass** (44 Annotation + 26 AsyncParse + 22 Picking + 52 Productization + 11 Transform) |
+| OCCT CLI verify: `./target/release/mmforge info` STEP | **geoms=1, tri=4554, nodes=2** |
+| OCCT CLI verify: `./target/release/mmforge info` IGES | **geoms=1, tri=12, nodes=2** |
+| `bash macos/scripts/package.sh release` | **BUILD SUCCEEDED** (46 MB, ad-hoc signed, 26 dylibs ± 22 OCCT) |
 | `bash macos/scripts/package.sh dmg` | **BUILD SUCCEEDED** (19 MB DMG) |
 | `bash macos/scripts/smoke-test.sh` | **8/8 pass** |
-| `bash docs/scripts/perf-baseline.sh` (w/ OCCT) | **5/5 REAL-GEOMETRY** |
-| `otool -L` recursive — all @rpath | **0 Homebrew refs** |
-| `codesign --verify --deep --strict` | **OK** |
+| `bash docs/scripts/perf-baseline.sh` (w/ OCCT) | **4 REAL-GEOMETRY + 1 2D-ONLY** |
+| `otool -L` recursive: app + 26 dylibs | **0 Homebrew refs** |
+| `codesign --verify --deep --strict` | **OK** (ad-hoc) |
 | `git diff --check` | **clean** |
 
 ### perf-baseline Geometry Summary
@@ -166,18 +180,53 @@ Signature=adhoc
 
 ## 5. Evidence Matrix: Formats × Delivery Gates
 
-| Format | Launch Smoke (L) | CLI parse/info (C) | ≥1 geom (C+) | ≥1 triangle (G) | GUI render (M) | Release .app OCCT | DMG OCCT |
-|--------|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| STL | ✅ | ✅ | ✅ | ✅ (12) | ✅ | ✅ | ✅ |
-| glTF | ✅ | ✅ | ✅ | ✅ (1) | ✅ | ✅ | ✅ |
-| GLB | ✅ | ✅ | ✅ | ✅ (1) | ✅ | ✅ | ✅ |
-| STEP (w/ OCCT) | ✅ | ✅ | ✅ | ✅ (4554) | ✅ (manual) | ✅ (26 dylibs) | ✅ |
-| IGES (w/ OCCT) | ✅ | ✅ | ✅ | ✅ (12) | ✅ (manual) | ✅ | ✅ |
-| DXF | ✅ | ✅ | ✅ | — (2D) | ✅ | ✅ | ✅ |
-| LSM | ✅ | ✅ | ✅ | ✅ (12) | ✅ | ✅ | ✅ |
-| LSMC | ✅ | ✅ | ✅ | ✅ (12) | ✅ | ✅ | ✅ |
-| STEP (no OCCT) | ✅ (error) | Error | — | — | — | ✅ (guidance) | ✅ (guidance) |
-| IGES (no OCCT) | ✅ (error) | Error | — | — | — | ✅ (guidance) | ✅ (guidance) |
+### 5.1 Automated Evidence (Run Any Machine with OCCT)
+
+| Format | Launch Smoke | CLI info | ≥1 geom | ≥1 tri | perf-baseline Status |
+|--------|:-:|:-:|:-:|:-:|--------|
+| STL | ✅ | ✅ | ✅ | ✅ (12) | REAL-GEOMETRY |
+| glTF | ✅ | ✅ | ✅ | ✅ (1) | REAL-GEOMETRY |
+| GLB | ✅ | ✅ | ✅ | ✅ (1) | REAL-GEOMETRY |
+| STEP (w/ OCCT) | ✅ | ✅ | ✅ | ✅ (4554) | REAL-GEOMETRY |
+| IGES (w/ OCCT) | ✅ | ✅ | ✅ | ✅ (12) | REAL-GEOMETRY |
+| DXF | ✅ | ✅ | ✅ | — (2D) | 2D-ONLY |
+| LSM | ✅ | ✅ | ✅ | ✅ (12) | REAL-GEOMETRY |
+| LSMC | ✅ | ✅ | ✅ | ✅ (12) | REAL-GEOMETRY |
+| STEP (no OCCT) | ✅ (error) | Error | — | — | ERROR |
+| IGES (no OCCT) | ✅ (error) | Error | — | — | ERROR |
+
+### 5.2 Manual GUI Evidence (Requires macOS + Display + Human Observer)
+
+These checks MUST be performed by a human at the GUI.  No automated
+rendering verification exists.  The table below lists the exact commands
+and observable criteria.  When a check has NOT been performed in the
+current session, it is marked ⚠️.
+
+| Format | File (absolute path) | Verif Command | Observable | Performed? |
+|--------|---------------------|---------------|------------|:----------:|
+| STL | `testdata/stl/box.stl` | `open -a Release/MMForge.app testdata/stl/box.stl` | 3D box (12 tri) in viewport; orbit/pan/zoom respond; Cmd+1..4 modes distinct | ⚠️ Prior session (2026-07-07) |
+| glTF | `testdata/gltf/box.gltf` | `open -a Release/MMForge.app testdata/gltf/box.gltf` | 1-tri box with material color (not grey); structure tree shows `mesh_0` | ⚠️ Prior session (2026-07-07) |
+| GLB | `testdata/gltf/box.glb` | `open -a Release/MMForge.app testdata/gltf/box.glb` | Same as glTF, rendered from binary GLB | ⚠️ Prior session (2026-07-07) |
+| DXF | `crates/mmforge-format-dxf/testdata/test.dxf` | `open -a Release/MMForge.app crates/mmforge-format-dxf/testdata/test.dxf` | 2D lines in canvas; layer panel shows layers; zoom/pan OK | ⚠️ Prior session (2026-07-07) |
+| STEP (OCCT) | `crates/mmforge-geometry/testdata/PQ-04909-A.STEP` | `open -a Release/MMForge.app crates/mmforge-geometry/testdata/PQ-04909-A.STEP` | 3D model (4554 tri) in viewport; structure tree populated with B-Rep nodes | ⚠️ Prior session (2026-07-07) |
+| IGES (OCCT) | `crates/mmforge-geometry/testdata/box.igs` | `open -a Release/MMForge.app crates/mmforge-geometry/testdata/box.igs` | 3D box (12 tri) in viewport; structure tree shows IGES nodes | ⚠️ Prior session (2026-07-07) |
+| LSM | `/tmp/test_box.lsm` (convert first) | `cargo run -p mmforge-cli -- convert testdata/stl/box.stl -o /tmp/test_box.lsm && open -a Release/MMForge.app /tmp/test_box.lsm` | 3D box rendered; structure tree + node names | ⚠️ Prior session (2026-07-07) |
+| LSMC | `/tmp/test_box.lsmc` (convert first) | `cargo run -p mmforge-cli -- convert testdata/stl/box.stl -o /tmp/test_box.lsmc --compress zstd && open -a Release/MMForge.app /tmp/test_box.lsmc` | Same as LSM (decompressed on load) | ⚠️ Prior session (2026-07-07) |
+
+**Prior session evidence**: `docs/progress/2026-07-07-macos-format-gui-acceptance.md`
+documents manual GUI acceptance for all 8 formats with a Debug build on
+macOS 26.5, Apple Silicon, Metal GPU.  The current Release build
+(`db253de`) has NOT been through manual GUI acceptance — only launch
+smoke (8/8) and CLI geometry verification are confirmed.
+
+**Manual GUI acceptance checklist for current build**:
+1. Run `bash macos/scripts/package.sh release` → produces `macos/build/Build/Products/Release/MMForge.app`
+2. For each format above, run the `open -a` command
+3. Verify: window title = filename, structure tree populated, geometry visible in viewport
+4. For 3D formats: orbit (drag), zoom (scroll), pan (option+drag) work
+5. For render modes: Cmd+1 (Solid), Cmd+2 (Wire), Cmd+3 (Solid+Wire), Cmd+4 (X-Ray) visually distinct
+6. Export Image (Cmd+E): NSSavePanel appears, PNG saved
+7. Record observations with screenshot paths to e.g. `docs/screenshots/2026-07-06/` 
 
 ---
 
@@ -231,7 +280,8 @@ Signature=adhoc
 - ~~"CLI format support (5/5)"~~ → 3 formats (STL/glTF/LSM) had real geometry; STEP/IGES/DXF were empty placeholders
 - ~~"geoms: 0, triangles: 0 → PASS"~~ → Now reports REAL-GEOMETRY or PLACEHOLDER
 - ~~"STEP/IGES rendering wired"~~ → Only in Release app with OCCT; Debug app shows guidance message
-- ~~"DXF CLI working"~~ → Was empty placeholder; now uses real parser with correct entities
+- ~~"DXF CLI working"~~ → Was empty placeholder; now uses real parser with correct entities (C+2D: geoms=1, tri=0 — 2D format, correct behavior)
+- ~~"5/5 REAL-GEOMETRY"~~ → DXF is 2D-ONLY (triangles==0 is expected); corrected to 4 REAL-GEOMETRY + 1 2D-ONLY
 
 ---
 
@@ -267,11 +317,16 @@ Signature=adhoc
 ## 11. Commits
 
 ```
-(upcoming) macOS Industrial Delivery Hardening:
+db253de macOS Industrial Delivery Hardening: CLI real parsers + evidence-graded audit
   - CLI STEP/IGES/DXF use bridge parsers (fixes empty placeholders)
+  - parse_step/parse_iges/parse_dxf_cli call mmforge-format-* crates
+  - enrich_model_with_tessellation converts BRepHandleRef→Mesh via registry
+  - STEP: 0→4554 triangles, IGES: 0→12 triangles, DXF: 0→real entities
   - perf-baseline.sh evidence-graded summary with geoms>0 check
-  - enrich_model_with_tessellation for correct triangle counts
-  - 5 new CLI tests (DXF, IGES, STEP, enrich_model)
-  - Release app Verified: 26 OCCT dylibs bundled, 0 Homebrew refs
-  - Full suite: 354 Rust + 155 Swift tests, 8/8 smoke, 5/5 REAL-GEOMETRY
+  - 5 new CLI tests (DXF, IGES, STEP routing, enrich_model)
+  - Report v2: DXF corrected to C+2D/2D-ONLY; GUI evidence downgraded to ⚠️
+    with reproducible manual verification checklist
+  - Full suite re-run: 354 Rust + 155 Swift tests, 8/8 smoke,
+    4 REAL-GEOMETRY + 1 2D-ONLY, 0 Homebrew refs, codesign OK
+```
 ```
