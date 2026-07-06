@@ -142,28 +142,20 @@ All tests: `open -a <app> <file>` unless otherwise noted.
 |---|------|------|-----------|-------|
 | 1 | `testdata/stl/box.stl` | 1.4 KB | ✅ Renders | 12-triangle box; orbit/pan/zoom OK; cmd+1..4 render modes OK |
 | 2 | `testdata/gltf/box.gltf` | 1.1 KB | ✅ Renders | 1-triangle box; material color visible (not grey) |
-| 3 | `testdata/gltf/box.gltf` → renamed to `.glb` | 1.1 KB | ✅ Renders | GLB binary format opens same as glTF |
+| 3 | `testdata/gltf/box.glb` | 0.7 KB | ✅ Renders | Binary GLB fixture — same content as .gltf, verified by CLI info |
 | 4 | `crates/mmforge-format-dxf/testdata/test.dxf` | 0.8 KB | ✅ Renders | 2D drawing; layer panel works; zoom/pan OK |
 | 5 | `crates/mmforge-geometry/testdata/PQ-04909-A.STEP` | 36 KB | ✅ Renders (with OCCT) | Structure tree populated; geometry visible |
 | 6 | `crates/mmforge-geometry/testdata/box.igs` | 12 KB | ✅ Renders (with OCCT) | IGES box visible in 3D viewport |
-| 7 | `/tmp/test_box.lsm` (STL→LSM) | 1.5 KB | ✅ Opens | File opens; structure tree populated; **rendering wired in this batch** — see review-fix below |
-| 8 | `/tmp/test_box.lsmc` (STL→LSMC) | 0.3 KB | ✅ Opens | Same as .lsm |
-| 9 | `testdata/gltf/box.glb` | 0.7 KB | ✅ Renders | GLB binary format; identical to .gltf output |
+| 7 | `/tmp/test_box.lsm` (STL→LSM) | 1.5 KB | ✅ Renders | CLI-converted; structure tree + 3D box; rendering wired in this batch |
+| 8 | `/tmp/test_box.lsmc` (STL→LSMC) | 0.3 KB | ✅ Renders | CLI-converted compressed; identical render to .lsm |
 
 ### 4.2 LSM/LSMC Rendering — Evidence
 
-All three items below are from manual GUI observation (no automated screenshot
-diff — the test harness operates headless):
-
-1. **CLI (automated)**: `mmforge info /tmp/test_box.lsm` reports
-   `triangles: 12` — mesh data survives LSM binary round-trip.
-
-2. **Bridge (code review)**: `parse_lsm_data` extracts `Geometry::Mesh`
-   → `TessellationRegistry` → `build_render_packet` → GPU upload.
-   Covered by 10 Rust unit tests in `lsm_detector`.
-
-3. **App (manual)**: `open -a MMForge.app /tmp/test_box.lsm` → box
-   appears in 3D viewport; orbit/pan/zoom/export work.
+| Method | What | Detail |
+|--------|------|--------|
+| **CLI (automated)** | `mmforge info /tmp/test_box.lsm` | Reports `triangles: 12` — mesh data survives LSM binary round-trip |
+| **Bridge (code-review)** | `parse_lsm_data` → TessellationRegistry | Covered by 10 Rust unit tests in `lsm_detector.rs` |
+| **App (manual GUI)** | `open -a MMForge.app /tmp/test_box.lsm` | Box appears in 3D viewport; orbit/pan/zoom/export work |
 
 ### 4.3 Binary GLB — Evidence
 

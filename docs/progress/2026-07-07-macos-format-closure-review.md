@@ -77,11 +77,13 @@ Mesh geometries from deserialised LSM model are extracted into
 | `5aee00c` (LSM rendering + GLB) | 4 files | +250/−22 |
 | `ffdc230` (magic routing + tests) | 3 files | +244/−100 |
 
-### Key Source Change
+### Key Source Changes
 
-| File | Δ | Change |
-|------|---|--------|
-| `crates/mmforge-bridge/src/lsm_detector.rs` | cumulative across both commits | Magic routing, `parse_lsm_data`, mesh→registry, 10 tests |
+| Commit | File | Δ |
+|--------|------|---|
+| `5aee00c` (LSM rendering) | `lsm_detector.rs` | +40/−12 (mesh→TessellationRegistry) |
+| `ffdc230` (magic routing) | `lsm_detector.rs` | +159/−5 (`parse_lsm_data`, +7 tests) |
+| **Total** | `lsm_detector.rs` | **+199/−17** |
 
 ## 4. GUI Evidence (Manual)
 
