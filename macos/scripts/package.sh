@@ -13,20 +13,24 @@
 #     builds with OCCT; otherwise builds without it (STEP/IGES show guidance)
 #
 # Output:
-#   macos/build/Products/Debug/MMForge.app    (Debug .app)
-#   macos/build/Products/Release/MMForge.app   (Release .app)
-#   macos/build/MMForge-0.1.0-alpha.dmg        (disk image)
+#   macos/build/Build/Products/Debug/MMForge.app    (Debug .app)
+#   macos/build/Build/Products/Release/MMForge.app   (Release .app)
+#   macos/build/MMForge-0.1.0-alpha.dmg              (disk image)
 
 set -euo pipefail
-cd "$(dirname "$0")/.."
+
+# Resolve paths independently of where the script is called from.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MACOS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT="$(cd "$MACOS_DIR/.." && pwd)"
 
 CONFIG="${1:-dmg}"
 APP_NAME="MMForge"
 VERSION="0.1.0"
 DMG_NAME="${APP_NAME}-${VERSION}-alpha"
-PROJECT="MMForge.xcodeproj"
+PROJECT="$MACOS_DIR/MMForge.xcodeproj"
 SCHEME="MMForge"
-BUILD_DIR="$(pwd)/build"
+BUILD_DIR="$MACOS_DIR/build"
 
 # ── Logging helpers ───────────────────────────────────────────────────
 # All log/info messages go to stderr so that $(build_app …) captures
@@ -38,14 +42,14 @@ err()   { echo "ERROR: $@" >&2; exit 1; }
 # ── Rust Bridge ──────────────────────────────────────────────────────
 # Xcode's own build phase also runs this logic (conditional OCCT).
 # We duplicate it here so package.sh can pre-build the bridge for
-# release/dmg without a second xcodebuild pass.  Debug mode lets
-# xcodebuild's build phase handle it.
+# release/dmg without relying on xcodebuild's build phase timing.
+# Debug mode lets xcodebuild's build phase handle it.
 
 build_rust() {
     local features=""
     local occt_incl="${OCCT_INCLUDE_DIR:-/opt/homebrew/include/opencascade}"
     local occt_lib="${OCCT_LIB_DIR:-/opt/homebrew/lib}"
-    local shim_a="${MMFORGE_SHIM_DIR:-$(pwd)/../crates/mmforge-geometry/shim/build}/libmmforge_occt_shim.a"
+    local shim_a="${MMFORGE_SHIM_DIR:-${ROOT}/crates/mmforge-geometry/shim/build}/libmmforge_occt_shim.a"
 
     if [ -d "$occt_incl" ] && [ -d "$occt_lib" ] && [ -f "$shim_a" ]; then
         info "  [rust] Building with OCCT support"
@@ -54,9 +58,11 @@ build_rust() {
         info "  [rust] Building without OCCT (STEP/IGES will show guidance)"
     fi
 
-    cargo build --release -p mmforge-bridge ${features} 2>&1 | while IFS= read -r line; do info "  [rust] $line"; done
+    cd "$ROOT"
+    cargo build --release -p mmforge-bridge ${features} 2>&1 \
+        | while IFS= read -r line; do info "  [rust] $line"; done
 
-    local src="../../target/release/libmmforge_bridge.a"
+    local src="${ROOT}/target/release/libmmforge_bridge.a"
     if [ ! -f "$src" ]; then
         err "libmmforge_bridge.a not found at $src"
     fi
@@ -77,6 +83,7 @@ build_app() {
 
     mkdir -p "$BUILD_DIR/Products/$config"
 
+    cd "$MACOS_DIR"
     xcodebuild \
         -project "$PROJECT" \
         -scheme "$SCHEME" \
@@ -139,6 +146,8 @@ create_dmg() {
 # ── Main ──────────────────────────────────────────────────────────────
 
 info "MMForge macOS Packaging"
+info "  root    : $ROOT"
+info "  macos   : $MACOS_DIR"
 info "  version : $VERSION"
 info "  config  : $CONFIG"
 info

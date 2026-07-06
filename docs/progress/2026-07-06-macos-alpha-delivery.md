@@ -239,18 +239,19 @@ Results verified visually by checking:
 | `README.md` | +81/−16 | macOS build/test/package/limits docs |
 | `docs/progress/2026-07-06-macos-alpha-delivery.md` | +150 (new) | This report |
 
-## 9. Verification Suite
+## 9. Verification Suite (Final)
 
 | Command | Result |
 |---------|--------|
+| `bash macos/scripts/package.sh debug` | **BUILD SUCCEEDED** — Debug .app + symlink |
+| `bash macos/scripts/package.sh release` | **BUILD SUCCEEDED** — Release .app |
+| `bash macos/scripts/package.sh dmg` | **BUILD SUCCEEDED** — DMG 3.9 MB produced |
 | `plutil -lint macos/MMForge/Resources/Info.plist` | **OK** |
 | `xcodebuild test -project macos/MMForge.xcodeproj -scheme MMForge -derivedDataPath macos/build` | **155/155 pass** |
 | `cargo test --workspace` | **340 pass** |
 | `cargo clippy --workspace -- -D warnings` | **0 warnings** |
 | `cargo fmt --all --check` | **clean** |
-| `bash docs/scripts/perf-baseline.sh` | STEP/IGES/STL/DXF pass; glTF CLI NOT SUPPORTED |
 | `git diff --check` | **clean** |
-| `bash macos/scripts/package.sh debug` | **build + symlink OK** |
 
 ---
 
@@ -275,6 +276,24 @@ Results verified visually by checking:
 - No code signing (unsigned app, Gatekeeper bypass needed)
 - No notarization
 - No sandbox / Hardened Runtime
+- **package.sh**: Release/DMG modes depend on `build_rust` correctly using `${ROOT}/target/` (fixed in second review pass)
+
+### Second Review-Fix — package.sh Path Robustness
+
+**Bug**: `build_rust` used `local src="../../target/release/libmmforge_bridge.a"`.
+From `macos/` CWD this went up two levels (parent of repo root), missing
+the actual `$ROOT/target/` at `../target/`.
+
+**Fix**: Script now resolves `ROOT`, `MACOS_DIR`, `SCRIPT_DIR` as absolute
+paths at the top.  `build_rust` `cd "$ROOT"` before `cargo build` and
+uses `${ROOT}/target/release/libmmforge_bridge.a`.  `build_app` `cd`s
+to `$MACOS_DIR`.  All modes verified live:
+
+```
+bash macos/scripts/package.sh debug    → BUILD SUCCEEDED, symlink OK
+bash macos/scripts/package.sh release  → BUILD SUCCEEDED, Release .app OK
+bash macos/scripts/package.sh dmg      → BUILD SUCCEEDED, DMG 3.9 MB OK
+```
 
 ### Alpha Trial Instructions
 
