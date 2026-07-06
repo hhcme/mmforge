@@ -1,12 +1,12 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 mod dxf_detector;
-mod gltf_parser;
+pub mod gltf_parser;
+mod iges_detector;
+mod lsm_detector;
 mod stl_parser;
 
 pub mod job;
-
-mod iges_detector;
 
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
@@ -217,6 +217,8 @@ pub(crate) fn detect_format_name(header: &[u8], path: &std::path::Path) -> &'sta
         "glTF detected — parsing"
     } else if iges_detector::detect_iges(header, path) {
         "IGES detected — parsing"
+    } else if lsm_detector::detect_lsm(header, path) {
+        "LSM detected — parsing"
     } else {
         "STEP detected — parsing"
     }
@@ -232,7 +234,7 @@ pub(crate) fn parse_with_detection(
         return Err(mmforge_core::error::Error::Cancelled);
     }
 
-    // Detection cascade: DXF → STL → glTF → IGES → STEP (fallback).
+    // Detection cascade: DXF → STL → glTF → IGES → LSM → STEP (fallback).
     let result = if dxf_detector::detect_dxf(header, path) {
         mmforge_format_dxf::parse_dxf_with_progress(path, progress, Some(cancel))
             .map(|(output, _drawing)| (output, TessellationRegistry::new()))
@@ -242,6 +244,8 @@ pub(crate) fn parse_with_detection(
         gltf_parser::parse_gltf_with_progress(path, progress, Some(cancel))
     } else if iges_detector::detect_iges(header, path) {
         mmforge_format_iges::parse_iges_with_tessellation_with_progress(path, progress, cancel)
+    } else if lsm_detector::detect_lsm(header, path) {
+        lsm_detector::parse_lsm(path)
     } else {
         // Default: try STEP (most flexible detection).
         mmforge_format_step::parse_step_with_tessellation_with_progress(path, progress, cancel)

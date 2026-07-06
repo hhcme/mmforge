@@ -215,20 +215,7 @@ Results verified visually by checking:
 
 ---
 
-## 6. Verification Suite
-
-| Command | Result |
-|---------|--------|
-| `xcodebuild test -project macos/MMForge.xcodeproj -scheme MMForge -derivedDataPath macos/build` | **155/155 pass** |
-| `cargo test --workspace` | **340 pass** |
-| `cargo clippy --workspace -- -D warnings` | **0 warnings** |
-| `cargo fmt --all --check` | **clean** |
-| `bash docs/scripts/perf-baseline.sh` | STEP/IGES/STL/DXF pass; glTF CLI NOT SUPPORTED (known) |
-| `git diff --check` | **clean** |
-
----
-
-## 8. Files Changed
+## 7. Files Changed
 
 | File | Δ | Change |
 |------|---|--------|
@@ -239,7 +226,7 @@ Results verified visually by checking:
 | `README.md` | +81/−16 | macOS build/test/package/limits docs |
 | `docs/progress/2026-07-06-macos-alpha-delivery.md` | +150 (new) | This report |
 
-## 9. Verification Suite (Final)
+## 8. Verification Suite (Final)
 
 | Command | Result |
 |---------|--------|
@@ -255,7 +242,7 @@ Results verified visually by checking:
 
 ---
 
-## 8. Alpha Delivery Readiness
+## 9. Alpha Delivery Readiness
 
 ### What Works
 - Open STL/glTF/DXF → renders correctly
@@ -276,7 +263,6 @@ Results verified visually by checking:
 - No code signing (unsigned app, Gatekeeper bypass needed)
 - No notarization
 - No sandbox / Hardened Runtime
-- **package.sh**: Release/DMG modes depend on `build_rust` correctly using `${ROOT}/target/` (fixed in second review pass)
 
 ### Second Review-Fix — package.sh Path Robustness
 
@@ -321,7 +307,7 @@ open -a macos/build/Build/Products/Debug/MMForge.app testdata/stl/box.stl
 
 ---
 
-## 9. Next Targets
+## 10. Next Targets
 
 1. LSM/LSMC parser integration into bridge detection cascade
 2. glTF CLI support via bridge crate

@@ -334,6 +334,11 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
         }
     }
 
+    // glTF/GLB — use the bridge's parser.
+    if mmforge_bridge::gltf_parser::detect_gltf(&header, path) {
+        return parse_gltf_bridge(path);
+    }
+
     if header.starts_with(b"ISO-10303-21;") || ext == "step" || ext == "stp" {
         return parse_step(path);
     }
@@ -350,6 +355,16 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
 
     // Last resort: try STL
     parse_stl(path)
+}
+
+/// Wrap the bridge's glTF parser for CLI use.
+fn parse_gltf_bridge(path: &std::path::Path) -> Result<Parsed, String> {
+    mmforge_bridge::gltf_parser::parse_gltf(path)
+        .map(|(output, _registry)| Parsed {
+            model: output.model,
+            warnings: output.warnings,
+        })
+        .map_err(|e| format!("glTF parse: {e}"))
 }
 
 fn parse_lsm_file(path: &std::path::Path) -> Result<Parsed, String> {

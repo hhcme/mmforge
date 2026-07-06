@@ -8,7 +8,7 @@ repository.workspace = true
 description = "C ABI bridge for MMForge macOS app"
 
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["staticlib", "rlib"]
 
 [features]
 default = []
