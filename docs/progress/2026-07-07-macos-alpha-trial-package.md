@@ -173,7 +173,7 @@ is needed (documented in package.sh output).
 | DMG builds | Automated | `package.sh dmg` exit 0 |
 | OCCT transitive deps (27 binaries, 0 Homebrew refs) | Code evidence | `otool -L` recursive — all `@rpath/` |
 | Ad-hoc signing | Code evidence | `codesign -dvv` → `Signature=adhoc` |
-| Launch smoke (8 formats) | Automated | `smoke-test.sh`: 7 passed, 0 failed, 1 skipped |
+| Launch smoke (8 formats) | Automated | `smoke-test.sh`: 8 passed, 0 failed, 0 skipped |
 | GUI rendering verification | Manual | Visual inspection of 3D viewport |
 
 ---
