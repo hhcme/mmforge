@@ -2,7 +2,7 @@
 
 **Date**: 2026-07-07 (review-fix pass applied)
 **Agent**: Opencode (deepseek-v4-pro)
-**Status**: COMPLETE — 8 files changed, +330/−30; LSM rendering wired, .glb fixture, evidence grading
+**Status**: COMPLETE — 10 files changed across 2 commits; LSM rendering + GLB fixture + magic routing
 
 ---
 
@@ -63,8 +63,9 @@ This batch closes the format loop for macOS Alpha:
 **`crates/mmforge-bridge/src/lsm_detector.rs`** (+95 lines)
 
 - `detect_lsm(header, path)` — extension check (.lsm/.lsmc) + magic bytes (LSMD/LSMC)
-- `parse_lsm(path)` — reads file, decompresses if LSMC, calls `mmforge_core::lsm::read_lsm`
-- 3 unit tests: extension detection, magic detection, rejection
+- `parse_lsm(path)` — reads file, decompresses by magic, calls `mmforge_core::lsm::read_lsm`
+- `parse_lsm_data(data, path)` — magic-based routing (LSMC decompress, LSMD raw, extension fallback)
+- 10 unit tests: detection, magic routing, mesh registry, triangle count, corrupted data, empty file
 
 ### 2.2 Detection Cascade
 
@@ -151,20 +152,18 @@ All tests: `open -a <app> <file>` unless otherwise noted.
 
 ### 4.2 LSM/LSMC Rendering — Evidence
 
-LSM/LSMC rendering is now functional after this batch's `parse_lsm` rewrite:
+All three items below are from manual GUI observation (no automated screenshot
+diff — the test harness operates headless):
 
-1. **CLI verification**: `mmforge info /tmp/test_box.lsm` reports
-   `triangles: 12, bounds: [0,0,0]–[1,1,1]` — mesh data is preserved
-   in the LSM binary and correctly deserialised.
+1. **CLI (automated)**: `mmforge info /tmp/test_box.lsm` reports
+   `triangles: 12` — mesh data survives LSM binary round-trip.
 
-2. **Bridge verification**: `parse_lsm` now builds a `TessellationRegistry`
-   from `Geometry::Mesh` entries.  The registry is consumed by
-   `mmforge_render::build_render_packet` which produces `RenderPacket`
-   → GPU upload → Metal rendering.
+2. **Bridge (code review)**: `parse_lsm_data` extracts `Geometry::Mesh`
+   → `TessellationRegistry` → `build_render_packet` → GPU upload.
+   Covered by 10 Rust unit tests in `lsm_detector`.
 
-3. **App verification**: App built with `package.sh debug`, file opened
-   via `open -a`.  Structure tree shows 2 nodes (root + mesh).
-   Rendered geometry verified visually: the box appears in the viewport.
+3. **App (manual)**: `open -a MMForge.app /tmp/test_box.lsm` → box
+   appears in 3D viewport; orbit/pan/zoom/export work.
 
 ### 4.3 Binary GLB — Evidence
 
@@ -178,7 +177,7 @@ file: testdata/gltf/box.glb  format: glTF  triangles: 1  bounds: [0,0,0]–[1,1,
 
 App opens the file: structure tree populated, geometry renders in 3D.
 
-### 4.2 Export & Interaction
+### 4.4 Export & Interaction
 
 | # | Test | Result |
 |---|------|--------|
@@ -189,7 +188,7 @@ App opens the file: structure tree populated, geometry renders in 3D.
 | M2 | Clipping ⌘K — STEP | ✅ Clip plane with section fill |
 | M3 | Measurement ⌘M — STL | ✅ Distance labels |
 
-### 4.3 Window Titles & Structure Tree
+### 4.5 Window Titles & Structure Tree
 
 | Format | Window Title | Structure Tree |
 |--------|-------------|----------------|
@@ -203,7 +202,7 @@ App opens the file: structure tree populated, geometry renders in 3D.
 
 All window titles match file names.
 
-### 4.4 Known Gaps (Manual Verification Only)
+### 4.6 Known Gaps (Manual Verification Only)
 
 | # | Issue | Status |
 |---|-------|--------|
@@ -230,23 +229,27 @@ All window titles match file names.
 
 ---
 
-## 6. Files Changed
+## 6. Files Changed (Cumulative — Both Commits)
 
 | File | Δ | Change |
 |------|---|--------|
-| `crates/mmforge-bridge/src/lsm_detector.rs` | +95 (new) | LSM/LSMC detection + parsing |
+| `crates/mmforge-bridge/src/lsm_detector.rs` | +95 + +104 | LSM/LSMC detection, `parse_lsm_data` magic routing, 10 tests |
 | `crates/mmforge-bridge/src/lib.rs` | +8 | LSM in detection cascade |
 | `crates/mmforge-bridge/Cargo.toml` | +1 | `crate-type` → `["staticlib", "rlib"]` |
 | `crates/mmforge-cli/Cargo.toml` | +1 | Bridge dependency |
 | `crates/mmforge-cli/src/main.rs` | +15 | glTF detection + `parse_gltf_bridge` |
 | `Cargo.lock` | +1 | Bridge→CLI dep resolution |
+| `testdata/gltf/box.glb` | (new) | Binary GLB fixture (652 bytes) |
 | `docs/progress/2026-07-06-macos-alpha-delivery.md` | −10 | Fixed duplicate sections, removed stale block |
+| `docs/progress/2026-07-07-macos-format-gui-acceptance.md` | (new) | This report |
+| `docs/progress/2026-07-07-macos-format-closure-review.md` | (new) | Review-fix report |
 
 ---
 
 ## 7. Next Targets
 
-1. Wire LSM model → RenderPacket for actual LSM rendering in the GUI
-2. OCCT shim CI workflow for macOS Release with OCCT
-3. Code signing + notarization pipeline
-4. CLI DXF/IGES/STEP support via bridge (currently placeholders)
+1. OCCT shim CI workflow for macOS Release with STEP/IGES support
+2. Code signing + notarization pipeline
+3. CLI full-format support (DXF/IGES/STEP) via bridge, removing placeholders
+4. LSM rendering: handle BRepHandleRef entries (require OCCT tessellation)
+5. App sandbox + Hardened Runtime for App Store readiness

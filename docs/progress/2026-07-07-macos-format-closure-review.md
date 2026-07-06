@@ -2,7 +2,7 @@
 
 **Date**: 2026-07-07
 **Agent**: Opencode (deepseek-v4-pro)
-**Status**: COMPLETE — 2 files changed, +199/−17
+**Status**: COMPLETE — lsm_detector.rs +199/−17; 10 LSM tests, 350 workspace
 
 ---
 
@@ -70,12 +70,18 @@ Mesh geometries from deserialised LSM model are extracted into
 | `bash macos/scripts/package.sh dmg` | **BUILD SUCCEEDED** |
 | `git diff --check` | **clean** |
 
-## 3. Files Changed (This Round)
+## 3. Commits (This Round)
+
+| Commit | Files | Δ |
+|--------|-------|---|
+| `5aee00c` (LSM rendering + GLB) | 4 files | +250/−22 |
+| `ffdc230` (magic routing + tests) | 3 files | +244/−100 |
+
+### Key Source Change
 
 | File | Δ | Change |
 |------|---|--------|
-| `crates/mmforge-bridge/src/lsm_detector.rs` | +199/−17 | Magic-based routing, `parse_lsm_data`, +7 tests (total 10) |
-| `docs/progress/2026-07-07-macos-format-closure-review.md` | +90 (new) | This report |
+| `crates/mmforge-bridge/src/lsm_detector.rs` | cumulative across both commits | Magic routing, `parse_lsm_data`, mesh→registry, 10 tests |
 
 ## 4. GUI Evidence (Manual)
 
