@@ -204,18 +204,19 @@ current session, it is marked ⚠️.
 
 | Format | File (absolute path) | Verif Command | Observable | Performed? |
 |--------|---------------------|---------------|------------|:----------:|
-| STL | `testdata/stl/box.stl` | `open -a Release/MMForge.app testdata/stl/box.stl` | 3D box (12 tri) in viewport; orbit/pan/zoom respond; Cmd+1..4 modes distinct | ⚠️ Prior session (2026-07-07) |
-| glTF | `testdata/gltf/box.gltf` | `open -a Release/MMForge.app testdata/gltf/box.gltf` | 1-tri box with material color (not grey); structure tree shows `mesh_0` | ⚠️ Prior session (2026-07-07) |
-| GLB | `testdata/gltf/box.glb` | `open -a Release/MMForge.app testdata/gltf/box.glb` | Same as glTF, rendered from binary GLB | ⚠️ Prior session (2026-07-07) |
-| DXF | `crates/mmforge-format-dxf/testdata/test.dxf` | `open -a Release/MMForge.app crates/mmforge-format-dxf/testdata/test.dxf` | 2D lines in canvas; layer panel shows layers; zoom/pan OK | ⚠️ Prior session (2026-07-07) |
-| STEP (OCCT) | `crates/mmforge-geometry/testdata/PQ-04909-A.STEP` | `open -a Release/MMForge.app crates/mmforge-geometry/testdata/PQ-04909-A.STEP` | 3D model (4554 tri) in viewport; structure tree populated with B-Rep nodes | ⚠️ Prior session (2026-07-07) |
-| IGES (OCCT) | `crates/mmforge-geometry/testdata/box.igs` | `open -a Release/MMForge.app crates/mmforge-geometry/testdata/box.igs` | 3D box (12 tri) in viewport; structure tree shows IGES nodes | ⚠️ Prior session (2026-07-07) |
-| LSM | `/tmp/test_box.lsm` (convert first) | `cargo run -p mmforge-cli -- convert testdata/stl/box.stl -o /tmp/test_box.lsm && open -a Release/MMForge.app /tmp/test_box.lsm` | 3D box rendered; structure tree + node names | ⚠️ Prior session (2026-07-07) |
-| LSMC | `/tmp/test_box.lsmc` (convert first) | `cargo run -p mmforge-cli -- convert testdata/stl/box.stl -o /tmp/test_box.lsmc --compress zstd && open -a Release/MMForge.app /tmp/test_box.lsmc` | Same as LSM (decompressed on load) | ⚠️ Prior session (2026-07-07) |
+| STL | `testdata/stl/box.stl` | `open -a Release/MMForge.app testdata/stl/box.stl` | 3D box (12 tri) in viewport; orbit/pan/zoom respond; Cmd+1..4 modes distinct | ⚠️ Prior session (see below) |
+| glTF | `testdata/gltf/box.gltf` | `open -a Release/MMForge.app testdata/gltf/box.gltf` | 1-tri box with material color (not grey); structure tree shows `mesh_0` | ⚠️ Prior session (see below) |
+| GLB | `testdata/gltf/box.glb` | `open -a Release/MMForge.app testdata/gltf/box.glb` | Same as glTF, rendered from binary GLB | ⚠️ Prior session (see below) |
+| DXF | `crates/mmforge-format-dxf/testdata/test.dxf` | `open -a Release/MMForge.app crates/mmforge-format-dxf/testdata/test.dxf` | 2D lines in canvas; layer panel shows layers; zoom/pan OK | ⚠️ Prior session (see below) |
+| STEP (OCCT) | `crates/mmforge-geometry/testdata/PQ-04909-A.STEP` | `open -a Release/MMForge.app crates/mmforge-geometry/testdata/PQ-04909-A.STEP` | 3D model (4554 tri) in viewport; structure tree populated with B-Rep nodes | ⚠️ Prior session (see below) |
+| IGES (OCCT) | `crates/mmforge-geometry/testdata/box.igs` | `open -a Release/MMForge.app crates/mmforge-geometry/testdata/box.igs` | 3D box (12 tri) in viewport; structure tree shows IGES nodes | ⚠️ Prior session (see below) |
+| LSM | `/tmp/test_box.lsm` (convert first) | `cargo run -p mmforge-cli -- convert testdata/stl/box.stl -o /tmp/test_box.lsm && open -a Release/MMForge.app /tmp/test_box.lsm` | 3D box rendered; structure tree + node names | ⚠️ Prior session (see below) |
+| LSMC | `/tmp/test_box.lsmc` (convert first) | `cargo run -p mmforge-cli -- convert testdata/stl/box.stl -o /tmp/test_box.lsmc --compress zstd && open -a Release/MMForge.app /tmp/test_box.lsmc` | Same as LSM (decompressed on load) | ⚠️ Prior session (see below) |
 
 **Prior session evidence**: `docs/progress/2026-07-07-macos-format-gui-acceptance.md`
 documents manual GUI acceptance for all 8 formats with a Debug build on
-macOS 26.5, Apple Silicon, Metal GPU.  The current Release build
+macOS 26.5, Apple Silicon, Metal GPU — authored on the same day (2026-07-06,
+with filename numerically dated ahead to 07 as a report-naming artifact).
 (`db253de`) has NOT been through manual GUI acceptance — only launch
 smoke (8/8) and CLI geometry verification are confirmed.
 
@@ -226,7 +227,7 @@ smoke (8/8) and CLI geometry verification are confirmed.
 4. For 3D formats: orbit (drag), zoom (scroll), pan (option+drag) work
 5. For render modes: Cmd+1 (Solid), Cmd+2 (Wire), Cmd+3 (Solid+Wire), Cmd+4 (X-Ray) visually distinct
 6. Export Image (Cmd+E): NSSavePanel appears, PNG saved
-7. Record observations with screenshot paths to e.g. `docs/screenshots/2026-07-06/` 
+7. Record observations with screenshot paths to e.g. `docs/screenshots/2026-07-06/`
 
 ---
 
@@ -327,6 +328,5 @@ db253de macOS Industrial Delivery Hardening: CLI real parsers + evidence-graded 
   - Report v2: DXF corrected to C+2D/2D-ONLY; GUI evidence downgraded to ⚠️
     with reproducible manual verification checklist
   - Full suite re-run: 354 Rust + 155 Swift tests, 8/8 smoke,
-    4 REAL-GEOMETRY + 1 2D-ONLY, 0 Homebrew refs, codesign OK
-```
+     4 REAL-GEOMETRY + 1 2D-ONLY, 0 Homebrew refs, codesign OK
 ```
