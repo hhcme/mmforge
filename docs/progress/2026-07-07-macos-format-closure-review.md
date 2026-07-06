@@ -81,9 +81,9 @@ Mesh geometries from deserialised LSM model are extracted into
 
 | Commit | File | Δ |
 |--------|------|---|
-| `5aee00c` (LSM rendering) | `lsm_detector.rs` | +40/−12 (mesh→TessellationRegistry) |
-| `ffdc230` (magic routing) | `lsm_detector.rs` | +159/−5 (`parse_lsm_data`, +7 tests) |
-| **Total** | `lsm_detector.rs` | **+199/−17** |
+| `5aee00c` (LSM rendering) | `lsm_detector.rs` | +49/−15 |
+| `ffdc230` (magic routing) | `lsm_detector.rs` | +194/−16 |
+| **Cumulative** | `lsm_detector.rs` | **+235/−23** |
 
 ## 4. GUI Evidence (Manual)
 

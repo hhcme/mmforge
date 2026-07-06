@@ -60,7 +60,7 @@ This batch closes the format loop for macOS Alpha:
 
 ### 2.1 New File
 
-**`crates/mmforge-bridge/src/lsm_detector.rs`** (+95 lines)
+**`crates/mmforge-bridge/src/lsm_detector.rs`** (+235/−23 cumulative; 10 tests)
 
 - `detect_lsm(header, path)` — extension check (.lsm/.lsmc) + magic bytes (LSMD/LSMC)
 - `parse_lsm(path)` — reads file, decompresses by magic, calls `mmforge_core::lsm::read_lsm`
@@ -225,7 +225,7 @@ All window titles match file names.
 
 | File | Δ | Change |
 |------|---|--------|
-| `crates/mmforge-bridge/src/lsm_detector.rs` | +95 + +104 | LSM/LSMC detection, `parse_lsm_data` magic routing, 10 tests |
+| `crates/mmforge-bridge/src/lsm_detector.rs` | +235/−23 | LSM/LSMC detection, `parse_lsm_data` magic routing, mesh→registry, 10 tests |
 | `crates/mmforge-bridge/src/lib.rs` | +8 | LSM in detection cascade |
 | `crates/mmforge-bridge/Cargo.toml` | +1 | `crate-type` → `["staticlib", "rlib"]` |
 | `crates/mmforge-cli/Cargo.toml` | +1 | Bridge dependency |
