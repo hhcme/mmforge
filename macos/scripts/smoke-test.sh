@@ -87,13 +87,15 @@ check "DXF"  "$ROOT/crates/mmforge-format-dxf/testdata/test.dxf"
 check "STEP" "$ROOT/crates/mmforge-geometry/testdata/PQ-04909-A.STEP"
 check "IGES" "$ROOT/crates/mmforge-geometry/testdata/box.igs"
 
-# LSM/LSMC: generate fresh from STL.
-TMP_LSM=$(mktemp -t mmforge_smoke_lsm.XXXXXX.lsm)
-TMP_LSMC=$(mktemp -t mmforge_smoke_lsmc.XXXXXX.lsmc)
-if cargo run -p mmforge-cli -- convert "$ROOT/testdata/stl/box.stl" -o "$TMP_LSM" &>/dev/null; then
-    check "LSM" "$TMP_LSM"
-    if cargo run -p mmforge-cli -- convert "$ROOT/testdata/stl/box.stl" -o "$TMP_LSMC" --compress zstd &>/dev/null; then
-        check "LSMC" "$TMP_LSMC"
+# LSM/LSMC: generate fresh from STL using a temp directory for proper extensions.
+LSM_DIR=$(mktemp -d)
+trap "rm -rf $LSM_DIR" EXIT
+LSM_FILE="$LSM_DIR/smoke.lsm"
+LSMC_FILE="$LSM_DIR/smoke.lsmc"
+if cargo run -p mmforge-cli -- convert "$ROOT/testdata/stl/box.stl" -o "$LSM_FILE" &>/dev/null; then
+    check "LSM" "$LSM_FILE"
+    if cargo run -p mmforge-cli -- convert "$ROOT/testdata/stl/box.stl" -o "$LSMC_FILE" --compress zstd &>/dev/null; then
+        check "LSMC" "$LSMC_FILE"
     else
         echo "  [$((PASS + FAIL + SKIP + 1))] LSMC … SKIP (CLI conversion failed)" >&2
         SKIP=$((SKIP + 1))
@@ -102,8 +104,6 @@ else
     echo "  [$((PASS + FAIL + SKIP + 1))] LSM/LSMC … SKIP (CLI conversion failed)" >&2
     SKIP=$((SKIP + 2))
 fi
-
-rm -f "$TMP_LSM" "$TMP_LSMC"
 
 echo >&2
 echo "Results: $PASS passed, $FAIL failed, $SKIP skipped" >&2

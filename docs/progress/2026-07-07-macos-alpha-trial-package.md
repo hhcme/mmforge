@@ -11,7 +11,7 @@
 This batch delivers macOS Debug/Release/DMG packaging with:
 
 - **OCCT runtime bundling**: Release/DMG builds auto-detect OCCT linkage
-  and bundle 22 dylibs into `MMForge.app/Contents/Frameworks/`
+  and bundle 26 dylibs into `MMForge.app/Contents/Frameworks/`
 - **Ad-hoc code signing**: App and bundled dylibs signed with `codesign
   --sign -` for local trialability without Apple Developer ID
 - **`smoke-test.sh`**: Automated script to verify the built app opens
@@ -61,9 +61,9 @@ STEP/IGES guidance at launch.
 bash macos/scripts/package.sh debug
   → Debug .app, 13 MB, unsigned, OCCT dylibs: none
 bash macos/scripts/package.sh release
-  → Release .app, 45 MB, ad-hoc signed, 22 OCCT dylibs bundled
+  → Release .app, 45 MB, ad-hoc signed, 26 dylibs bundled (22 OCCT + 4 transitive)
 bash macos/scripts/package.sh dmg
-  → DMG 3.9 MB (compressed), ad-hoc signed, 22 OCCT dylibs bundled
+  → DMG 3.9 MB (compressed), ad-hoc signed, 26 dylibs bundled (22 OCCT + 4 transitive)
 ```
 
 ### 2.4 Code Evidence
@@ -123,9 +123,9 @@ The app can be opened without any OCCT installation:
 
 | Mode | OCCT | STEP/IGES | STL/glTF/GLB/DXF/LSM/LSMC |
 |------|------|-----------|---------------------------|
-| Debug build | Not linked | Error with build guidance | Render correctly |
-| Release build | Bundled in Frameworks/ (22 dylibs) | Render correctly | Render correctly |
-| DMG | Bundled in Frameworks/ (22 dylibs) | Render correctly | Render correctly |
+| Debug build | Not linked | Error with build guidance | Launch smoke / code evidence |
+| Release build | Bundled in Frameworks/ (26 dylibs) | Launch smoke / code evidence | Launch smoke / code evidence |
+| DMG | Bundled in Frameworks/ (26 dylibs) | Launch smoke / code evidence | Launch smoke / code evidence |
 
 **No Apple Developer ID required**: all builds use ad-hoc signing.
 Gatekeeper will block on first launch — right-click → Open to bypass.
@@ -156,8 +156,8 @@ is needed (documented in package.sh output).
 | `cargo fmt --all --check` | **clean** |
 | `xcodebuild test -project macos/MMForge.xcodeproj -scheme MMForge -configuration Debug -destination 'platform=macOS' -derivedDataPath macos/build` | **155/155 pass** |
 | `bash macos/scripts/package.sh debug` | **BUILD SUCCEEDED** (13 MB, unsigned, no OCCT) |
-| `bash macos/scripts/package.sh release` | **BUILD SUCCEEDED** (45 MB, ad-hoc, 22 OCCT dylibs) |
-| `bash macos/scripts/package.sh dmg` | **BUILD SUCCEEDED** (3.9 MB DMG, ad-hoc, 22 OCCT dylibs) |
+| `bash macos/scripts/package.sh release` | **BUILD SUCCEEDED** (45 MB, ad-hoc, 26 dylibs) |
+| `bash macos/scripts/package.sh dmg` | **BUILD SUCCEEDED** (3.9 MB DMG, ad-hoc, 26 dylibs) |
 | `bash docs/scripts/perf-baseline.sh` | **5/5 pass** |
 | `git diff --check` | **clean** |
 
@@ -201,7 +201,7 @@ is needed (documented in package.sh output).
 ## 9. Known Limitations
 
 1. **No Apple notarization**: Developer ID certificate required ($99/year)
-2. **OCCT dylibs large**: 22 dylibs add ~32 MB to the app bundle
+2. **OCCT dylibs large**: 26 dylibs add ~70 MB to the app bundle
 3. **MacOS 26 target**: Requires macOS 26 (Sequoia successor)
 4. **No auto-update**: Sparkle or similar not yet integrated
 5. **No Installer .pkg**: DMG is the only distribution format

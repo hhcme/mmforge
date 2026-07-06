@@ -110,8 +110,9 @@ bundle_occt_dylibs() {
             [ -f "$bin" ] || continue
             local deps
             deps=$(otool -L "$bin" 2>/dev/null \
+                | grep -v '@rpath\|@loader_path\|@executable_path' \
                 | grep -oE '/[^ ]+\.dylib' \
-                | grep -v '@rpath\|@loader_path\|@executable_path\|^/lib/\|^/usr/\|^/System/' \
+                | grep -v '^/lib/\|^/usr/\|^/System/' \
                 || true)
             while IFS= read -r dep; do
                 [ -z "$dep" ] && continue
@@ -189,8 +190,9 @@ bundle_occt_dylibs() {
         [ -f "$bin" ] || continue
         local abs_deps
         abs_deps=$(otool -L "$bin" 2>/dev/null \
+            | grep -v '@rpath\|@loader_path\|@executable_path' \
             | grep -oE '/[^ ]+\.dylib' \
-            | grep -v '@rpath\|@loader_path\|@executable_path\|^/usr/lib\|^/System\|^/lib/' \
+            | grep -v '^/usr/lib\|^/System\|^/lib/' \
             || true)
         while IFS= read -r old_path; do
             [ -z "$old_path" ] && continue
@@ -243,7 +245,7 @@ print_diagnostics() {
 
     local sign_info
     sign_info=$(codesign -dvv "$app_path" 2>&1 || true)
-    if echo "$sign_info" | grep -q 'Signature=ad-hoc'; then
+    if echo "$sign_info" | grep -q 'Signature=adhoc'; then
         info "  Signature  : ad-hoc"
     elif echo "$sign_info" | grep -q 'Authority='; then
         info "  Signature  : $(echo "$sign_info" | grep '^Authority=' | head -1 | sed 's/.*=//')"
