@@ -82,6 +82,8 @@ is_system_lib() {
 bundle_occt_dylibs() {
     local app_path="$1"
     local frameworks_dir="$app_path/Contents/Frameworks"
+    local occt_lib_dir="${OCCT_LIB_DIR:-/opt/homebrew/lib}"
+
     mkdir -p "$frameworks_dir"
 
     info "  [occt] Bundling dylibs (recursive transitive closure) …"
@@ -103,13 +105,17 @@ bundle_occt_dylibs() {
     while [ "$changed" -eq 1 ]; do
         changed=0
 
-        # Discover all non-system, non-@rpath deps from all scanned binaries.
+        # Discover all dependents from all scanned binaries.
+        # Phase A: absolute-path deps (from freshly-copied dylibs not yet rewritten).
+        # Phase B: @rpath deps that are missing from Frameworks/ but exist in OCCT lib dir.
         local new_deps=""
         while IFS= read -r bin; do
             [ -z "$bin" ] && continue
             [ -f "$bin" ] || continue
-            local deps
-            deps=$(otool -L "$bin" 2>/dev/null \
+
+            # Phase A: absolute paths to non-system dylibs.
+            local abs_deps
+            abs_deps=$(otool -L "$bin" 2>/dev/null \
                 | grep -v '@rpath\|@loader_path\|@executable_path' \
                 | grep -oE '/[^ ]+\.dylib' \
                 | grep -v '^/lib/\|^/usr/\|^/System/' \
@@ -123,7 +129,25 @@ bundle_occt_dylibs() {
                 if [ ! -f "$dest" ]; then
                     new_deps="$new_deps"$'\n'"$dep"
                 fi
-            done <<< "$deps"
+            done <<< "$abs_deps"
+
+            # Phase B: @rpath deps not yet in Frameworks/ — resolve from OCCT lib dir.
+            local rpath_deps
+            rpath_deps=$(otool -L "$bin" 2>/dev/null \
+                | grep '@rpath/' \
+                | grep -oE '@rpath/[^ ]+' \
+                | sed 's|@rpath/||' \
+                || true)
+            while IFS= read -r libname; do
+                [ -z "$libname" ] && continue
+                local dest="$frameworks_dir/$libname"
+                if [ ! -f "$dest" ]; then
+                    local candidate="$occt_lib_dir/$libname"
+                    if [ -f "$candidate" ]; then
+                        new_deps="$new_deps"$'\n'"$candidate"
+                    fi
+                fi
+            done <<< "$rpath_deps"
         done <<< "$scan_list"
 
         new_deps=$(echo "$new_deps" | sort -u | sed '/^$/d')

@@ -36,3 +36,9 @@ local.properties
 dist/
 out/
 coverage/
+
+# Code coverage
+*.profraw
+
+# Screenshot evidence (regeneratable via scripts/gui-acceptance-test.sh)
+docs/screenshots/
