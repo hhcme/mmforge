@@ -14,6 +14,9 @@ struct MMForgeApp: App {
             CommandMenu("Camera") {
                 CameraCommandsView()
             }
+            CommandMenu("Render") {
+                RenderCommandsView()
+            }
             CommandMenu("Export") {
                 ExportCommandsView()
             }
@@ -139,6 +142,35 @@ struct CameraCommandsView: View {
                 viewModel?.toggleProjection()
             }
             .keyboardShortcut("P", modifiers: [.command, .shift])
+        }
+    }
+}
+
+/// Render mode menu commands.
+struct RenderCommandsView: View {
+    @FocusedObject private var viewModel: DocumentViewModel?
+
+    var body: some View {
+        Group {
+            Button("Solid") {
+                viewModel?.setRenderMode(.solid)
+            }
+            .keyboardShortcut("1", modifiers: .command)
+
+            Button("Wireframe") {
+                viewModel?.setRenderMode(.wireframe)
+            }
+            .keyboardShortcut("2", modifiers: .command)
+
+            Button("Solid+Wireframe") {
+                viewModel?.setRenderMode(.solidWireframe)
+            }
+            .keyboardShortcut("3", modifiers: .command)
+
+            Button("X-Ray (Transparent)") {
+                viewModel?.setRenderMode(.transparent)
+            }
+            .keyboardShortcut("4", modifiers: .command)
         }
     }
 }

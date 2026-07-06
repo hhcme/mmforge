@@ -935,4 +935,202 @@ final class ProductizationTests: XCTestCase {
         XCTAssertTrue(result.isEmpty,
                       "all-colinear contour must produce empty result (skipped)")
     }
+
+    // MARK: - Descendant Visibility Cache Tests
+
+    @MainActor
+    func testHasVisibleDescendants_assemblyWithVisibleChild() {
+        let vm = DocumentViewModel()
+        vm.nodes = [
+            RenderPacketDTO.NodeInfo(name: "Assembly", parentIndex: -1, hasGeometry: false,
+                                     geometryId: -1, meshIndex: -1,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+            RenderPacketDTO.NodeInfo(name: "Part", parentIndex: 0, hasGeometry: true,
+                                     geometryId: 0, meshIndex: 0,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+        ]
+        vm.rebuildTreeCaches()
+        // Assembly has a visible child geometry node.
+        XCTAssertTrue(vm.hasVisibleDescendants(0))
+        // Leaf geometry node has no children with geometry.
+        XCTAssertFalse(vm.hasVisibleDescendants(1))
+    }
+
+    @MainActor
+    func testHasVisibleDescendants_hiddenChildReturnsFalse() {
+        let vm = DocumentViewModel()
+        vm.nodes = [
+            RenderPacketDTO.NodeInfo(name: "Assembly", parentIndex: -1, hasGeometry: false,
+                                     geometryId: -1, meshIndex: -1,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+            RenderPacketDTO.NodeInfo(name: "Part", parentIndex: 0, hasGeometry: true,
+                                     geometryId: 0, meshIndex: 0,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+        ]
+        vm.rebuildTreeCaches()
+        vm.hiddenNodeIndices = [1]
+        // Child is hidden → no visible descendants.
+        XCTAssertFalse(vm.hasVisibleDescendants(0))
+    }
+
+    @MainActor
+    func testHasVisibleDescendants_cacheInvalidatedOnRebuild() {
+        let vm = DocumentViewModel()
+        vm.nodes = [
+            RenderPacketDTO.NodeInfo(name: "Assembly", parentIndex: -1, hasGeometry: false,
+                                     geometryId: -1, meshIndex: -1,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+            RenderPacketDTO.NodeInfo(name: "Part", parentIndex: 0, hasGeometry: true,
+                                     geometryId: 0, meshIndex: 0,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+        ]
+        vm.rebuildTreeCaches()
+        XCTAssertTrue(vm.hasVisibleDescendants(0))
+
+        // Replace nodes with new tree (same hiddenNodeIndices, but nodes changed).
+        vm.nodes = [
+            RenderPacketDTO.NodeInfo(name: "NewRoot", parentIndex: -1, hasGeometry: false,
+                                     geometryId: -1, meshIndex: -1,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+        ]
+        vm.rebuildTreeCaches()
+        // New root has no children → no visible descendants.
+        // The cache must NOT serve the stale `true` from the old tree.
+        XCTAssertFalse(vm.hasVisibleDescendants(0))
+    }
+
+    @MainActor
+    func testHasVisibleDescendants_cacheInvalidatedOnCancelParse() {
+        let vm = DocumentViewModel()
+        vm.nodes = [
+            RenderPacketDTO.NodeInfo(name: "Assembly", parentIndex: -1, hasGeometry: false,
+                                     geometryId: -1, meshIndex: -1,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+            RenderPacketDTO.NodeInfo(name: "Part", parentIndex: 0, hasGeometry: true,
+                                     geometryId: 0, meshIndex: 0,
+                                     geometryLabel: nil, boundsMin: nil, boundsMax: nil),
+        ]
+        vm.rebuildTreeCaches()
+        XCTAssertTrue(vm.hasVisibleDescendants(0))
+
+        // cancelParse clears nodes, _childrenMap, and the descendant cache.
+        // Even if hiddenNodeIndices is already [] (no-op didSet guard),
+        // the explicit generation bump in freeCurrentDocument ensures
+        // stale cached values are not returned.
+        vm.cancelParse()
+        XCTAssertTrue(vm.nodes.isEmpty)
+        // hasVisibleDescendants(0) must return false after nodes cleared,
+        // NOT the stale `true` from before cancelParse.
+        XCTAssertFalse(vm.hasVisibleDescendants(0),
+                       "cache must be invalidated after cancelParse")
+    }
+
+    // MARK: - Error Enrichment Tests
+
+    func testEnrichErrorMessage_stepWithoutOCCT_getGuidance() {
+        let raw = "STEP: OCCT feature not enabled — compile with --features occt to enable STEP parsing"
+        let enriched = DocumentViewModel.enrichErrorMessage(raw, fileExtension: "step")
+        XCTAssertTrue(enriched.contains("OpenCASCADE"),
+                      "STEP error without OCCT must mention OpenCASCADE")
+        XCTAssertTrue(enriched.contains("brew install"),
+                      "STEP error without OCCT must include build guidance")
+    }
+
+    func testEnrichErrorMessage_igesWithoutOCCT_getGuidance() {
+        let raw = "IGES: OCCT feature not enabled"
+        let enriched = DocumentViewModel.enrichErrorMessage(raw, fileExtension: "igs")
+        XCTAssertTrue(enriched.contains("STEP and IGES"),
+                      "IGES error without OCCT must mention both formats")
+    }
+
+    func testEnrichErrorMessage_stepGenericError_getNote() {
+        let raw = "STEP: failed to read file at path"
+        let enriched = DocumentViewModel.enrichErrorMessage(raw, fileExtension: "stp")
+        XCTAssertTrue(enriched.contains("Note: STEP"),
+                      "Generic STEP error must mention OCCT requirement")
+        XCTAssertFalse(enriched.contains("brew install"),
+                       "Generic STEP error must NOT include build guidance")
+    }
+
+    func testEnrichErrorMessage_nonSTEPFormat_passthrough() {
+        let raw = "STL: malformed binary data"
+        let enriched = DocumentViewModel.enrichErrorMessage(raw, fileExtension: "stl")
+        XCTAssertEqual(enriched, raw,
+                       "Non-STEP format must pass through unchanged")
+    }
+
+    func testEnrichErrorMessage_dxfFormat_passthrough() {
+        let raw = "DXF: unexpected end of section"
+        let enriched = DocumentViewModel.enrichErrorMessage(raw, fileExtension: "dxf")
+        XCTAssertEqual(enriched, raw,
+                       "DXF errors must pass through unchanged")
+    }
+
+    // MARK: - Material Color Tests
+
+    /// Verify that RenderPacketDTO.Mesh carries materialColor (not nil/default).
+    /// We validate the struct layout by constructing and reading the field directly.
+    func testMeshDTO_materialColorField() {
+        let pos: [Float] = [0, 0, 0]
+        let nrm: [Float] = [0, 0, 1]
+        let idx: [UInt32] = [0, 1, 2]
+        let customColor = simd_float4(0.2, 0.5, 0.8, 1.0)
+        let mesh = pos.withUnsafeBufferPointer { posPtr in
+            nrm.withUnsafeBufferPointer { nrmPtr in
+                idx.withUnsafeBufferPointer { idxPtr in
+                    RenderPacketDTO.Mesh(
+                        geometryId: 1,
+                        positions: posPtr.baseAddress!,
+                        normals: nrmPtr.baseAddress!,
+                        vertexCount: 3,
+                        indices: idxPtr.baseAddress!,
+                        indexCount: 3,
+                        materialColor: customColor
+                    )
+                }
+            }
+        }
+        XCTAssertEqual(mesh.geometryId, 1)
+        XCTAssertEqual(mesh.materialColor.x, 0.2, accuracy: 0.001)
+        XCTAssertEqual(mesh.materialColor.y, 0.5, accuracy: 0.001)
+        XCTAssertEqual(mesh.materialColor.z, 0.8, accuracy: 0.001)
+        XCTAssertEqual(mesh.materialColor.w, 1.0, accuracy: 0.001)
+    }
+
+    // MARK: - Render Mode Enum Tests
+
+    func testRenderMode_allCasesExist() {
+        XCTAssertNotNil(RenderMode(rawValue: 0)) // solid
+        XCTAssertNotNil(RenderMode(rawValue: 1)) // wireframe
+        XCTAssertNotNil(RenderMode(rawValue: 2)) // solidWireframe
+        XCTAssertNotNil(RenderMode(rawValue: 3)) // transparent
+        XCTAssertNil(RenderMode(rawValue: 4))
+    }
+
+    // MARK: - OCCT Availability Tests
+
+    func testOcctAvailable_returnsZeroOrOne() {
+        let r = mmf_occt_available()
+        XCTAssertTrue(r == 0 || r == 1, "mmf_occt_available must return 0 or 1, got \(r)")
+    }
+
+    // MARK: - Export Utility Tests
+
+    /// Validate that `captureImageAsync` returns nil when no currentDrawable
+    /// is available, without crashing.  Creates a headless MTKView (no
+    /// window/render-loop runs), so `currentDrawable` is nil and the guard
+    /// exits early.
+    func testCaptureImageAsync_guardsEarlyExit() async {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            // Running on CI without Metal — test is inconclusive, not a failure.
+            return
+        }
+        let view = MTKView(frame: NSRect(x: 0, y: 0, width: 100, height: 100), device: device)
+        guard let renderer = MetalRenderer(mtkView: view) else {
+            XCTFail("MetalRenderer init must succeed with a valid device")
+            return
+        }
+        let img = await renderer.captureImageAsync(timeout: 1.0)
+        XCTAssertNil(img, "captureImageAsync must return nil when no drawable is available")
+    }
 }

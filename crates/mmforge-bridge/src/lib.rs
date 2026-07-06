@@ -37,6 +37,11 @@ pub struct MmfDocument {
     node_names: Vec<CString>,
     /// Pre-computed CStrings for geometry labels (borrowed by mmf_node_geometry_label).
     geometry_labels: Vec<CString>,
+    /// Pre-computed per-mesh base_color [r,g,b,a] from RenderMaterial.
+    /// Keyed by `geometry_id` (== original RenderMesh.geometry_id) so that
+    /// both the flat mesh list and chunked streaming lookups are correct
+    /// even when geometry IDs are non-contiguous.
+    mesh_base_colors: std::collections::HashMap<u32, [f32; 4]>,
     /// 2D draw list (populated for DXF documents, empty for 3D).
     draw_list: mmforge_render::draw2d::DrawingDrawList,
     /// Pre-computed CStrings for draw command text content.
@@ -58,6 +63,33 @@ pub struct MmfDocument {
 /// Helper: build MmfDocument from parse output + tessellation registry.
 fn build_document(output: ParseOutput, registry: TessellationRegistry) -> MmfDocument {
     let packet = mmforge_render::build_render_packet(&registry);
+
+    let default_color: [f32; 4] = [0.7, 0.7, 0.72, 1.0];
+    let mesh_base_colors: std::collections::HashMap<u32, [f32; 4]> = {
+        let mut instance_map: std::collections::HashMap<u32, u32> =
+            std::collections::HashMap::new();
+        for inst in &packet.instances {
+            instance_map.entry(inst.mesh_id).or_insert(inst.material_id);
+        }
+        packet
+            .meshes
+            .iter()
+            .map(|m| {
+                let color = instance_map
+                    .get(&m.mesh_id)
+                    .and_then(|mat_id| {
+                        packet
+                            .materials
+                            .iter()
+                            .find(|mat| mat.material_id == *mat_id)
+                            .map(|mat| mat.base_color)
+                    })
+                    .unwrap_or(default_color);
+                (m.geometry_id, color)
+            })
+            .collect()
+    };
+
     let node_names: Vec<CString> = output
         .model
         .scene
@@ -161,6 +193,7 @@ fn build_document(output: ParseOutput, registry: TessellationRegistry) -> MmfDoc
         model: output.model,
         node_names,
         geometry_labels,
+        mesh_base_colors,
         draw_list,
         draw_text_cstrings,
         draw_layer_cstrings,
@@ -175,6 +208,20 @@ fn build_document(output: ParseOutput, registry: TessellationRegistry) -> MmfDoc
 ///
 /// Detects the format from `header` and runs the appropriate parser.
 /// Returns a boxed `MmfDocument` on success.
+pub(crate) fn detect_format_name(header: &[u8], path: &std::path::Path) -> &'static str {
+    if dxf_detector::detect_dxf(header, path) {
+        "DXF detected — parsing"
+    } else if stl_parser::detect_stl(header, path) {
+        "STL detected — parsing"
+    } else if gltf_parser::detect_gltf(header, path) {
+        "glTF detected — parsing"
+    } else if iges_detector::detect_iges(header, path) {
+        "IGES detected — parsing"
+    } else {
+        "STEP detected — parsing"
+    }
+}
+
 pub(crate) fn parse_with_detection(
     path: &std::path::Path,
     header: &[u8],
@@ -410,6 +457,49 @@ pub extern "C" fn mmf_mesh_indices(doc: *const MmfDocument, index: u32) -> *cons
     match doc.packet.meshes.get(index as usize) {
         Some(m) if !m.indices.is_empty() => m.indices.as_ptr(),
         _ => ptr::null(),
+    }
+}
+
+/// Returns the pre-computed base color for the given mesh index.
+/// `out_rgba` must point to a 4-element f32 array.
+/// Returns 0 on success, -1 if doc is null or index is out of range.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_mesh_base_color(
+    doc: *const MmfDocument,
+    index: u32,
+    out_rgba: *mut f32,
+) -> i32 {
+    if doc.is_null() || out_rgba.is_null() {
+        return -1;
+    }
+    let doc = unsafe { &*doc };
+    let geom_id = doc.packet.meshes.get(index as usize).map(|m| m.geometry_id);
+    match geom_id.and_then(|gid| doc.mesh_base_colors.get(&gid)) {
+        Some(color) => {
+            unsafe {
+                *out_rgba.add(0) = color[0];
+                *out_rgba.add(1) = color[1];
+                *out_rgba.add(2) = color[2];
+                *out_rgba.add(3) = color[3];
+            }
+            0
+        }
+        None => -1,
+    }
+}
+
+/// Returns 1 if OCCT (OpenCASCADE) support was compiled into this build,
+/// 0 otherwise.  macOS app can use this to show format-specific guidance.
+///
+/// Uses `mmforge_geometry::is_occt_available()` which checks
+/// `cfg!(occt_found)` — set by `build.rs` only when headers, libraries,
+/// and the C ABI shim were actually located and linked.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_occt_available() -> i32 {
+    if mmforge_geometry::is_occt_available() {
+        1
+    } else {
+        0
     }
 }
 
@@ -1515,6 +1605,44 @@ pub extern "C" fn mmf_chunk_mesh_indices(
         .and_then(|sp| sp.chunk(chunk_idx as usize))
         .and_then(|c| c.meshes.get(mesh_idx as usize))
         .map_or(ptr::null(), |m| m.indices.as_ptr())
+}
+
+/// Returns the pre-computed per-mesh material color for a chunk mesh.
+///
+/// Looks up the chunk mesh's `geometry_id` in `mesh_base_colors`
+/// (a HashMap keyed by the original `RenderMesh.geometry_id`).
+/// This is correct even when geometry IDs are non-contiguous.
+/// `out_rgba` must point to a 4-element f32 array.
+/// Returns 0 on success, -1 if chunk/mesh index out of range.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_chunk_mesh_base_color(
+    doc: *const MmfDocument,
+    chunk_idx: u32,
+    mesh_idx: u32,
+    out_rgba: *mut f32,
+) -> i32 {
+    if doc.is_null() || out_rgba.is_null() {
+        return -1;
+    }
+    let doc = unsafe { &*doc };
+    let geom_id = doc
+        .streaming_packet
+        .as_ref()
+        .and_then(|sp| sp.chunk(chunk_idx as usize))
+        .and_then(|c| c.meshes.get(mesh_idx as usize))
+        .map(|m| m.geometry_id);
+    match geom_id.and_then(|gid| doc.mesh_base_colors.get(&gid)) {
+        Some(color) => {
+            unsafe {
+                *out_rgba.add(0) = color[0];
+                *out_rgba.add(1) = color[1];
+                *out_rgba.add(2) = color[2];
+                *out_rgba.add(3) = color[3];
+            }
+            0
+        }
+        _ => -1,
+    }
 }
 
 // ------------------------------------------------------------------

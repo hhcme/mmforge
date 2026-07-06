@@ -112,8 +112,8 @@ struct InspectorPanel: View {
                         let isHidden = viewModel.hiddenNodeIndices.contains(index)
                         LabeledContent("Visible", value: isHidden ? "No" : "Yes")
                     } else {
-                        let hasVisibleDescendants = nodeHasVisibleDescendants(index)
-                        LabeledContent("Descendants Visible", value: hasVisibleDescendants ? "Yes" : "No")
+                        let hasVisible = viewModel.hasVisibleDescendants(index)
+                        LabeledContent("Descendants Visible", value: hasVisible ? "Yes" : "No")
                     }
                 }
                 .font(.callout)
@@ -198,22 +198,7 @@ struct InspectorPanel: View {
         viewModel.nodeDepth(index)
     }
 
-    /// Whether any descendant geometry of a node is visible (not hidden).
-    private func nodeHasVisibleDescendants(_ index: Int) -> Bool {
-        var descendants = Set<Int>()
-        collectDescendants(index, into: &descendants)
-        return descendants.contains {
-            viewModel.nodes[$0].hasGeometry
-                && !viewModel.hiddenNodeIndices.contains($0)
-        }
-    }
-
-    private func collectDescendants(_ index: Int, into set: inout Set<Int>) {
-        set.insert(index)
-        for child in viewModel.childrenOf(index) {
-            collectDescendants(child, into: &set)
-        }
-    }
+    /// O(1) cached check — delegates to ViewModel's generation-guarded cache.
 
     // MARK: - Measure
 
@@ -555,6 +540,9 @@ struct InspectorPanel: View {
                 DisclosureGroup {
                     VStack(alignment: .leading, spacing: 4) {
                         LabeledContent("Version", value: RustBridge.shared.coreVersion())
+                        LabeledContent("OCCT", value: mmf_occt_available() == 1 ? "Available" : "Not Installed")
+                            .font(.caption)
+                            .foregroundStyle(mmf_occt_available() == 1 ? .green : .secondary)
                         if let stats = viewModel.stats {
                             LabeledContent("Memory", value: formatBytes(estimatedMemory(stats)))
                         }

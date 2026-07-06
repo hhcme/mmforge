@@ -10,6 +10,7 @@ struct RenderPacketDTO {
         let vertexCount: Int
         let indices: UnsafePointer<UInt32>
         let indexCount: Int
+        let materialColor: simd_float4
     }
 
     struct NodeInfo {
@@ -87,9 +88,12 @@ final class RustBridge {
                   let idx = mmf_mesh_indices(doc, UInt32(i)) else {
                 continue
             }
+            var rgba: [Float] = [0.7, 0.7, 0.72, 1.0]
+            _ = mmf_mesh_base_color(doc, UInt32(i), &rgba)
             meshes.append(RenderPacketDTO.Mesh(
                 geometryId: gid, positions: pos, normals: nrm,
-                vertexCount: vc, indices: idx, indexCount: ic
+                vertexCount: vc, indices: idx, indexCount: ic,
+                materialColor: simd_float4(rgba[0], rgba[1], rgba[2], rgba[3])
             ))
         }
 
@@ -498,12 +502,16 @@ extension RustBridge {
             let nodeIdx = nodeMap[geomId] ?? -1
             let node = nodeIdx >= 0 && nodeIdx < nodeInfos.count ? nodeInfos[nodeIdx] : nil
 
+            var rgba: [Float] = [0.7, 0.7, 0.72, 1.0]
+            _ = mmf_chunk_mesh_base_color(docPtr, chunkIndex, mi, &rgba)
+
             renderer.upload(
                 positions: pos, normals: nor, vertexCount: vc,
                 indices: idx, indexCount: ic,
                 nodeIndex: nodeIdx,
                 boundsMin: node?.boundsMin ?? .zero,
-                boundsMax: node?.boundsMax ?? .zero
+                boundsMax: node?.boundsMax ?? .zero,
+                materialColor: simd_float4(rgba[0], rgba[1], rgba[2], rgba[3])
             )
             uploaded += 1
         }

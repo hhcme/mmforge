@@ -224,7 +224,7 @@ fn run_open_pipeline(
 
     // Stage 1: Detect format.
     if let Some(cb) = progress {
-        cb(&ParseProgress::new("detecting", 0, 0));
+        cb(&ParseProgress::new("detecting format", 0, 0));
     }
     if cancel.is_cancelled() {
         return Err(Error::Cancelled);
@@ -236,7 +236,8 @@ fn run_open_pipeline(
 
     // Stage 2: Parse.
     if let Some(cb) = progress {
-        cb(&ParseProgress::new("parsing", 0, 0));
+        let fmt = crate::detect_format_name(header_slice, path);
+        cb(&ParseProgress::new(fmt, 0, 0));
     }
     if cancel.is_cancelled() {
         return Err(Error::Cancelled);
@@ -255,6 +256,10 @@ fn run_open_pipeline(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        mmf_mesh_base_color, mmf_mesh_count, mmf_mesh_geometry_id, mmf_occt_available,
+        mmf_parse_file,
+    };
     use std::sync::atomic::{AtomicBool, Ordering};
 
     /// Helper: create a temp file with the given extension and content.
@@ -494,6 +499,17 @@ mod tests {
             out_min: *mut f32,
             out_max: *mut f32,
         ) -> i32;
+        fn mmf_chunk_mesh_base_color(
+            doc: *const std::ffi::c_void,
+            chunk_idx: u32,
+            mesh_idx: u32,
+            out_rgba: *mut f32,
+        ) -> i32;
+        fn mmf_chunk_mesh_geometry_id(
+            doc: *const std::ffi::c_void,
+            chunk_idx: u32,
+            mesh_idx: u32,
+        ) -> i32;
     }
 
     #[test]
@@ -607,5 +623,87 @@ mod tests {
             )
         };
         assert_eq!(r, 0);
+    }
+
+    #[test]
+    fn mesh_base_color_returns_valid_rgba_for_valid_mesh() {
+        let (doc, _guard) = parse_test_stl_box();
+        let count = mmf_mesh_count(&*doc);
+        assert!(count > 0, "test STL must have at least 1 mesh");
+        let mut rgba = [-1.0f32; 4];
+        let r = mmf_mesh_base_color(&*doc, 0, rgba.as_mut_ptr());
+        assert_eq!(r, 0);
+        // All channels must be valid floats.
+        for c in &rgba {
+            assert!((0.0..=1.0).contains(c), "color channel {c} out of [0,1]");
+        }
+        // Out-of-range returns -1.
+        let r2 = mmf_mesh_base_color(&*doc, 999, rgba.as_mut_ptr());
+        assert_eq!(r2, -1);
+    }
+
+    #[test]
+    fn occt_available_returns_zero_or_one() {
+        let r = mmf_occt_available();
+        assert!(r == 0 || r == 1);
+    }
+
+    fn parse_test_stl_box() -> (Box<MmfDocument>, tempfile::NamedTempFile) {
+        let f = temp_file("stl", include_bytes!("../../../testdata/stl/box.stl"));
+        let path_c = std::ffi::CString::new(f.path().to_str().unwrap()).expect("valid UTF-8 path");
+        let doc = mmf_parse_file(path_c.as_ptr());
+        assert!(!doc.is_null(), "mmf_parse_file must succeed for test STL");
+        unsafe { (Box::from_raw(doc), f) }
+    }
+
+    #[test]
+    fn chunk_mesh_base_color_matches_flat_lookup() {
+        let (mut doc, _guard) = parse_test_stl_box();
+        let flat_count = mmf_mesh_count(&*doc);
+        assert!(flat_count > 0, "flat mesh list must be non-empty");
+
+        // Collect flat mesh geometry_id → color mapping via C ABI.
+        let mut flat_colors: std::collections::HashMap<i32, [f32; 4]> =
+            std::collections::HashMap::new();
+        for i in 0..flat_count {
+            let gid = mmf_mesh_geometry_id(&*doc, i);
+            let mut rgba = [-1.0f32; 4];
+            let r = mmf_mesh_base_color(&*doc, i, rgba.as_mut_ptr());
+            assert_eq!(r, 0, "flat mesh {} base color must succeed", i);
+            flat_colors.insert(gid, rgba);
+        }
+
+        // Build streaming chunks.
+        let doc_ptr: *mut std::ffi::c_void = &mut *doc as *mut MmfDocument as *mut std::ffi::c_void;
+        let chunk_count = unsafe { mmf_build_streaming_packet(doc_ptr, 64 * 1024 * 1024) };
+        assert!(chunk_count > 0);
+
+        let doc_const: *const std::ffi::c_void =
+            &*doc as *const MmfDocument as *const std::ffi::c_void;
+
+        // Every chunk mesh must report the same color as its flat counterpart.
+        let mut total_chunk_meshes = 0u32;
+        for ci in 0..chunk_count {
+            let mc = unsafe { mmf_chunk_mesh_count(doc_const, ci) };
+            for mi in 0..mc {
+                let gid = unsafe { mmf_chunk_mesh_geometry_id(doc_const, ci, mi) };
+                assert_ne!(gid, -1, "chunk mesh geometry_id must be valid");
+                let mut rgba = [-1.0f32; 4];
+                let r = unsafe { mmf_chunk_mesh_base_color(doc_const, ci, mi, rgba.as_mut_ptr()) };
+                assert_eq!(r, 0, "chunk mesh base color must succeed");
+                let expected = flat_colors
+                    .get(&gid)
+                    .unwrap_or_else(|| panic!("geometry {gid} not found in flat map"));
+                assert_eq!(
+                    rgba, *expected,
+                    "chunk ({ci},{mi}) gid={gid} color must match flat lookup"
+                );
+                total_chunk_meshes += 1;
+            }
+        }
+        assert!(
+            total_chunk_meshes >= flat_count,
+            "chunks must contain at least as many meshes as the flat list (got {total_chunk_meshes}, expected >= {flat_count})"
+        );
     }
 }

@@ -24,13 +24,13 @@ struct StructureSidebar: View {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
                         .font(.caption)
-                    TextField("Search nodes…", text: $viewModel.searchText)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.caption)
-                        .accessibilityLabel("Search nodes")
-                        .onChange(of: viewModel.searchText) { _, _ in
-                            viewModel.refreshVisibleIndices()
-                        }
+                TextField("Search nodes…", text: $viewModel.searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .accessibilityLabel("Search nodes")
+                    .onChange(of: viewModel.searchText) { _, _ in
+                        debouncedRefresh()
+                    }
                     if !viewModel.searchText.isEmpty {
                         Button(action: { viewModel.searchText = "" }) {
                             Image(systemName: "xmark.circle.fill")
@@ -149,7 +149,7 @@ struct StructureSidebar: View {
 
     // MARK: - Node list
 
-    /// Selection binding that syncs to Metal renderer via selectNode().
+    /// Selection binding that syncs sidebar selection to the Metal renderer.
     private var selectionBinding: Binding<Int?> {
         Binding(
             get: { viewModel.selectedIndex },
@@ -157,6 +157,10 @@ struct StructureSidebar: View {
         )
     }
 
+    /// SwiftUI List on macOS uses NSTableView under the hood, which is rendered
+    /// lazily (cell reuse).  The prior ScrollView+LazyVStack was actually a
+    /// regression: it lost keyboard navigation, type-to-select, and VoiceOver
+    /// row navigation that List provides for free.
     private var nodeList: some View {
         List(selection: selectionBinding) {
             Section("Product Structure") {
@@ -177,6 +181,7 @@ struct StructureSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        .accessibilityLabel("Product structure tree")
     }
 
     private func nodeRow(index: Int) -> some View {
@@ -345,5 +350,18 @@ struct StructureSidebar: View {
             label += expanded ? ", expanded" : ", collapsed"
         }
         return label
+    }
+
+    // MARK: - Search debounce
+
+    @State private var debounceTask: Task<Void, Never>?
+
+    private func debouncedRefresh() {
+        debounceTask?.cancel()
+        debounceTask = Task {
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            viewModel.refreshVisibleIndices()
+        }
     }
 }

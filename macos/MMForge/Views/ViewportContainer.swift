@@ -200,21 +200,32 @@ struct MetalViewWrapper: NSViewRepresentable {
 
         // Gesture recognizers for orbit/pan/zoom/pick.
         let click = NSClickGestureRecognizer(target: context.coordinator,
-                                             action: #selector(Coordinator.handleClick(_:)))
+                                              action: #selector(Coordinator.handleClick(_:)))
         mtkView.addGestureRecognizer(click)
 
         let pan = NSPanGestureRecognizer(target: context.coordinator,
-                                         action: #selector(Coordinator.handlePan(_:)))
+                                          action: #selector(Coordinator.handlePan(_:)))
         mtkView.addGestureRecognizer(pan)
 
         let magnify = NSMagnificationGestureRecognizer(target: context.coordinator,
-                                                       action: #selector(Coordinator.handleMagnify(_:)))
+                                                        action: #selector(Coordinator.handleMagnify(_:)))
         mtkView.addGestureRecognizer(magnify)
+
+        mtkView.setAccessibilityLabel("3D model viewport")
+        mtkView.setAccessibilityRole(.image)
 
         return mtkView
     }
 
-    func updateNSView(_ nsView: MTKView, context: Context) {}
+    func updateNSView(_ mtkView: MTKView, context: Context) {
+        let label: String
+        if let selected = viewModel.selectedIndex, selected < viewModel.nodes.count {
+            label = "3D viewport — selected: \(viewModel.nodes[selected].name)"
+        } else {
+            label = "3D model viewport"
+        }
+        mtkView.setAccessibilityLabel(label)
+    }
 
     func makeCoordinator() -> Coordinator {
         let c = Coordinator()

@@ -78,6 +78,19 @@ const float* mmf_mesh_normals(const MmfDocument* doc, uint32_t index);
  */
 const uint32_t* mmf_mesh_indices(const MmfDocument* doc, uint32_t index);
 
+/**
+ * Get the pre-computed per-mesh material base color.
+ * @param out_rgba [4] float array (r, g, b, a).  Default is ~[0.7, 0.7, 0.72, 1.0].
+ * @return 0 on success, -1 if index out of range.
+ */
+int mmf_mesh_base_color(const MmfDocument* doc, uint32_t index, float* out_rgba);
+
+/**
+ * Whether OCCT support is compiled in.
+ * @return 1 if OCCT is available, 0 otherwise.
+ */
+int mmf_occt_available(void);
+
 /* ------------------------------------------------------------------ */
 /*  Scene bounds                                                       */
 /* ------------------------------------------------------------------ */
@@ -382,6 +395,15 @@ uint32_t mmf_chunk_mesh_index_count(const MmfDocument* doc,
 /** Geometry id for mesh `mesh_idx` in chunk (returns -1 on error). */
 int32_t mmf_chunk_mesh_geometry_id(const MmfDocument* doc,
                                    uint32_t chunk_idx, uint32_t mesh_idx);
+
+/**
+ * Get the pre-computed per-mesh material color for a chunk mesh.
+ * @param out_rgba [4] float array (r, g, b, a).
+ * @return 0 on success, -1 if indices out of range.
+ */
+int mmf_chunk_mesh_base_color(const MmfDocument* doc,
+                               uint32_t chunk_idx, uint32_t mesh_idx,
+                               float* out_rgba);
 
 /**
  * Borrowed pointer to mesh positions in chunk.

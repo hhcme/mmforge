@@ -105,7 +105,13 @@ final class DocumentViewModel: ObservableObject {
     @Published var nodes: [RenderPacketDTO.NodeInfo] = []
     @Published var stats: RenderPacketDTO.ModelStats?
     @Published var selectedIndex: Int?
-    @Published var hiddenNodeIndices: Set<Int> = []
+    @Published var hiddenNodeIndices: Set<Int> = [] {
+        didSet {
+            if oldValue != hiddenNodeIndices {
+                _descendantVisibilityGeneration &+= 1
+            }
+        }
+    }
     @Published var renderMode: RenderMode = .init(rawValue: AppPreferences.renderMode) ?? .solid
     @Published var clipEnabled: Bool = false
     @Published var clipAxis: Int = 2  // 0=X, 1=Y, 2=Z
@@ -181,6 +187,12 @@ final class DocumentViewModel: ObservableObject {
     @Published var _cachedVisibleIndices: [Int] = []
     /// Lazy-rebuild sentinel: triggers cache recomputation when node count changes.
     private var _lastNodeCount: Int = -1
+    /// Cached hasVisibleDescendants per node.  Invalidated when hiddenNodeIndices change
+    /// (via generation bump in didSet) so the Inspector never does O(n)
+    /// subtree walks on every SwiftUI body evaluation.
+    private var _hasVisibleDescendantsCache: [Int: Bool] = [:]
+    private var _descendantVisibilityGeneration: UInt64 = 0
+    private var _cachedDescendantGen: UInt64 = 0
 
     /// Whether the current document is a 2D drawing (DXF).
     var is2DDrawing: Bool {
@@ -286,6 +298,8 @@ final class DocumentViewModel: ObservableObject {
         _childrenMap = [:]
         _nodeDepth = [:]
         _cachedVisibleIndices = []
+        _descendantVisibilityGeneration &+= 1
+        _hasVisibleDescendantsCache.removeAll(keepingCapacity: false)
         if let url = _parseTmpURL { try? FileManager.default.removeItem(at: url); _parseTmpURL = nil }
     }
 
@@ -437,7 +451,9 @@ private func parseCompletionCallback(
                     nodeCount: dto.nodeNames.count)
             }
         } else {
-            vm.state = .error(errorCopy ?? "unknown error")
+            let enriched = DocumentViewModel.enrichErrorMessage(errorCopy ?? "unknown error",
+                                                                fileExtension: vm.loadingFileExtension)
+            vm.state = .error(enriched)
         }
     }
 }
@@ -1004,25 +1020,27 @@ extension DocumentViewModel {
     // MARK: - Export
 
     /// Capture the current viewport and present NSSavePanel for export.
+    /// Uses async GPU readback so the main thread is never blocked.
     func exportImage() {
         guard let renderer else {
             exportError = "No renderer available."
             return
         }
-        guard let image = renderer.captureImage() else {
-            exportError = "Failed to capture viewport — no drawable available."
-            return
-        }
+        Task {
+            guard let image = await renderer.captureImageAsync() else {
+                exportError = "Failed to capture viewport — no drawable available."
+                return
+            }
+            let panel = NSSavePanel()
+            panel.title = "Export Image"
+            panel.allowedContentTypes = [.png, .jpeg]
+            panel.nameFieldStringValue = "mmforge_view.\(AppPreferences.exportFormat)"
+            panel.canCreateDirectories = true
 
-        let panel = NSSavePanel()
-        panel.title = "Export Image"
-        panel.allowedContentTypes = [.png, .jpeg]
-        panel.nameFieldStringValue = "mmforge_view.\(AppPreferences.exportFormat)"
-        panel.canCreateDirectories = true
-
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            self.saveImage(image, to: url)
+            panel.begin { response in
+                guard response == .OK, let url = panel.url else { return }
+                self.saveImage(image, to: url)
+            }
         }
     }
 
@@ -1065,7 +1083,7 @@ extension DocumentViewModel {
             if self.is2DDrawing {
                 self.exportPDFToFile(url: url)
             } else {
-                self.export3DPDFToFile(url: url)
+                Task { await self.export3DPDFToFileAsync(url: url) }
             }
         }
     }
@@ -1118,12 +1136,13 @@ extension DocumentViewModel {
     }
 
     /// Export a 3D model as a PDF with a raster snapshot of the current viewport.
-    private func export3DPDFToFile(url: URL) {
+    /// Uses async GPU readback to avoid blocking the main thread.
+    private func export3DPDFToFileAsync(url: URL) async {
         guard let renderer else {
             exportError = "No renderer available."
             return
         }
-        guard let image = renderer.captureImage(),
+        guard let image = await renderer.captureImageAsync(),
               let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             exportError = "Failed to capture viewport."
             return
@@ -1218,6 +1237,7 @@ extension DocumentViewModel {
         _childrenMap = cmap
         _nodeDepth = depth
         _lastNodeCount = nodes.count
+        _descendantVisibilityGeneration &+= 1
         refreshVisibleIndices()
     }
 
@@ -1302,6 +1322,35 @@ extension DocumentViewModel {
     func nodeDepth(_ index: Int) -> Int {
         _rebuildIfNodesChanged()
         return _nodeDepth[index] ?? 0
+    }
+
+    /// Whether any descendant of `index` has visible geometry.
+    ///
+    /// Computed lazily per-index using `_childrenMap` and cached until
+    /// `hiddenNodeIndices` changes (generation-bump in didSet).
+    /// O(subtree size) on first call per generation, O(1) thereafter.
+    func hasVisibleDescendants(_ index: Int) -> Bool {
+        if _cachedDescendantGen != _descendantVisibilityGeneration {
+            _hasVisibleDescendantsCache.removeAll(keepingCapacity: true)
+            _cachedDescendantGen = _descendantVisibilityGeneration
+        }
+        if let cached = _hasVisibleDescendantsCache[index] {
+            return cached
+        }
+        let result = computeHasVisibleDescendants(index)
+        _hasVisibleDescendantsCache[index] = result
+        return result
+    }
+
+    private func computeHasVisibleDescendants(_ index: Int) -> Bool {
+        var stack = _childrenMap[index] ?? []
+        while let i = stack.popLast() {
+            if nodes[i].hasGeometry, !hiddenNodeIndices.contains(i) {
+                return true
+            }
+            stack.append(contentsOf: _childrenMap[i] ?? [])
+        }
+        return false
     }
 
     /// Dirty flag: lazily rebuilds caches when nodes change.
@@ -1410,5 +1459,39 @@ extension DocumentViewModel: Drawing2DAnnotationDelegate {
     func didCompleteDimensionAnnotation(start: CGPoint, end: CGPoint) {
         addDimensionAnnotation(start: start, end: end)
         pendingAnnotationPoint = nil
+    }
+
+    /// Enrich raw error messages with format-specific guidance.
+    nonisolated static func enrichErrorMessage(_ raw: String, fileExtension: String) -> String {
+        let ext = fileExtension.lowercased()
+        let isOCCTError = raw.contains("OCCT") || raw.contains("occt")
+        let isSTEPOrIGES = (ext == "step" || ext == "stp" || ext == "igs" || ext == "iges")
+
+        if isSTEPOrIGES && isOCCTError {
+            return """
+            \(raw)
+
+            This build of MMForge does not include OpenCASCADE (OCCT) support.
+            STEP and IGES files require the OCCT geometry kernel to parse B-Rep data.
+
+            To build with OCCT support:
+              1. Install OpenCASCADE via Homebrew: brew install opencascade
+              2. Build the OCCT shim: cd crates/mmforge-geometry/shim && mkdir -p build && \\
+                 cd build && cmake .. && make
+              3. Rebuild with: cargo build --features occt -p mmforge-bridge --release
+              4. Rebuild the macOS app in Xcode
+            """
+        }
+
+        if isSTEPOrIGES {
+            return """
+            \(raw)
+
+            Note: STEP and IGES are B-Rep CAD formats that require OpenCASCADE.
+            If OCCT is not available, only mesh-based formats (STL, glTF) and DXF drawings can be opened.
+            """
+        }
+
+        return raw
     }
 }

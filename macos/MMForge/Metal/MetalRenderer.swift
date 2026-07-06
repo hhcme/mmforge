@@ -126,6 +126,7 @@ struct GPUMesh {
     let nodeIndex: Int
     let boundsMin: simd_float3
     let boundsMax: simd_float3
+    let materialColor: simd_float4
     /// BVH for CPU-side ray–triangle picking.
     let bvh: MeshBVH
 }
@@ -221,11 +222,24 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// Frame-local frustum cull mask (rebuilt each frame, never persists).
     private var frustumCulledIndices: Set<Int> = []
     /// Cached camera state for frustum skip when stationary.
+    /// Values are quantized to prevent O(n) re-scans from trackpad micro-jitter.
     private struct CamHash: Equatable {
         var aspect: Float; var yaw: Float; var pitch: Float
         var dist: Float; var tx: Float; var ty: Float; var tz: Float
+
+        init(aspect: Float, yaw: Float, pitch: Float, dist: Float,
+             tx: Float, ty: Float, tz: Float) {
+            // Quantize to ~0.5° angular, ~0.01 linear to absorb micro-movements.
+            self.aspect = (aspect * 100).rounded() / 100
+            self.yaw = (yaw * 2).rounded() / 2
+            self.pitch = (pitch * 2).rounded() / 2
+            self.dist = (dist * 100).rounded() / 100
+            self.tx = (tx * 100).rounded() / 100
+            self.ty = (ty * 100).rounded() / 100
+            self.tz = (tz * 100).rounded() / 100
+        }
     }
-    private var lastFrustumCamHash = CamHash(aspect: -1, yaw: 0, pitch: 0, dist: 0, tx: 0, ty: 0, tz: 0)
+    private var lastFrustumCamHash = CamHash(aspect: -1, yaw: 0, pitch: 0, dist: 0, tx: -1, ty: -1, tz: -1)
     /// Count of frustum-cull skips since last cache invalidation (DEBUG-only).
 #if DEBUG
     private(set) var frustumSkipCount: Int = 0
@@ -397,7 +411,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     func upload(positions: UnsafePointer<Float>, normals: UnsafePointer<Float>,
                 vertexCount: Int, indices: UnsafePointer<UInt32>, indexCount: Int,
-                nodeIndex: Int, boundsMin: simd_float3, boundsMax: simd_float3) {
+                nodeIndex: Int, boundsMin: simd_float3, boundsMax: simd_float3,
+                materialColor: simd_float4 = simd_float4(0.7, 0.7, 0.72, 1.0)) {
         let posBytes = vertexCount * 3 * MemoryLayout<Float>.size
         let totalBytes = posBytes * 2
         guard let vb = device.makeBuffer(length: totalBytes, options: .storageModeShared) else { return }
@@ -425,6 +440,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             vertexBuffer: vb, indexBuffer: ib, indexCount: indexCount,
             visible: !hiddenNodeIndices.contains(nodeIndex),
             nodeIndex: nodeIndex, boundsMin: boundsMin, boundsMax: boundsMax,
+            materialColor: materialColor,
             bvh: bvh
         ))
     }
@@ -580,6 +596,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let vp = cam.projectionMatrix(aspect: aspect) * cam.viewMatrix
         let frustum = FrustumPlanes(from: vp)
         var culled = Set<Int>()
+        culled.reserveCapacity(gpuMeshes.count / 4)
         for (i, mesh) in gpuMeshes.enumerated() {
             if !frustum.intersects(min: mesh.boundsMin, max: mesh.boundsMax) {
                 culled.insert(i)
@@ -795,12 +812,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             let mesh = gpuMeshes[idx]
             guard mesh.visible, !frustumCulledIndices.contains(idx) else { continue }
             let isHighlighted = (mesh.nodeIndex == selectedNodeIndex)
-            // Per-mesh color: override → default grey
             var baseColor: simd_float4
             if let override = nodeColorOverrides[mesh.nodeIndex] {
                 baseColor = simd_float4(override.x, override.y, override.z, defaultAlpha)
             } else {
-                baseColor = simd_float4(0.7, 0.7, 0.72, defaultAlpha)
+                baseColor = mesh.materialColor
+                // Apply transparent alpha only when in transparent mode and no override.
+                if mode == 3 { baseColor.w = defaultAlpha }
             }
             var uniforms = Uniforms(
                 mvp: mvp, model: matrix_identity_float4x4,
@@ -886,11 +904,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let bytesPerRow = width * 4
         let bufferSize = bytesPerRow * height
 
-        // Create a shared buffer for readback.
         guard let buffer = device.makeBuffer(length: bufferSize, options: .storageModeShared)
         else { return nil }
 
-        // Blit the drawable texture into the buffer.
         guard let cmdBuf = commandQueue.makeCommandBuffer(),
               let blit = cmdBuf.makeBlitCommandEncoder() else { return nil }
         blit.copy(from: texture,
@@ -901,12 +917,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                   destinationOffset: 0,
                   destinationBytesPerRow: bytesPerRow,
                   destinationBytesPerImage: bufferSize)
-        // No synchronize needed — buffer is .storageModeShared.
         blit.endEncoding()
         cmdBuf.commit()
         cmdBuf.waitUntilCompleted()
 
-        // Create CGImage from the buffer (BGRA pixel format).
         let pixelData = buffer.contents().bindMemory(to: UInt8.self, capacity: bufferSize)
         let data = Data(bytes: pixelData, count: bufferSize)
         guard let provider = CGDataProvider(data: data as CFData) else { return nil }
@@ -925,6 +939,94 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             shouldInterpolate: false, intent: .defaultIntent
         ) else { return nil }
 
+        return NSImage(cgImage: cgImage, size: NSSize(width: width, height: height))
+    }
+
+    /// Asynchronously capture the current drawable without blocking the calling thread.
+    ///
+    /// Registers a Metal completion handler for the blit command buffer and races
+    /// it against a Dispatch timeout.  The first path to finish wins:
+    ///
+    /// - **GPU path**: `addCompletedHandler` fires → checks `cmdBuf.status`.
+    ///   On success builds the `NSImage`; on `.error` returns `nil`.
+    /// - **Timeout path**: `DispatchQueue.asyncAfter` fires → returns `nil`
+    ///   immediately.  Does NOT touch the potentially-stuck cmdBuf.
+    ///
+    /// An `NSLock`-protected `resolved` flag guarantees the `CheckedContinuation`
+    /// is resumed **exactly once** across the two racing threads.
+    func captureImageAsync(timeout: TimeInterval = 5.0) async -> NSImage? {
+        guard let view = mtkView,
+              let drawable = view.currentDrawable else { return nil }
+
+        let texture = drawable.texture
+        let width = texture.width
+        let height = texture.height
+        guard width > 0, height > 0 else { return nil }
+
+        let bytesPerRow = width * 4
+        let bufferSize = bytesPerRow * height
+
+        guard let buffer = device.makeBuffer(length: bufferSize, options: .storageModeShared),
+              let cmdBuf = commandQueue.makeCommandBuffer(),
+              let blit = cmdBuf.makeBlitCommandEncoder() else { return nil }
+
+        blit.copy(from: texture,
+                  sourceSlice: 0, sourceLevel: 0,
+                  sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: width, height: height, depth: 1),
+                  to: buffer, destinationOffset: 0,
+                  destinationBytesPerRow: bytesPerRow,
+                  destinationBytesPerImage: bufferSize)
+        blit.endEncoding()
+
+        return await withCheckedContinuation { continuation in
+            let lock = NSLock()
+            var resolved = false
+
+            /// Thread-safe single-shot resume.
+            let finish: (NSImage?) -> Void = { image in
+                lock.lock()
+                guard !resolved else { lock.unlock(); return }
+                resolved = true
+                lock.unlock()
+                continuation.resume(returning: image)
+            }
+
+            cmdBuf.addCompletedHandler { _ in
+                if cmdBuf.status == .error {
+                    finish(nil)
+                    return
+                }
+                finish(Self.buildImage(from: buffer, width: width, height: height,
+                    bytesPerRow: bytesPerRow, bufferSize: bufferSize))
+            }
+            cmdBuf.commit()
+
+            // Timeout: just give up — do not touch the same cmdBuf.
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                finish(nil)
+            }
+        }
+    }
+
+    private static func buildImage(from buffer: MTLBuffer, width: Int, height: Int,
+                                    bytesPerRow: Int, bufferSize: Int) -> NSImage? {
+        let pixelData = buffer.contents().bindMemory(to: UInt8.self, capacity: bufferSize)
+        let data = Data(bytes: pixelData, count: bufferSize)
+        guard let provider = CGDataProvider(data: data as CFData) else { return nil }
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo(
+            rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue
+                | CGBitmapInfo.byteOrder32Little.rawValue
+        )
+        guard let cgImage = CGImage(
+            width: width, height: height,
+            bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace, bitmapInfo: bitmapInfo,
+            provider: provider, decode: nil,
+            shouldInterpolate: false, intent: .defaultIntent
+        ) else { return nil }
         return NSImage(cgImage: cgImage, size: NSSize(width: width, height: height))
     }
 }
