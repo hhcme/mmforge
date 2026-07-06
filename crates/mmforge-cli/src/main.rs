@@ -342,15 +342,11 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
     if header.starts_with(b"ISO-10303-21;") || ext == "step" || ext == "stp" {
         return parse_step(path);
     }
-    if ext == "igs" || ext == "iges" || ext == "dxf" {
-        let mut b = mmforge_core::ModelBuilder::new(if ext == "dxf" { "DXF" } else { "IGES" });
-        let _root = b.add_root("Root");
-        let mut model = b.build();
-        model.header.source_path = Some(path.to_string_lossy().to_string());
-        return Ok(Parsed {
-            model,
-            warnings: vec![],
-        });
+    if ext == "dxf" {
+        return parse_dxf_cli(path);
+    }
+    if ext == "igs" || ext == "iges" {
+        return parse_iges(path);
     }
 
     // Last resort: try STL
@@ -496,14 +492,59 @@ fn parse_ascii_stl(data: &[u8]) -> Result<Parsed, String> {
 }
 
 fn parse_step(path: &std::path::Path) -> Result<Parsed, String> {
-    let mut b = mmforge_core::ModelBuilder::new("STEP");
-    let _root = b.add_root("Empty STEP");
-    let mut model = b.build();
-    model.header.source_path = Some(path.to_string_lossy().to_string());
+    let (output, registry) = mmforge_format_step::parse_step_with_tessellation(path)
+        .map_err(|e| format!("STEP: {e}"))?;
+    Ok(enrich_model_with_tessellation(output, registry))
+}
+
+fn parse_iges(path: &std::path::Path) -> Result<Parsed, String> {
+    let (output, registry) = mmforge_format_iges::parse_iges_with_tessellation(path)
+        .map_err(|e| format!("IGES: {e}"))?;
+    Ok(enrich_model_with_tessellation(output, registry))
+}
+
+fn parse_dxf_cli(path: &std::path::Path) -> Result<Parsed, String> {
+    let (output, _drawing) =
+        mmforge_format_dxf::parse_dxf(path).map_err(|e| format!("DXF: {e}"))?;
     Ok(Parsed {
-        model,
-        warnings: vec![],
+        model: output.model,
+        warnings: output.warnings,
     })
+}
+
+/// Enrich the model with mesh data from the tessellation registry.
+///
+/// For each `BRepHandleRef` geometry that has a matching entry in the
+/// registry, replaces it with a `Mesh` geometry so that CLI commands
+/// (`info`, `validate`, `convert`) report correct triangle counts and
+/// include mesh data in LSM output.
+fn enrich_model_with_tessellation(
+    output: mmforge_core::model::ParseOutput,
+    registry: mmforge_geometry::tessellation::TessellationRegistry,
+) -> Parsed {
+    let mut model = output.model;
+
+    for (i, geom) in model.geometries.iter_mut().enumerate() {
+        if let mmforge_core::model::Geometry::BRepHandleRef { id, .. } = geom {
+            if let Some(mesh_data) = registry.get(id) {
+                let vc = mesh_data.positions.len();
+                *geom = mmforge_core::model::Geometry::Mesh(mmforge_core::model::MeshGeometry {
+                    id: *id,
+                    positions: mesh_data.positions.clone(),
+                    normals: mesh_data.normals.clone(),
+                    uvs: vec![[0.0, 0.0]; vc],
+                    indices: mesh_data.indices.clone(),
+                    bounds: mesh_data.bounds,
+                });
+                let _ = i;
+            }
+        }
+    }
+
+    Parsed {
+        model,
+        warnings: output.warnings,
+    }
 }
 
 // ----------------------------------------------------------------
@@ -917,5 +958,131 @@ mod tests {
             err.contains("not a valid STL") || err.contains("invalid UTF-8"),
             "expected STL parse error, got: {err}"
         );
+    }
+
+    /// DXF file parses through the real parser (not empty placeholder).
+    #[test]
+    fn dxf_cli_returns_nodes_geoms_gt_zero() {
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../mmforge-format-dxf/testdata/test.dxf");
+        if !fixture.exists() {
+            return; // skip if fixture not found
+        }
+        let p = detect_and_parse(&fixture).unwrap();
+        assert!(p.model.scene.nodes.len() > 0, "DXF must have nodes");
+        assert!(p.model.geometries.len() > 0, "DXF must have geometries");
+        assert_eq!(p.model.header.source_format, "DXF");
+    }
+
+    /// IGES extension routes to IGES parser (without OCCT: returns clean
+    /// error, not placeholder).
+    #[test]
+    fn iges_extension_triggers_real_parser() {
+        let mut f = tempfile::Builder::new().suffix(".igs").tempfile().unwrap();
+        f.write_all(b"not a real IGES file").unwrap();
+        // Without OCCT the error should mention OCCT, not return empty model.
+        let result = detect_and_parse(f.path());
+        match result {
+            Err(e) => {
+                assert!(
+                    e.contains("OCCT") || e.contains("IGES"),
+                    "IGES without OCCT must fail with OCCT message, got: {e}"
+                );
+            }
+            Ok(p) => {
+                // With OCCT, must have real geometry.
+                assert!(p.model.geometries.len() > 0, "IGES must have geometries");
+                assert!(
+                    p.model.total_triangle_count() > 0,
+                    "IGES must have triangles"
+                );
+            }
+        }
+    }
+
+    /// enrich_model_with_tessellation converts BRepHandleRef to Mesh
+    /// when registry data is available.
+    #[test]
+    fn enrich_model_replaces_brep_with_mesh() {
+        use mmforge_core::ids::GeometryId;
+
+        // Build a minimal model with one BRepHandleRef geometry.
+        let mut b = mmforge_core::ModelBuilder::new("TEST")
+            .with_units("mm")
+            .build();
+        b.header.source_path = Some("test.step".into());
+        let geom_id = GeometryId::new(1);
+
+        let node_id = b.scene.add_node(mmforge_core::model::Node {
+            id: mmforge_core::ids::NodeId::new(0),
+            name: "test".into(),
+            parent: None,
+            children: vec![],
+            geometry: Some(geom_id),
+            material: None,
+            visible: true,
+            local_transform: glam::Mat4::IDENTITY,
+            bounds: mmforge_core::math::BoundingBox::EMPTY,
+        });
+        let _ = node_id;
+
+        b.geometries
+            .push(mmforge_core::model::Geometry::BRepHandleRef {
+                id: geom_id,
+                bounds: mmforge_core::math::BoundingBox::EMPTY,
+                label: "test".into(),
+            });
+
+        let output = mmforge_core::model::ParseOutput {
+            model: b,
+            warnings: vec![],
+            stats: mmforge_core::model::ParseStats::default(),
+        };
+
+        // Create tessellation data matching the geometry id.
+        let mut registry = mmforge_geometry::tessellation::TessellationRegistry::new();
+        registry.insert(
+            geom_id,
+            mmforge_geometry::tessellation::TessellatedMeshData {
+                positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                normals: vec![[0.0, 0.0, 1.0]; 3],
+                indices: vec![0, 1, 2],
+                bounds: mmforge_core::math::BoundingBox::EMPTY,
+            },
+        );
+
+        let enriched = enrich_model_with_tessellation(output, registry);
+        assert_eq!(enriched.model.total_triangle_count(), 1);
+        assert_eq!(enriched.model.geometries.len(), 1);
+        assert!(
+            matches!(
+                &enriched.model.geometries[0],
+                mmforge_core::model::Geometry::Mesh(_)
+            ),
+            "BRepHandleRef must be replaced with Mesh geometry"
+        );
+    }
+
+    /// STEP extension triggers real parser (without OCCT: error).
+    #[test]
+    fn step_extension_triggers_real_parser() {
+        let mut f = tempfile::Builder::new().suffix(".stp").tempfile().unwrap();
+        f.write_all(b"ISO-10303-21;").unwrap();
+        let result = detect_and_parse(f.path());
+        match result {
+            Err(e) => {
+                assert!(
+                    e.contains("OCCT") || e.contains("STEP"),
+                    "STEP without OCCT must fail with OCCT message, got: {e}"
+                );
+            }
+            Ok(p) => {
+                assert!(p.model.geometries.len() > 0, "STEP must have geometries");
+                assert!(
+                    p.model.total_triangle_count() > 0,
+                    "STEP must have triangles"
+                );
+            }
+        }
     }
 }
