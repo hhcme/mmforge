@@ -250,19 +250,21 @@ fi
 # 10. perf-baseline (CLI geometry evidence, no GUI)
 #
 # Exit codes from perf-baseline.sh:
-#   0 = all formats REAL-GEOMETRY or 2D-ONLY (no ERROR, no PLACEHOLDER)
-#   1 = one or more formats ERROR (parser hard-failed)
-#   2 = one or more formats PLACEHOLDER (empty model, no ERROR)
+#   0 = PASS — all formats REAL-GEOMETRY or 2D-ONLY
+#   1 = FAIL — hard ERROR (any format)
+#   2 = FAIL — PLACEHOLDER (empty model)
+#   3 = ADVISORY — STEP/IGES no-OCCT downgraded (MMFORGE_NO_OCCT_ADVISORY=1);
+#       no non-OCCT ERROR, no PLACEHOLDER
 #
-# MMFORGE_ALLOW_NO_OCCT=1: downgrades known STEP/IGES no-OCCT errors to
-# advisory.  Only affects exit-1 from STEP/IGES; any other ERROR or
-# PLACEHOLDER still fails.
+# MMFORGE_ALLOW_NO_OCCT=1 enables advisory downgrade for STEP/IGES only.
+# STL/glTF/DXF ERROR or any PLACEHOLDER always hard-fails (exit 1/2).
 # ---------------------------------------------------------------------------
 bold "10. CLI format geometry baseline"
 
 ADVISORY_NO_OCCT="${MMFORGE_ALLOW_NO_OCCT:-0}"
 PERF_OUTPUT="$ROOT/macos/build/.preflight-perf-baseline.log"
 mkdir -p "$(dirname "$PERF_OUTPUT")"
+GEOMETRY_ADVISORY=0
 
 echo -n "  perf-baseline.sh ... "
 set +e
@@ -280,19 +282,20 @@ case "$PERF_RC" in
     green "PASS (all formats REAL-GEOMETRY or 2D-ONLY)"
     ;;
   1)
-    if [ "$ADVISORY_NO_OCCT" = "1" ]; then
-      yellow "ADVISORY — STEP/IGES ERROR: no OCCT (MMFORGE_ALLOW_NO_OCCT=1)"
-      echo "    (Complete geometry requires OCCT; only STL/glTF/DXF verified)"
-    else
-      red "FAIL — geometry ERROR:${PERF_ERROR_FORMATS}"
-      echo "    (Set MMFORGE_ALLOW_NO_OCCT=1 to accept STEP/IGES no-OCCT as advisory)"
-      RESULT=1
-    fi
+    red "FAIL — geometry ERROR:${PERF_ERROR_FORMATS}"
+    echo "    (Set MMFORGE_ALLOW_NO_OCCT=1 to accept STEP/IGES no-OCCT as advisory)"
+    RESULT=1
     ;;
   2)
     red "FAIL — geometry PLACEHOLDER:${PERF_PLACEHOLDER_FORMATS}"
     echo "    (Parser returned empty model — format not wired or feature missing)"
     RESULT=1
+    ;;
+  3)
+    yellow "ADVISORY — STEP/IGES geometry NOT verified (no OpenCASCADE)"
+    echo "    Only STL, glTF, and DXF geometry is fully verified."
+    echo "    STEP and IGES require OpenCASCADE for complete geometry verification."
+    GEOMETRY_ADVISORY=1
     ;;
   *)
     red "FAIL — perf-baseline exited $PERF_RC"
@@ -305,8 +308,12 @@ esac
 # ---------------------------------------------------------------------------
 echo ""
 bold "=== Summary ==="
-if [ "$RESULT" -eq 0 ]; then
+if [ "$RESULT" -eq 0 ] && [ "$GEOMETRY_ADVISORY" -eq 0 ]; then
     green "Preflight: ALL CHECKS PASSED"
+elif [ "$RESULT" -eq 0 ] && [ "$GEOMETRY_ADVISORY" -eq 1 ]; then
+    yellow "Preflight: PASS WITH ADVISORY"
+    yellow "  STEP/IGES geometry NOT verified (requires OpenCASCADE)."
+    yellow "  STL, glTF, DXF geometry fully verified."
 else
     red "Preflight: SOME CHECKS FAILED (exit code $RESULT)"
 fi

@@ -2,7 +2,7 @@
 
 **Date**: 2026-07-08
 **Agent**: Opencode (deepseek-v4-pro)
-**Status**: COMPLETE (v2 — review fixes applied: preflight exit-code gating, pixel-content baseline diff, OCCT/no-OCCT doc split, NSBitmapImageRep format bug fixed)
+**Status**: COMPLETE (v3 — advisory semantics fixed: exit 3, PASS WITH ADVISORY, 18 shell gating tests, non-OCCT ERROR/PLACEHOLDER always fail)
 
 ---
 
@@ -12,9 +12,10 @@ This batch hardens the non-interactive verification system for macOS
 industrial delivery. Key improvements:
 
 - **11 new unit tests** for `Drawing2DView.renderImage` (2D/DXF Export Image rendering pipeline), including pixel-content baseline differential test
-- **Preflight check script** `macos/scripts/preflight-check.sh` — 10 silent check categories with codesign/otool/diff/arch/DMG verification; **geometry ERROR/PLACEHOLDER gating with `MMFORGE_ALLOW_NO_OCCT=1`**; perf-baseline exit codes propagated (0=clean, 1=ERROR, 2=PLACEHOLDER)
-- **perf-baseline.sh** exit codes: 0=all clean, 1=ERROR, 2=PLACEHOLDER; `MMFORGE_NO_OCCT_ADVISORY=1` downgrades known OCCT-dependent errors to advisory
-- **GUI acceptance isolated** behind `MMFORGE_ALLOW_INTERACTIVE_GUI=1` guard (default exits before any desktop interaction)
+- **Preflight check script** `macos/scripts/preflight-check.sh` — 10 silent check categories; geometry exit codes (0=PASS, 1=ERROR, 2=PLACEHOLDER, 3=ADVISORY); advisory→"PASS WITH ADVISORY" not "ALL CHECKS PASSED"
+- **18-shell-test geometry gating suite** `macos/scripts/test-preflight-geometry-gating.sh` — covers default-fail, advisory-pass, non-OCCT-ERROR-fail, PLACEHOLDER-fail
+- **perf-baseline.sh** exit-code contract: exit 3=ADVISORY only when STEP/IGES are sole errors + advisory mode on; any non-OCCT ERROR or PLACEHOLDER → exit 1/2 unconditionally
+- **GUI acceptance isolated** behind `MMFORGE_ALLOW_INTERACTIVE_GUI=1` guard
 - **NSBitmapImageRep format bug fixed**: `.alphaNonpremultiplied`→`[]` (default premultiplied) — `kCGImageAlphaLast` unsupported on macOS CGBitmapContext; and `drawCommand` text path: `aciColor` (`CGColor`)→`NSColor(cgColor:)` for `NSAttributedString.Key.foregroundColor`
 - **Full non-interactive verification suite re-run**: all Rust/Swift pass; preflight gates correctly on no-OCCT geometry errors
 
@@ -81,16 +82,18 @@ MMFORGE_ALLOW_NO_OCCT=1 bash macos/scripts/preflight-check.sh
 `preflight-check.sh` section 10 calls `docs/scripts/perf-baseline.sh` and
 interprets its exit code:
 
-| perf-baseline exit | Meaning | Preflight default | Preflight with MMFORGE_ALLOW_NO_OCCT=1 |
-|:--:|---------|-------------------|--------------------------------------|
-| 0 | All REAL-GEOMETRY or 2D-ONLY | PASS | PASS |
-| 1 | ERROR (e.g. STEP/IGES no OCCT) | **FAIL** | ADVISORY (yellow, exit 0) |
-| 2 | PLACEHOLDER (empty model) | **FAIL** | **FAIL** (never downgraded) |
+| perf-baseline exit | Meaning | Preflight result | Summary message |
+|:--:|---------|-------------------|-----------|
+| 0 | All REAL-GEOMETRY or 2D-ONLY (OCCT present) | green PASS | `ALL CHECKS PASSED` |
+| 1 | Hard ERROR (any format, incl. non-OCCT) | **FAIL (exit 1)** | `CHECKS FAILED` |
+| 2 | PLACEHOLDER (empty model) | **FAIL (exit 1)** | `CHECKS FAILED` |
+| 3 | ADVISORY: STEP/IGES no-OCCT only | yellow ADVISORY (exit 0) | `PASS WITH ADVISORY` |
 
-`perf-baseline.sh` itself uses `MMFORGE_NO_OCCT_ADVISORY=1` (set automatically
-by preflight when `MMFORGE_ALLOW_NO_OCCT=1`) to downgrade known
-STEP/IGES errors to advisory. Any non-OCCT ERROR from STL/glTF/DXF or
-any PLACEHOLDER still fails unconditionally.
+The **exit 3 path** is the critical distinction:
+- It only triggers when `MMFORGE_ALLOW_NO_OCCT=1` AND all errors are STEP/IGES
+- The preflight summary prints "PASS WITH ADVISORY" (yellow), NOT "ALL CHECKS PASSED"
+- The advisory message explicitly states: "STEP/IGES geometry NOT verified (requires OpenCASCADE)"
+- STL, glTF, DXF ERROR or any PLACEHOLDER → always exit 1/2, advisory flag ignored
 
 ---
 
@@ -165,9 +168,10 @@ Only on a dedicated machine where desktop takeover is acceptable. The script act
 | `codesign --verify --deep --strict` | **OK** (all 30 dylibs validated, app valid on disk) |
 | `otool -L` (main binary + 30 dylibs) | **0 Homebrew refs** (+ 34 unique @rpath deps, 0 missing) |
 | `bash docs/scripts/perf-baseline.sh` | **exit 1: 2 REAL-GEOMETRY + 1 2D-ONLY + 2 ERROR (no OCCT)** |
-| `MMFORGE_NO_OCCT_ADVISORY=1 bash docs/scripts/perf-baseline.sh` | **exit 0: 2 REAL-GEOMETRY + 1 2D-ONLY + 2 ERROR/advisory** |
+| `MMFORGE_NO_OCCT_ADVISORY=1 bash docs/scripts/perf-baseline.sh` | **exit 3: ADVISORY — GEOMETRY_VERDICT=ADVISORY** |
 | `bash macos/scripts/preflight-check.sh` (default) | **FAIL (exit 1)** — geometry ERROR on STEP/IGES |
-| `MMFORGE_ALLOW_NO_OCCT=1 bash macos/scripts/preflight-check.sh` | **PASS (exit 0)** — ADVISORY for STEP/IGES |
+| `MMFORGE_ALLOW_NO_OCCT=1 bash macos/scripts/preflight-check.sh` | **exit 0: "PASS WITH ADVISORY"** (not "ALL CHECKS PASSED") |
+| `bash macos/scripts/test-preflight-geometry-gating.sh` | **ALL TESTS PASSED (18/18)** |
 | `git diff --check` | **clean** |
 | `bash -n macos/scripts/preflight-check.sh` | **syntax OK** |
 | `bash -n docs/scripts/perf-baseline.sh` | **syntax OK** |
@@ -188,11 +192,13 @@ Only on a dedicated machine where desktop takeover is acceptable. The script act
 
 ### 6.3 Preflight Exit Code Paths Verified
 
-| Scenario | Command | Exit | Section 10 Result |
-|----------|---------|:----:|-------------------|
-| Default (no OCCT) | `bash macos/scripts/preflight-check.sh` | 1 | FAIL (geometry ERROR STEP/IGES) |
-| Advisory no-OCCT | `MMFORGE_ALLOW_NO_OCCT=1 bash macos/scripts/preflight-check.sh` | 0 | ADVISORY (STEP/IGES no-OCCT gap noted) |
-| With OCCT env | (requires OCCT build) | 0 | PASS (4 REAL-GEOMETRY + 1 2D-ONLY) |
+| Scenario | Command | Exit | Section 10 Result | Summary Message |
+|----------|---------|:----:|-------------------|-----------------|
+| Default (no OCCT) | `bash macos/scripts/preflight-check.sh` | 1 | FAIL (geometry ERROR STEP IGES) | CHECKS FAILED |
+| Advisory no-OCCT | `MMFORGE_ALLOW_NO_OCCT=1 bash macos/scripts/preflight-check.sh` | 0 | ADVISORY (STEP/IGES no-OCCT) | PASS WITH ADVISORY |
+| With OCCT | (requires OCCT build) | 0 | PASS (4 REAL-GEOMETRY + 1 2D-ONLY) | ALL CHECKS PASSED |
+| Advisory + non-OCCT ERROR | (test-only, see gating suite) | 1 | FAIL | CHECKS FAILED |
+| Advisory + PLACEHOLDER | (test-only) | 1 | FAIL | CHECKS FAILED |
 
 ### 6.3 Test Count Changes
 
