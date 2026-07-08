@@ -220,7 +220,7 @@ App opens the file: structure tree populated, geometry renders in 3D.
 | `cargo test --workspace` | **350 pass** (63 bridge, 8 CLI, 30 integration, 97 core, 39 DXF, 6 IGES, 12 STEP, 6 geometry, 89 render) |
 | `cargo clippy --workspace -- -D warnings` | **0 warnings** |
 | `cargo fmt --all --check` | **clean** |
-| `bash docs/scripts/perf-baseline.sh` | **4 REAL-GEOMETRY + 1 2D-ONLY** (DXF is 2D: triangles=0 is expected) |
+| `bash docs/scripts/perf-baseline.sh` | **2 REAL-GEOMETRY + 1 2D-ONLY + 2 ERROR** (default no-OCCT; with OCCT: 4 REAL-GEOMETRY + 1 2D-ONLY) |
 | `git diff --check` | **clean** |
 
 ---

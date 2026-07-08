@@ -106,7 +106,7 @@ They are documented for future work:
 | `xcodebuild test ...` | **155/155 pass** |
 | `cargo clippy --workspace -- -D warnings` | **0 warnings** |
 | `cargo fmt --all --check` | **clean** |
-| `bash docs/scripts/perf-baseline.sh` | **4 REAL-GEOMETRY + 1 2D-ONLY** |
+| `bash docs/scripts/perf-baseline.sh` | **2 REAL-GEOMETRY + 1 2D-ONLY + 2 ERROR** (default no-OCCT; with OCCT: 4 REAL-GEOMETRY + 1 2D-ONLY) |
 | `bash macos/scripts/package.sh release` | **BUILD SUCCEEDED** |
 | `bash macos/scripts/smoke-test.sh macos/build/.../Release/MMForge.app` | **8 passed, 0 failed, 0 skipped** (launch smoke only) |
 | `git diff --check` | **clean** |

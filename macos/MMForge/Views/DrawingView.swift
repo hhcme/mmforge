@@ -557,7 +557,7 @@ class Drawing2DView: NSView {
             let font = NSFont.systemFont(ofSize: fontSize)
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: font,
-                .foregroundColor: aciColor(colorIdx),
+                .foregroundColor: NSColor(cgColor: aciColor(colorIdx))!,
             ]
             let nsString = content as NSString
 
@@ -1055,7 +1055,7 @@ class Drawing2DView: NSView {
                   hasAlpha: true,
                   isPlanar: false,
                   colorSpaceName: .deviceRGB,
-                  bitmapFormat: .alphaNonpremultiplied,
+                  bitmapFormat: [],
                   bytesPerRow: 0,
                   bitsPerPixel: 0
               ) else {
@@ -1064,13 +1064,16 @@ class Drawing2DView: NSView {
 
         let size = NSSize(width: CGFloat(pixelWidth), height: CGFloat(pixelHeight))
         let view = Drawing2DView(frame: NSRect(origin: .zero, size: size))
+        view.wantsLayer = true
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+
         view.drawCommands = commands
         view.drawingInfo = drawingInfo
         view.layerVisibilityOverrides = layerVisibility
         view.annotations = annotations
 
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
         view.draw(view.bounds)
         NSGraphicsContext.restoreGraphicsState()
 

@@ -64,7 +64,7 @@ Mesh geometries from deserialised LSM model are extracted into
 | `cargo clippy --workspace -- -D warnings` | **0 warnings** |
 | `cargo fmt --all --check` | **clean** |
 | `xcodebuild test ...` | **155/155 pass** |
-| `bash docs/scripts/perf-baseline.sh` | **4 REAL-GEOMETRY + 1 2D-ONLY** (DXF: 2D, triangles=0 expected) |
+| `bash docs/scripts/perf-baseline.sh` | **2 REAL-GEOMETRY + 1 2D-ONLY + 2 ERROR** (default no-OCCT; with OCCT: 4 REAL-GEOMETRY + 1 2D-ONLY) |
 | `bash macos/scripts/package.sh debug` | **BUILD SUCCEEDED** |
 | `bash macos/scripts/package.sh release` | **BUILD SUCCEEDED** |
 | `bash macos/scripts/package.sh dmg` | **BUILD SUCCEEDED** |

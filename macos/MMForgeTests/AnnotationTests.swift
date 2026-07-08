@@ -848,7 +848,21 @@ final class AnnotationTests: XCTestCase {
                   lineType: nil, lineWeight: 1, lineDash: []),
         ]
 
-        guard let image = Drawing2DView.renderImage(
+        // Render baseline image (empty commands, same size/info).
+        guard let baselineImg = Drawing2DView.renderImage(
+            commands: [],
+            drawingInfo: info,
+            annotations: [],
+            layerVisibility: [:],
+            pixelWidth: 200,
+            pixelHeight: 200
+        ) else {
+            XCTFail("baseline renderImage failed")
+            return
+        }
+
+        // Render image with line entity.
+        guard let entityImg = Drawing2DView.renderImage(
             commands: cmds,
             drawingInfo: info,
             annotations: [],
@@ -856,38 +870,51 @@ final class AnnotationTests: XCTestCase {
             pixelWidth: 200,
             pixelHeight: 200
         ) else {
-            XCTFail("renderImage failed")
+            XCTFail("entity renderImage failed")
             return
         }
 
-        guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff) else {
-            XCTFail("Failed to get bitmap representation")
+        // Read pixel data from both images.
+        guard let baseTiff = baselineImg.tiffRepresentation,
+              let baseRep = NSBitmapImageRep(data: baseTiff),
+              let baseData = baseRep.bitmapData,
+              let entTiff = entityImg.tiffRepresentation,
+              let entRep = NSBitmapImageRep(data: entTiff),
+              let entData = entRep.bitmapData else {
+            XCTFail("Failed to get bitmap data")
             return
         }
 
-        let width = rep.pixelsWide
-        let height = rep.pixelsHigh
-        guard let data = rep.bitmapData else {
-            XCTFail("No bitmap data")
-            return
-        }
+        let width = entRep.pixelsWide
+        let height = entRep.pixelsHigh
+        let bytesPerRow = entRep.bytesPerRow
+        var diffCount = 0
+        var redCount = 0
 
-        var nonWhiteCount = 0
         for y in 0..<height {
             for x in 0..<width {
-                let offset = (y * rep.bytesPerRow) + (x * 4)
-                let r = data[offset]
-                let g = data[offset + 1]
-                let b = data[offset + 2]
-                if !(r > 250 && g > 250 && b > 250) {
-                    nonWhiteCount += 1
+                let offset = (y * bytesPerRow) + (x * 4)
+                let br = baseData[offset]
+                let bg = baseData[offset + 1]
+                let bb = baseData[offset + 2]
+                let er = entData[offset]
+                let eg = entData[offset + 1]
+                let eb = entData[offset + 2]
+
+                if abs(Int(er) - Int(br)) > 5 || abs(Int(eg) - Int(bg)) > 5 || abs(Int(eb) - Int(bb)) > 5 {
+                    diffCount += 1
+                }
+                // ACI colorIndex=1 → red (r>200, g<100, b<100)
+                if er > 200 && eg < 100 && eb < 100 {
+                    redCount += 1
                 }
             }
         }
 
-        XCTAssertGreaterThan(nonWhiteCount, 0,
-                             "Image should have non-white pixels from rendered line")
+        XCTAssertGreaterThan(diffCount, 0,
+            "Entity image must differ from empty-command baseline — line was not rendered")
+        XCTAssertGreaterThan(redCount, 0,
+            "Entity image must contain red pixels (ACI colorIndex 1) from the rendered line")
     }
 
     func testRenderImage_closedPolyline_rendersWithoutCrash() {

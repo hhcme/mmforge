@@ -10,9 +10,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 RESULT=0
 
-red()  { printf '\033[31m%s\033[0m\n' "$*" >&2; }
-green(){ printf '\033[32m%s\033[0m\n' "$*" >&2; }
-bold() { printf '\033[1m%s\033[0m\n' "$*" >&2; }
+red()    { printf '\033[31m%s\033[0m\n' "$*" >&2; }
+green()  { printf '\033[32m%s\033[0m\n' "$*" >&2; }
+yellow() { printf '\033[33m%s\033[0m\n' "$*" >&2; }
+bold()   { printf '\033[1m%s\033[0m\n' "$*" >&2; }
 
 bold "=== MMForge Preflight Check ==="
 echo "ROOT: $ROOT"
@@ -56,6 +57,7 @@ fi
 bold "3. Swift tests (Xcode headless)"
 XCODE_PROJECT="$ROOT/macos/MMForge.xcodeproj"
 XCODE_RESULT_BUNDLE="$ROOT/macos/build/PreflightTests.xcresult"
+rm -rf "$XCODE_RESULT_BUNDLE" 2>/dev/null || true
 
 echo -n "  xcodebuild test ... "
 if xcodebuild test \
@@ -246,14 +248,57 @@ fi
 
 # ---------------------------------------------------------------------------
 # 10. perf-baseline (CLI geometry evidence, no GUI)
+#
+# Exit codes from perf-baseline.sh:
+#   0 = all formats REAL-GEOMETRY or 2D-ONLY (no ERROR, no PLACEHOLDER)
+#   1 = one or more formats ERROR (parser hard-failed)
+#   2 = one or more formats PLACEHOLDER (empty model, no ERROR)
+#
+# MMFORGE_ALLOW_NO_OCCT=1: downgrades known STEP/IGES no-OCCT errors to
+# advisory.  Only affects exit-1 from STEP/IGES; any other ERROR or
+# PLACEHOLDER still fails.
 # ---------------------------------------------------------------------------
 bold "10. CLI format geometry baseline"
+
+ADVISORY_NO_OCCT="${MMFORGE_ALLOW_NO_OCCT:-0}"
+PERF_OUTPUT="$ROOT/macos/build/.preflight-perf-baseline.log"
+mkdir -p "$(dirname "$PERF_OUTPUT")"
+
 echo -n "  perf-baseline.sh ... "
-if bash "$ROOT/docs/scripts/perf-baseline.sh" >/dev/null 2>&1; then
-    green "PASS"
-else
-    red "FAIL (may indicate missing OCCT for STEP/IGES)"
-fi
+set +e
+MMFORGE_NO_OCCT_ADVISORY="$ADVISORY_NO_OCCT" \
+  bash "$ROOT/docs/scripts/perf-baseline.sh" >"$PERF_OUTPUT" 2>&1
+PERF_RC=$?
+set -e
+
+# Parse summary table to extract problematic format names
+PERF_ERROR_FORMATS=$(awk -F'|' '/^[|] (STEP|IGES|STL|glTF|DXF)/ && /ERROR/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); printf " %s", $2}' "$PERF_OUTPUT" 2>/dev/null || true)
+PERF_PLACEHOLDER_FORMATS=$(awk -F'|' '/^[|] (STEP|IGES|STL|glTF|DXF)/ && /PLACEHOLDER/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); printf " %s", $2}' "$PERF_OUTPUT" 2>/dev/null || true)
+
+case "$PERF_RC" in
+  0)
+    green "PASS (all formats REAL-GEOMETRY or 2D-ONLY)"
+    ;;
+  1)
+    if [ "$ADVISORY_NO_OCCT" = "1" ]; then
+      yellow "ADVISORY — STEP/IGES ERROR: no OCCT (MMFORGE_ALLOW_NO_OCCT=1)"
+      echo "    (Complete geometry requires OCCT; only STL/glTF/DXF verified)"
+    else
+      red "FAIL — geometry ERROR:${PERF_ERROR_FORMATS}"
+      echo "    (Set MMFORGE_ALLOW_NO_OCCT=1 to accept STEP/IGES no-OCCT as advisory)"
+      RESULT=1
+    fi
+    ;;
+  2)
+    red "FAIL — geometry PLACEHOLDER:${PERF_PLACEHOLDER_FORMATS}"
+    echo "    (Parser returned empty model — format not wired or feature missing)"
+    RESULT=1
+    ;;
+  *)
+    red "FAIL — perf-baseline exited $PERF_RC"
+    RESULT=1
+    ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Summary

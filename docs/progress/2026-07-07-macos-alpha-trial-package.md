@@ -158,7 +158,7 @@ is needed (documented in package.sh output).
 | `bash macos/scripts/package.sh debug` | **BUILD SUCCEEDED** (13 MB, unsigned, no OCCT) |
 | `bash macos/scripts/package.sh release` | **BUILD SUCCEEDED** (45 MB, ad-hoc, 26 dylibs) |
 | `bash macos/scripts/package.sh dmg` | **BUILD SUCCEEDED** (3.9 MB DMG, ad-hoc, 26 dylibs) |
-| `bash docs/scripts/perf-baseline.sh` | **4 REAL-GEOMETRY + 1 2D-ONLY** (DXF: triangles=0 expected for 2D) |
+| `bash docs/scripts/perf-baseline.sh` | **2 REAL-GEOMETRY + 1 2D-ONLY + 2 ERROR** (default no-OCCT; with OCCT: 4 REAL-GEOMETRY + 1 2D-ONLY) |
 | `git diff --check` | **clean** |
 
 ### Evidence Grades
@@ -167,7 +167,7 @@ is needed (documented in package.sh output).
 |-------|-------|----------|
 | Rust tests (350 pass) | Automated | `cargo test --workspace` output |
 | Swift tests (155 pass) | Automated | `xcodebuild test` output |
-| CLI format support (4 REAL-GEOMETRY + 1 2D-ONLY) | Automated | `perf-baseline.sh` output |
+| CLI geometry (perf-baseline) | Automated — OCCT-dependent | `perf-baseline.sh` output (2 REAL-GEOMETRY + 1 2D-ONLY default; 4+1 with OCCT) |
 | Debug .app builds | Automated | `package.sh debug` exit 0 |
 | Release .app builds | Automated | `package.sh release` exit 0 |
 | DMG builds | Automated | `package.sh dmg` exit 0 |
