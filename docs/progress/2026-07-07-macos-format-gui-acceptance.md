@@ -2,7 +2,7 @@
 
 **Date**: 2026-07-07 (review-fix pass applied)
 **Agent**: Opencode (deepseek-v4-pro)
-**Status**: COMPLETE — 10 files changed across 2 commits; LSM rendering + GLB fixture + magic routing
+**Status**: PARTIAL — 10 files changed across 2 commits; LSM rendering + GLB fixture + magic routing; GUI evidence from prior Debug session — NOT re-verified for current Release build
 
 ---
 
@@ -51,7 +51,7 @@ This batch closes the format loop for macOS Alpha:
 
 - **Bridge LSM/LSMC**: Detection + parsing added to bridge cascade
 - **CLI glTF**: Added bridge dependency → CLI now supports `mmforge info/benchmark` for glTF/GLB
-- **GUI acceptance**: 7 formats verified with real app
+- **GUI acceptance**: 8 formats observed in prior Debug build session; NOT re-verified for current Release build (see `2026-07-06-macos-industrial-delivery-hardening.md` Section 5.2; `2026-07-06-macos-release-gui-acceptance.md`)
 - **Report cleanup**: Fixed duplicate section numbers, removed stale blocked items
 
 ---
@@ -138,16 +138,18 @@ All tests: `open -a <app> <file>` unless otherwise noted.
 
 ### 4.1 Results
 
-| # | File | Size | App Result | Notes |
-|---|------|------|-----------|-------|
-| 1 | `testdata/stl/box.stl` | 1.4 KB | ✅ Renders | 12-triangle box; orbit/pan/zoom OK; cmd+1..4 render modes OK |
-| 2 | `testdata/gltf/box.gltf` | 1.1 KB | ✅ Renders | 1-triangle box; material color visible (not grey) |
-| 3 | `testdata/gltf/box.glb` | 0.7 KB | ✅ Renders | Binary GLB fixture — same content as .gltf, verified by CLI info |
-| 4 | `crates/mmforge-format-dxf/testdata/test.dxf` | 0.8 KB | ✅ Renders | 2D drawing; layer panel works; zoom/pan OK |
-| 5 | `crates/mmforge-geometry/testdata/PQ-04909-A.STEP` | 36 KB | ✅ Renders (with OCCT) | Structure tree populated; geometry visible |
-| 6 | `crates/mmforge-geometry/testdata/box.igs` | 12 KB | ✅ Renders (with OCCT) | IGES box visible in 3D viewport |
-| 7 | `/tmp/test_box.lsm` (STL→LSM) | 1.5 KB | ✅ Renders | CLI-converted; structure tree + 3D box; rendering wired in this batch |
-| 8 | `/tmp/test_box.lsmc` (STL→LSMC) | 0.3 KB | ✅ Renders | CLI-converted compressed; identical render to .lsm |
+| # | File | Size | Prior Debug Session | Notes |
+|---|------|------|---------------------|-------|
+| 1 | `testdata/stl/box.stl` | 1.4 KB | ⚠️ Prior Debug | 12-triangle box; orbit/pan/zoom OK; cmd+1..4 render modes OK (prior Debug session) |
+| 2 | `testdata/gltf/box.gltf` | 1.1 KB | ⚠️ Prior Debug | 1-triangle box; material color visible (prior Debug session) |
+| 3 | `testdata/gltf/box.glb` | 0.7 KB | ⚠️ Prior Debug | Binary GLB fixture — same content as .gltf, verified by CLI info (prior Debug session for GUI) |
+| 4 | `crates/mmforge-format-dxf/testdata/test.dxf` | 0.8 KB | ⚠️ Prior Debug | 2D drawing; layer panel works; zoom/pan OK (prior Debug session) |
+| 5 | `crates/mmforge-geometry/testdata/PQ-04909-A.STEP` | 36 KB | ⚠️ Prior Debug | Structure tree populated; geometry visible (prior Debug session, OCCT) |
+| 6 | `crates/mmforge-geometry/testdata/box.igs` | 12 KB | ⚠️ Prior Debug | IGES box visible in 3D viewport (prior Debug session) |
+| 7 | `/tmp/test_box.lsm` (STL→LSM) | 1.5 KB | ⚠️ Prior Debug | CLI-converted; structure tree + 3D box (prior Debug session) |
+| 8 | `/tmp/test_box.lsmc` (STL→LSMC) | 0.3 KB | ⚠️ Prior Debug | CLI-converted compressed (prior Debug session) |
+
+**⚠️ All GUI observations in this section are from a prior Debug build session and have NOT been re-verified for the current Release build.** Re-verify with `MMFORGE_ALLOW_INTERACTIVE_GUI=1 bash scripts/gui-acceptance-test.sh`.
 
 ### 4.2 LSM/LSMC Rendering — Evidence
 
@@ -169,30 +171,32 @@ file: testdata/gltf/box.glb  format: glTF  triangles: 1  bounds: [0,0,0]–[1,1,
 
 App opens the file: structure tree populated, geometry renders in 3D.
 
-### 4.4 Export & Interaction
+### 4.4 Export & Interaction (Prior Debug Session — Not Re-Verified)
 
-| # | Test | Result |
-|---|------|--------|
-| E1 | Export Image (⌘E) — STL | ✅ NSSavePanel, PNG saved |
-| E2 | Export Image (⌘E) — DXF | ✅ NSSavePanel, PNG saved |
-| E3 | Export PDF (⌘⇧E) — STL | ✅ NSSavePanel, PDF saved |
-| M1 | Render modes Cmd+1..4 — STL | ✅ All 4 visually distinct |
-| M2 | Clipping ⌘K — STEP | ✅ Clip plane with section fill |
-| M3 | Measurement ⌘M — STL | ✅ Distance labels |
+| # | Test | Prior Session | Note |
+|---|------|:-------------:|------|
+| E1 | Export Image (⌘E) — STL | ⚠️ | NSSavePanel, PNG saved (prior Debug session) |
+| E2 | Export Image (⌘E) — DXF | ⚠️ | NSSavePanel, PNG saved (prior Debug session; 2D image export added in working tree) |
+| E3 | Export PDF (⌘⇧E) — STL | ⚠️ | NSSavePanel, PDF saved (prior Debug session) |
+| M1 | Render modes Cmd+1..4 — STL | ⚠️ | All 4 visually distinct (prior Debug session) |
+| M2 | Clipping ⌘K — STEP | ⚠️ | Clip plane with section fill (prior Debug session) |
+| M3 | Measurement ⌘M — STL | ⚠️ | Distance labels (prior Debug session) |
 
-### 4.5 Window Titles & Structure Tree
+⚠️ All export & interaction checks are from a prior Debug session. Re-verify with the Release app.
 
-| Format | Window Title | Structure Tree |
-|--------|-------------|----------------|
-| box.stl | `box.stl` | "mmforge_box" node |
-| box.gltf | `box.gltf` | "mesh_0" node |
-| test.dxf | `test.dxf` | Drawing nodes |
-| PQ-04909-A.STEP | `PQ-04909-A.STEP` | OCCT B-Rep nodes |
-| box.igs | `box.igs` | IGES nodes |
-| test_box.lsm | `test_box.lsm` | LSM scene tree nodes |
-| test_box.lsmc | `test_box.lsmc` | LSM scene tree nodes |
+### 4.5 Window Titles & Structure Tree (Prior Debug Session — Not Re-Verified)
 
-All window titles match file names.
+| Format | Window Title | Structure Tree | Verif |
+|--------|-------------|----------------|:-----:|
+| box.stl | `box.stl` | "mmforge_box" node | ⚠️ |
+| box.gltf | `box.gltf` | "mesh_0" node | ⚠️ |
+| test.dxf | `test.dxf` | Drawing nodes | ⚠️ |
+| PQ-04909-A.STEP | `PQ-04909-A.STEP` | OCCT B-Rep nodes | ⚠️ |
+| box.igs | `box.igs` | IGES nodes | ⚠️ |
+| test_box.lsm | `test_box.lsm` | LSM scene tree nodes | ⚠️ |
+| test_box.lsmc | `test_box.lsmc` | LSM scene tree nodes | ⚠️ |
+
+⚠️ All window title & structure tree checks are from a prior Debug session. Not re-verified for Release.
 
 ### 4.6 Known Gaps (Manual Verification Only)
 
@@ -216,7 +220,7 @@ All window titles match file names.
 | `cargo test --workspace` | **350 pass** (63 bridge, 8 CLI, 30 integration, 97 core, 39 DXF, 6 IGES, 12 STEP, 6 geometry, 89 render) |
 | `cargo clippy --workspace -- -D warnings` | **0 warnings** |
 | `cargo fmt --all --check` | **clean** |
-| `bash docs/scripts/perf-baseline.sh` | **ALL 5 FORMATS PASS** (glTF now supported!) |
+| `bash docs/scripts/perf-baseline.sh` | **4 REAL-GEOMETRY + 1 2D-ONLY** (DXF is 2D: triangles=0 is expected) |
 | `git diff --check` | **clean** |
 
 ---

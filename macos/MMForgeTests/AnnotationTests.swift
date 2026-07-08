@@ -570,4 +570,349 @@ final class AnnotationTests: XCTestCase {
     func testAnnotationTool_dimensionTwoClicks() {
         XCTAssertEqual(AnnotationTool.dimension.clickCount, 2)
     }
+
+    // MARK: - Drawing2DView.renderImage Tests
+
+    func testRenderImage_emptyCommands_producesImage() {
+        let info = Drawing2DInfo(
+            entityCount: 0, layerCount: 0,
+            boundsMinX: 0, boundsMinY: 0,
+            boundsMaxX: 100, boundsMaxY: 100,
+            layers: [])
+
+        guard let image = Drawing2DView.renderImage(
+            commands: [],
+            drawingInfo: info,
+            annotations: [],
+            layerVisibility: [:],
+            pixelWidth: 400,
+            pixelHeight: 300
+        ) else {
+            XCTFail("renderImage should return a valid NSImage for empty commands")
+            return
+        }
+
+        XCTAssertEqual(image.size.width, 400)
+        XCTAssertEqual(image.size.height, 300)
+        XCTAssertGreaterThan(image.representations.count, 0)
+    }
+
+    func testRenderImage_withDrawCommands() {
+        let info = Drawing2DInfo(
+            entityCount: 2, layerCount: 1,
+            boundsMinX: 0, boundsMinY: 0,
+            boundsMaxX: 10, boundsMaxY: 10,
+            layers: [Drawing2DLayerInfo(name: "0", visible: true, colorIndex: 7, lineType: nil)])
+
+        let cmds: [DrawCommandDTO] = [
+            .line(x0: 0, y0: 0, x1: 5, y1: 5,
+                  layerIndex: 0, layerName: "0", colorIndex: 7, visible: true,
+                  lineType: nil, lineWeight: 0, lineDash: []),
+            .circle(cx: 3, cy: 3, r: 2,
+                    layerIndex: 0, layerName: "0", colorIndex: 7, visible: true,
+                    lineType: nil, lineWeight: 0, lineDash: []),
+        ]
+
+        guard let image = Drawing2DView.renderImage(
+            commands: cmds,
+            drawingInfo: info,
+            annotations: [],
+            layerVisibility: ["0": true],
+            pixelWidth: 800,
+            pixelHeight: 600
+        ) else {
+            XCTFail("renderImage should succeed with draw commands")
+            return
+        }
+
+        XCTAssertEqual(image.size.width, 800)
+        XCTAssertEqual(image.size.height, 600)
+    }
+
+    func testRenderImage_withAnnotations() {
+        let info = Drawing2DInfo(
+            entityCount: 1, layerCount: 1,
+            boundsMinX: 0, boundsMinY: 0,
+            boundsMaxX: 100, boundsMaxY: 100,
+            layers: [Drawing2DLayerInfo(name: "0", visible: true, colorIndex: 7, lineType: nil)])
+
+        let annotations: [Annotation] = [
+            Annotation(kind: .measurement(start: CGPoint(x: 0, y: 0), end: CGPoint(x: 10, y: 0))),
+            Annotation(kind: .textAnnotation(position: CGPoint(x: 50, y: 50), text: "Test", fontSize: 12)),
+        ]
+
+        let cmds: [DrawCommandDTO] = [
+            .line(x0: 0, y0: 0, x1: 100, y1: 100,
+                  layerIndex: 0, layerName: "0", colorIndex: 1, visible: true,
+                  lineType: nil, lineWeight: 1, lineDash: []),
+        ]
+
+        guard let image = Drawing2DView.renderImage(
+            commands: cmds,
+            drawingInfo: info,
+            annotations: annotations,
+            layerVisibility: [:],
+            pixelWidth: 640,
+            pixelHeight: 480
+        ) else {
+            XCTFail("renderImage should succeed with annotations")
+            return
+        }
+
+        XCTAssertEqual(image.size.width, 640)
+        XCTAssertEqual(image.size.height, 480)
+    }
+
+    func testRenderImage_visibleLayerFiltering() {
+        let info = Drawing2DInfo(
+            entityCount: 2, layerCount: 2,
+            boundsMinX: 0, boundsMinY: 0,
+            boundsMaxX: 100, boundsMaxY: 100,
+            layers: [
+                Drawing2DLayerInfo(name: "visible", visible: true, colorIndex: 1, lineType: nil),
+                Drawing2DLayerInfo(name: "hidden", visible: true, colorIndex: 2, lineType: nil),
+            ])
+
+        let cmds: [DrawCommandDTO] = [
+            .line(x0: 0, y0: 0, x1: 50, y1: 50,
+                  layerIndex: 0, layerName: "visible", colorIndex: 1, visible: true,
+                  lineType: nil, lineWeight: 0, lineDash: []),
+            .line(x0: 0, y0: 0, x1: 50, y1: 50,
+                  layerIndex: 1, layerName: "hidden", colorIndex: 2, visible: true,
+                  lineType: nil, lineWeight: 0, lineDash: []),
+        ]
+
+        guard let image = Drawing2DView.renderImage(
+            commands: cmds,
+            drawingInfo: info,
+            annotations: [],
+            layerVisibility: ["visible": true, "hidden": false],
+            pixelWidth: 320,
+            pixelHeight: 240
+        ) else {
+            XCTFail("renderImage should not fail on hidden layers")
+            return
+        }
+
+        XCTAssertEqual(image.size.width, 320)
+        XCTAssertEqual(image.size.height, 240)
+    }
+
+    func testRenderImage_largeResolution() {
+        let info = Drawing2DInfo(
+            entityCount: 1, layerCount: 1,
+            boundsMinX: 0, boundsMinY: 0,
+            boundsMaxX: 1000, boundsMaxY: 1000,
+            layers: [Drawing2DLayerInfo(name: "0", visible: true, colorIndex: 7, lineType: nil)])
+
+        let cmds: [DrawCommandDTO] = [
+            .polyline(points: [(0, 0), (500, 500), (1000, 0)], closed: false,
+                      layerIndex: 0, layerName: "0", colorIndex: 3, visible: true,
+                      lineType: nil, lineWeight: 0, lineDash: []),
+        ]
+
+        guard let image = Drawing2DView.renderImage(
+            commands: cmds,
+            drawingInfo: info,
+            annotations: [],
+            layerVisibility: [:],
+            pixelWidth: 1920,
+            pixelHeight: 1080
+        ) else {
+            XCTFail("renderImage should handle large resolution")
+            return
+        }
+
+        XCTAssertEqual(image.size.width, 1920)
+        XCTAssertEqual(image.size.height, 1080)
+    }
+
+    func testRenderImage_aspectRatioWide() {
+        let info = Drawing2DInfo(
+            entityCount: 1, layerCount: 1,
+            boundsMinX: 0, boundsMinY: 0,
+            boundsMaxX: 200, boundsMaxY: 100,
+            layers: [Drawing2DLayerInfo(name: "0", visible: true, colorIndex: 7, lineType: nil)])
+
+        guard let image = Drawing2DView.renderImage(
+            commands: [],
+            drawingInfo: info,
+            annotations: [],
+            layerVisibility: [:],
+            pixelWidth: 400,
+            pixelHeight: 200
+        ) else {
+            XCTFail("renderImage should handle wide aspect ratio")
+            return
+        }
+
+        XCTAssertEqual(image.size.width, 400)
+        XCTAssertEqual(image.size.height, 200)
+    }
+
+    func testRenderImage_invalidDimensions_returnsNil() {
+        let info = Drawing2DInfo(
+            entityCount: 0, layerCount: 0,
+            boundsMinX: 0, boundsMinY: 0,
+            boundsMaxX: 100, boundsMaxY: 100,
+            layers: [])
+
+        XCTAssertNil(Drawing2DView.renderImage(
+            commands: [], drawingInfo: info, annotations: [], layerVisibility: [:],
+            pixelWidth: 0, pixelHeight: 0))
+
+        XCTAssertNil(Drawing2DView.renderImage(
+            commands: [], drawingInfo: info, annotations: [], layerVisibility: [:],
+            pixelWidth: 100, pixelHeight: 0))
+
+        XCTAssertNil(Drawing2DView.renderImage(
+            commands: [], drawingInfo: info, annotations: [], layerVisibility: [:],
+            pixelWidth: 0, pixelHeight: 100))
+    }
+
+    func testRenderImage_allEntityTypes() {
+        let info = Drawing2DInfo(
+            entityCount: 5, layerCount: 1,
+            boundsMinX: 0, boundsMinY: 0,
+            boundsMaxX: 200, boundsMaxY: 200,
+            layers: [Drawing2DLayerInfo(name: "0", visible: true, colorIndex: 7, lineType: nil)])
+
+        let cmds: [DrawCommandDTO] = [
+            .line(x0: 0, y0: 0, x1: 100, y1: 0,
+                  layerIndex: 0, layerName: "0", colorIndex: 1, visible: true,
+                  lineType: nil, lineWeight: 0, lineDash: []),
+            .circle(cx: 50, cy: 50, r: 30,
+                    layerIndex: 0, layerName: "0", colorIndex: 2, visible: true,
+                    lineType: nil, lineWeight: 0, lineDash: []),
+            .arc(cx: 100, cy: 100, r: 40, startAngle: 0, endAngle: .pi, ccw: true,
+                 layerIndex: 0, layerName: "0", colorIndex: 3, visible: true,
+                 lineType: nil, lineWeight: 0, lineDash: []),
+            .polyline(points: [(150, 0), (150, 50), (200, 50)], closed: false,
+                      layerIndex: 0, layerName: "0", colorIndex: 4, visible: true,
+                      lineType: nil, lineWeight: 0, lineDash: []),
+            .text(x: 10, y: 180, content: "Hello", height: 12, rotation: 0,
+                  layerIndex: 0, layerName: "0", colorIndex: 5, visible: true),
+        ]
+
+        guard let image = Drawing2DView.renderImage(
+            commands: cmds,
+            drawingInfo: info,
+            annotations: [],
+            layerVisibility: [:],
+            pixelWidth: 400,
+            pixelHeight: 400
+        ) else {
+            XCTFail("renderImage should handle all entity types")
+            return
+        }
+
+        XCTAssertEqual(image.size.width, 400)
+        XCTAssertEqual(image.size.height, 400)
+    }
+
+    func testRenderImage_dashPatternDoesNotCrash() {
+        let info = Drawing2DInfo(
+            entityCount: 1, layerCount: 1,
+            boundsMinX: 0, boundsMinY: 0,
+            boundsMaxX: 100, boundsMaxY: 100,
+            layers: [Drawing2DLayerInfo(name: "0", visible: true, colorIndex: 7, lineType: nil)])
+
+        let cmds: [DrawCommandDTO] = [
+            .line(x0: 0, y0: 0, x1: 100, y1: 100,
+                  layerIndex: 0, layerName: "0", colorIndex: 1, visible: true,
+                  lineType: nil, lineWeight: 2, lineDash: [10, 5, 2, 5]),
+        ]
+
+        let image = Drawing2DView.renderImage(
+            commands: cmds,
+            drawingInfo: info,
+            annotations: [],
+            layerVisibility: [:],
+            pixelWidth: 200,
+            pixelHeight: 200
+        )
+
+        XCTAssertNotNil(image, "renderImage should not crash with dash pattern")
+    }
+
+    func testRenderImage_pixelContentNonTrivial() {
+        let info = Drawing2DInfo(
+            entityCount: 1, layerCount: 1,
+            boundsMinX: 0, boundsMinY: 0,
+            boundsMaxX: 100, boundsMaxY: 100,
+            layers: [Drawing2DLayerInfo(name: "0", visible: true, colorIndex: 1, lineType: nil)])
+
+        let cmds: [DrawCommandDTO] = [
+            .line(x0: 10, y0: 10, x1: 90, y1: 90,
+                  layerIndex: 0, layerName: "0", colorIndex: 1, visible: true,
+                  lineType: nil, lineWeight: 1, lineDash: []),
+        ]
+
+        guard let image = Drawing2DView.renderImage(
+            commands: cmds,
+            drawingInfo: info,
+            annotations: [],
+            layerVisibility: [:],
+            pixelWidth: 200,
+            pixelHeight: 200
+        ) else {
+            XCTFail("renderImage failed")
+            return
+        }
+
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else {
+            XCTFail("Failed to get bitmap representation")
+            return
+        }
+
+        let width = rep.pixelsWide
+        let height = rep.pixelsHigh
+        guard let data = rep.bitmapData else {
+            XCTFail("No bitmap data")
+            return
+        }
+
+        var nonWhiteCount = 0
+        for y in 0..<height {
+            for x in 0..<width {
+                let offset = (y * rep.bytesPerRow) + (x * 4)
+                let r = data[offset]
+                let g = data[offset + 1]
+                let b = data[offset + 2]
+                if !(r > 250 && g > 250 && b > 250) {
+                    nonWhiteCount += 1
+                }
+            }
+        }
+
+        XCTAssertGreaterThan(nonWhiteCount, 0,
+                             "Image should have non-white pixels from rendered line")
+    }
+
+    func testRenderImage_closedPolyline_rendersWithoutCrash() {
+        let info = Drawing2DInfo(
+            entityCount: 1, layerCount: 1,
+            boundsMinX: 0, boundsMinY: 0,
+            boundsMaxX: 100, boundsMaxY: 100,
+            layers: [Drawing2DLayerInfo(name: "0", visible: true, colorIndex: 7, lineType: nil)])
+
+        let cmds: [DrawCommandDTO] = [
+            .polyline(points: [(10, 10), (90, 10), (90, 90), (10, 90)],
+                      closed: true,
+                      layerIndex: 0, layerName: "0", colorIndex: 2, visible: true,
+                      lineType: nil, lineWeight: 0, lineDash: []),
+        ]
+
+        let image = Drawing2DView.renderImage(
+            commands: cmds,
+            drawingInfo: info,
+            annotations: [],
+            layerVisibility: [:],
+            pixelWidth: 100,
+            pixelHeight: 100
+        )
+
+        XCTAssertNotNil(image, "Closed polyline should not crash")
+    }
 }

@@ -64,7 +64,7 @@ Mesh geometries from deserialised LSM model are extracted into
 | `cargo clippy --workspace -- -D warnings` | **0 warnings** |
 | `cargo fmt --all --check` | **clean** |
 | `xcodebuild test ...` | **155/155 pass** |
-| `bash docs/scripts/perf-baseline.sh` | **5/5 pass** (glTF no longer FAILED) |
+| `bash docs/scripts/perf-baseline.sh` | **4 REAL-GEOMETRY + 1 2D-ONLY** (DXF: 2D, triangles=0 expected) |
 | `bash macos/scripts/package.sh debug` | **BUILD SUCCEEDED** |
 | `bash macos/scripts/package.sh release` | **BUILD SUCCEEDED** |
 | `bash macos/scripts/package.sh dmg` | **BUILD SUCCEEDED** |
@@ -85,9 +85,11 @@ Mesh geometries from deserialised LSM model are extracted into
 | `ffdc230` (magic routing) | `lsm_detector.rs` | +194/−16 |
 | **Cumulative** | `lsm_detector.rs` | **+235/−23** |
 
-## 4. GUI Evidence (Manual)
+## 4. GUI Evidence (Manual — Prior Debug Session)
 
-LSM/LSMC rendering confirmed via `open -a MMForge.app`:
+⚠️ LSM/LSMC rendering observations below are from a prior Debug build session. The current Release build (commit `db253de`) has only launch smoke (8/8) and CLI geometry verification confirmed. Re-verify with `MMFORGE_ALLOW_INTERACTIVE_GUI=1 bash scripts/gui-acceptance-test.sh`.
+
+LSM/LSMC rendering confirmed via `open -a MMForge.app` (prior Debug session):
 
 ```
 $ cargo run -p mmforge-cli -- convert testdata/stl/box.stl -o /tmp/test_box.lsm

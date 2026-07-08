@@ -1024,6 +1024,11 @@ extension DocumentViewModel {
     /// Capture the current viewport and present NSSavePanel for export.
     /// Uses async GPU readback so the main thread is never blocked.
     func exportImage() {
+        if is2DDrawing {
+            export2DImage()
+            return
+        }
+
         guard let renderer else {
             exportError = "No renderer available."
             return
@@ -1043,6 +1048,54 @@ extension DocumentViewModel {
                 guard response == .OK, let url = panel.url else { return }
                 self.saveImage(image, to: url)
             }
+        }
+    }
+
+    private func export2DImage() {
+        guard let info = drawing2DInfo,
+              info.boundsMaxX > info.boundsMinX,
+              info.boundsMaxY > info.boundsMinY else {
+            exportError = "Invalid drawing bounds."
+            return
+        }
+
+        let worldWidth = info.boundsMaxX - info.boundsMinX
+        let worldHeight = info.boundsMaxY - info.boundsMinY
+        let aspect = max(0.1, worldWidth / max(worldHeight, 0.001))
+        let exportScale = max(0.25, min(AppPreferences.exportScale, 4.0))
+        let longEdge = Int((1600.0 * exportScale).rounded())
+
+        let pixelWidth: Int
+        let pixelHeight: Int
+        if aspect >= 1 {
+            pixelWidth = max(400, longEdge)
+            pixelHeight = max(300, Int((Double(longEdge) / aspect).rounded()))
+        } else {
+            pixelHeight = max(400, longEdge)
+            pixelWidth = max(300, Int((Double(longEdge) * aspect).rounded()))
+        }
+
+        guard let image = Drawing2DView.renderImage(
+            commands: drawCommands,
+            drawingInfo: info,
+            annotations: annotations,
+            layerVisibility: layerVisibility,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight
+        ) else {
+            exportError = "Failed to render 2D image."
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.title = "Export Image"
+        panel.allowedContentTypes = [.png, .jpeg]
+        panel.nameFieldStringValue = "mmforge_drawing.\(AppPreferences.exportFormat)"
+        panel.canCreateDirectories = true
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            self.saveImage(image, to: url)
         }
     }
 

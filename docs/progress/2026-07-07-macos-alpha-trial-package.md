@@ -158,7 +158,7 @@ is needed (documented in package.sh output).
 | `bash macos/scripts/package.sh debug` | **BUILD SUCCEEDED** (13 MB, unsigned, no OCCT) |
 | `bash macos/scripts/package.sh release` | **BUILD SUCCEEDED** (45 MB, ad-hoc, 26 dylibs) |
 | `bash macos/scripts/package.sh dmg` | **BUILD SUCCEEDED** (3.9 MB DMG, ad-hoc, 26 dylibs) |
-| `bash docs/scripts/perf-baseline.sh` | **5/5 pass** |
+| `bash docs/scripts/perf-baseline.sh` | **4 REAL-GEOMETRY + 1 2D-ONLY** (DXF: triangles=0 expected for 2D) |
 | `git diff --check` | **clean** |
 
 ### Evidence Grades
@@ -167,14 +167,14 @@ is needed (documented in package.sh output).
 |-------|-------|----------|
 | Rust tests (350 pass) | Automated | `cargo test --workspace` output |
 | Swift tests (155 pass) | Automated | `xcodebuild test` output |
-| CLI format support (5/5) | Automated | `perf-baseline.sh` output |
+| CLI format support (4 REAL-GEOMETRY + 1 2D-ONLY) | Automated | `perf-baseline.sh` output |
 | Debug .app builds | Automated | `package.sh debug` exit 0 |
 | Release .app builds | Automated | `package.sh release` exit 0 |
 | DMG builds | Automated | `package.sh dmg` exit 0 |
 | OCCT transitive deps (27 binaries, 0 Homebrew refs) | Code evidence | `otool -L` recursive — all `@rpath/` |
 | Ad-hoc signing | Code evidence | `codesign -dvv` → `Signature=adhoc` |
-| Launch smoke (8 formats) | Automated | `smoke-test.sh`: 8 passed, 0 failed, 0 skipped |
-| GUI rendering verification | Manual | Visual inspection of 3D viewport |
+| Launch smoke (8 formats) | Automated (launch smoke only — no rendering verification) | `smoke-test.sh`: 8 passed, 0 failed, 0 skipped |
+| GUI rendering verification | Manual — ⚠️ Prior Debug session only; re-verify for Release build | Visual inspection of 3D viewport |
 
 ---
 

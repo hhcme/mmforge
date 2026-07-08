@@ -106,21 +106,23 @@ They are documented for future work:
 | `xcodebuild test ...` | **155/155 pass** |
 | `cargo clippy --workspace -- -D warnings` | **0 warnings** |
 | `cargo fmt --all --check` | **clean** |
-| `bash docs/scripts/perf-baseline.sh` | **5/5 pass** |
+| `bash docs/scripts/perf-baseline.sh` | **4 REAL-GEOMETRY + 1 2D-ONLY** |
 | `bash macos/scripts/package.sh release` | **BUILD SUCCEEDED** |
-| `bash macos/scripts/smoke-test.sh macos/build/.../Release/MMForge.app` | **8 passed, 0 failed, 0 skipped** |
+| `bash macos/scripts/smoke-test.sh macos/build/.../Release/MMForge.app` | **8 passed, 0 failed, 0 skipped** (launch smoke only) |
 | `git diff --check` | **clean** |
 
-### 4.2 Manual GUI Verification
+### 4.2 Manual GUI Verification (Prior Debug Session — Not Re-Verified)
 
-| Check | File | Result |
-|-------|------|--------|
-| Sidebar eye-button toggle (STL, glTF) | GUI | ✅ Instant — O(1) lookup |
-| Show All / Hide All (large model) | GUI | ✅ Works correctly |
-| Rendering modes Cmd+1..4 | GUI | ✅ All 4 visually distinct |
-| Export Image ⌘E | GUI | ✅ PNG saved |
-| Cancel button during load | GUI | ✅ Always enabled, cancels correctly |
-| Progress bar — no flash | Code review | ✅ Non-streaming sets 0→1; streaming resets 0→chunk/N |
+⚠️ All checks in this section are from a prior Debug build session. Re-verify with `MMFORGE_ALLOW_INTERACTIVE_GUI=1`.
+
+| Check | File | Prior Session |
+|-------|------|:-------------:|
+| Sidebar eye-button toggle (STL, glTF) | GUI | ⚠️ Instant — O(1) lookup (prior Debug) |
+| Show All / Hide All (large model) | GUI | ⚠️ Works correctly (prior Debug) |
+| Rendering modes Cmd+1..4 | GUI | ⚠️ All 4 visually distinct (prior Debug) |
+| Export Image ⌘E | GUI | ⚠️ PNG saved (prior Debug) |
+| Cancel button during load | GUI | ⚠️ Always enabled, cancels correctly (prior Debug) |
+| Progress bar — mesh count label | Code review | ✅ `meshCount: dto.meshes.count` corrected; original flash was from prior code version already removed |
 
 ### 4.3 Code Evidence
 

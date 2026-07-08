@@ -160,7 +160,7 @@ population, or viewport content. Those require manual GUI verification.
 | OCCT CLI verify: `./target/release/mmforge info` IGES | **geoms=1, tri=12, nodes=2** |
 | `bash macos/scripts/package.sh release` | **BUILD SUCCEEDED** (46 MB, ad-hoc signed, 26 dylibs ± 22 OCCT) |
 | `bash macos/scripts/package.sh dmg` | **BUILD SUCCEEDED** (19 MB DMG) |
-| `bash macos/scripts/smoke-test.sh` | **8/8 pass** |
+| `bash macos/scripts/smoke-test.sh` | **8/8 pass** (launch smoke only — no rendering verification) |
 | `bash docs/scripts/perf-baseline.sh` (w/ OCCT) | **4 REAL-GEOMETRY + 1 2D-ONLY** |
 | `otool -L` recursive: app + 26 dylibs | **0 Homebrew refs** |
 | `codesign --verify --deep --strict` | **OK** (ad-hoc) |

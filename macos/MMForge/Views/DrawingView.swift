@@ -1035,6 +1035,50 @@ class Drawing2DView: NSView {
         ctx.endPDFPage()
     }
 
+    /// Render a 2D drawing into an image using the same view drawing pipeline as
+    /// the on-screen DXF viewport.
+    static func renderImage(
+        commands: [DrawCommandDTO],
+        drawingInfo: Drawing2DInfo,
+        annotations: [Annotation],
+        layerVisibility: [String: Bool],
+        pixelWidth: Int,
+        pixelHeight: Int
+    ) -> NSImage? {
+        guard pixelWidth > 0, pixelHeight > 0,
+              let rep = NSBitmapImageRep(
+                  bitmapDataPlanes: nil,
+                  pixelsWide: pixelWidth,
+                  pixelsHigh: pixelHeight,
+                  bitsPerSample: 8,
+                  samplesPerPixel: 4,
+                  hasAlpha: true,
+                  isPlanar: false,
+                  colorSpaceName: .deviceRGB,
+                  bitmapFormat: .alphaNonpremultiplied,
+                  bytesPerRow: 0,
+                  bitsPerPixel: 0
+              ) else {
+            return nil
+        }
+
+        let size = NSSize(width: CGFloat(pixelWidth), height: CGFloat(pixelHeight))
+        let view = Drawing2DView(frame: NSRect(origin: .zero, size: size))
+        view.drawCommands = commands
+        view.drawingInfo = drawingInfo
+        view.layerVisibilityOverrides = layerVisibility
+        view.annotations = annotations
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        view.draw(view.bounds)
+        NSGraphicsContext.restoreGraphicsState()
+
+        let image = NSImage(size: size)
+        image.addRepresentation(rep)
+        return image
+    }
+
     // MARK: - Gestures
 
     override var acceptsFirstResponder: Bool { true }
