@@ -19,6 +19,9 @@ use std::path::Path;
 pub struct IgesData {
     /// Parsed shape handles with metadata.
     pub shapes: Vec<OcctShapeHandle>,
+    /// XDE assembly tree nodes (flat, pre-order).
+    #[cfg(feature = "occt")]
+    pub tree_nodes: Vec<super::adapter::TreeNode>,
     /// Transfer status messages from OCCT.
     pub transfer_messages: Vec<String>,
 }
@@ -87,10 +90,12 @@ fn occt_read_iges(path: &Path) -> Result<IgesData, OcctError> {
         shapes.push(handle.to_handle(&fallback)?);
     }
 
+    let tree_nodes = reader.enum_tree_nodes();
     let transfer_messages = reader.warnings();
 
     Ok(IgesData {
         shapes,
+        tree_nodes,
         transfer_messages,
     })
 }
@@ -103,22 +108,47 @@ fn occt_read_iges_with_tessellation(
     reader.read_file(path)?;
     reader.transfer_roots()?;
 
+    let tree_nodes = reader.enum_tree_nodes();
     let mut shapes = Vec::new();
     let mut registry = crate::tessellation::TessellationRegistry::new();
-    let count = reader.root_count();
+    let root_count = reader.root_count();
+    let mut geom_counter: u32 = 0;
 
-    for i in 0..count {
+    // Backward compat: collect flat shapes.
+    for i in 0..root_count {
         let handle = reader.get_root(i)?;
         let fallback = format!("Shape_{i}");
-        let shape_handle = handle.to_handle(&fallback)?;
+        shapes.push(handle.to_handle(&fallback)?);
+    }
 
-        // Tessellate with standard quality.
-        let quality = crate::tessellation::TessellationQuality::Standard;
-        let deflection = quality.linear_deflection(&shape_handle.bounds) as f64;
+    // Tessellate each leaf node in the tree.
+    for (node_idx, node) in tree_nodes.iter().enumerate() {
+        if node.is_assembly {
+            continue;
+        }
+        let shape_ptr = reader.tree_leaf_shape_ptr(node_idx);
+        if shape_ptr.is_none() {
+            continue;
+        }
 
-        let mesh = super::adapter::TessellatedMesh::tessellate_iges(&reader, &handle, deflection)?;
+        let deflection = if node.bounds.is_valid() {
+            crate::tessellation::TessellationQuality::Standard
+                .linear_deflection(&node.bounds) as f64
+        } else {
+            0.5
+        };
 
-        // Convert indices from i32 to u32.
+        // Create a temporary IgesShapeHandle for tessellation.
+        // SAFETY: shape_ptr is borrowed from the reader (valid until drop).
+        let handle = super::adapter::IgesShapeHandle {
+            reader_ptr: reader.as_iges_ptr(),
+            ptr: shape_ptr.unwrap(),
+            _lifetime: std::marker::PhantomData,
+        };
+
+        let mesh =
+            super::adapter::TessellatedMesh::tessellate_iges(&reader, &handle, deflection)?;
+
         let indices: Vec<u32> = mesh
             .indices()
             .iter()
@@ -128,7 +158,8 @@ fn occt_read_iges_with_tessellation(
         let positions: Vec<[f32; 3]> = mesh.positions().to_vec();
         let normals: Vec<[f32; 3]> = mesh.normals().to_vec();
 
-        let geom_id = mmforge_core::ids::GeometryId::new(i as u32);
+        let geom_id = mmforge_core::ids::GeometryId::new(geom_counter);
+        geom_counter += 1;
         registry.insert(
             geom_id,
             crate::tessellation::TessellatedMeshData {
@@ -138,8 +169,6 @@ fn occt_read_iges_with_tessellation(
                 bounds: mesh.bounds(),
             },
         );
-
-        shapes.push(shape_handle);
     }
 
     let transfer_messages = reader.warnings();
@@ -147,6 +176,7 @@ fn occt_read_iges_with_tessellation(
     Ok((
         IgesData {
             shapes,
+            tree_nodes,
             transfer_messages,
         },
         registry,

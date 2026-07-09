@@ -333,6 +333,11 @@ const REQUIRED_SHIM_SYMBOLS: &[&str] = &[
     "mmforge_iges_shape_type",
     "mmforge_iges_shape_bbox",
     "mmforge_iges_shape_label",
+    // XDE Assembly Tree
+    "mmforge_shape_tree_node_count",
+    "mmforge_shape_get_tree_node",
+    "mmforge_iges_shape_tree_node_count",
+    "mmforge_iges_shape_get_tree_node",
     // TopoDS_Shape
     "mmforge_shape_type",
     "mmforge_shape_bbox",

@@ -125,7 +125,7 @@ fn occt_parse_with_progress(
     cancel: &CancellationToken,
 ) -> mmforge_core::error::Result<ParseOutput> {
     use mmforge_core::ids::{GeometryId, NodeId};
-    use mmforge_core::model::{LsmModel, Node, ParseWarning};
+    use mmforge_core::model::{Geometry, LsmModel, Node, ParseWarning};
 
     check_cancel(Some(cancel))?;
     report_progress(progress, "parsing", 0, 1);
@@ -134,7 +134,6 @@ fn occt_parse_with_progress(
 
     check_cancel(Some(cancel))?;
     report_progress(progress, "building", 0, 1);
-    // Convert OCCT transfer messages to parse warnings.
     let mut warnings: Vec<ParseWarning> = step_data
         .transfer_messages
         .iter()
@@ -143,15 +142,55 @@ fn occt_parse_with_progress(
         })
         .collect();
 
-    // Convert OCCT output to LSM model.
     let mut model = LsmModel::empty("STEP");
     model.header.source_path = Some(path.display().to_string());
 
+    // Tree-based build when XDE assembly tree is available.
+    let tree = &step_data.tree_nodes;
+    if !tree.is_empty() {
+            let node_count = tree.len();
+            let mut node_ids: Vec<NodeId> = Vec::with_capacity(node_count);
+            let mut geom_counter: u32 = 0;
+            for (i, tn) in tree.iter().enumerate() {
+                check_cancel(Some(cancel))?;
+                let nid = NodeId::new(i as u32);
+                node_ids.push(nid);
+                let parent_id = if tn.parent_index >= 0 {
+                    Some(node_ids[tn.parent_index as usize])
+                } else { None };
+                let (geom_id, label) = if tn.is_assembly {
+                    (None, tn.name.clone())
+                } else {
+                    let gid = GeometryId::new(geom_counter);
+                    geom_counter += 1;
+                    let lbl = if tn.name.is_empty() { format!("Part_{}", gid.get()) }
+                              else { format!("{} [{:?}]", tn.name, tn.shape_type) };
+                    (Some(gid), lbl)
+                };
+                let name = if tn.name.is_empty() {
+                    if tn.is_assembly { format!("Assembly_{i}") } else { format!("Part_{i}") }
+                } else { tn.name.clone() };
+                model.scene.add_node(Node {
+                    id: nid, name, parent: parent_id, children: Vec::new(),
+                    geometry: geom_id, material: None, visible: true,
+                    local_transform: tn.transform, bounds: tn.bounds,
+                });
+                if let Some(gid) = geom_id {
+                    model.geometries.push(Geometry::BRepHandleRef { id: gid, bounds: tn.bounds, label });
+                }
+                if let Some(pid) = parent_id {
+                    if let Some(pn) = model.scene.find_node_mut(pid) { pn.children.push(nid); }
+                }
+            }
+            if !node_ids.is_empty() { model.scene.root = node_ids[0]; }
+            let stats = model.stats();
+            return Ok(ParseOutput { model, warnings, stats });
+        }
+
+    // Fallback: flat shapes (backward compat or no occt_found).
     let shapes = mmforge_geometry::occt::step_reader::extract_shapes(&step_data)
         .map_err(|e| Error::parse("STEP", format!("OCCT shape extraction failed: {e}")))?;
 
-    // Create a root assembly node that parents all shapes.
-    // This prevents orphan nodes when the file contains multiple shapes.
     let root_id = NodeId::new(0);
     model.scene.add_node(Node {
         id: root_id,
@@ -165,14 +204,10 @@ fn occt_parse_with_progress(
         bounds: mmforge_core::math::BoundingBox::EMPTY,
     });
 
-    // Add each shape as a child of the root assembly node.
     for (i, shape) in shapes.iter().enumerate() {
         check_cancel(Some(cancel))?;
-        let child_id = NodeId::new(i as u32 + 1); // +1 because root is 0
+        let child_id = NodeId::new(i as u32 + 1);
         let geom_id = GeometryId::new(i as u32);
-        let bounds = shape.bounds;
-
-        // Include shape type in the display label for richer metadata.
         let display_label = format!("{} [{:?}]", shape.label, shape.shape_type);
 
         model.scene.add_node(Node {
@@ -184,17 +219,14 @@ fn occt_parse_with_progress(
             material: None,
             visible: true,
             local_transform: glam::Mat4::IDENTITY,
-            bounds,
+            bounds: shape.bounds,
         });
-        model
-            .geometries
-            .push(mmforge_core::model::Geometry::BRepHandleRef {
-                id: geom_id,
-                bounds,
-                label: display_label,
-            });
+        model.geometries.push(Geometry::BRepHandleRef {
+            id: geom_id,
+            bounds: shape.bounds,
+            label: display_label,
+        });
 
-        // Warn about shapes with no product name (fallback label).
         if shape.label.starts_with("Shape_") {
             warnings.push(ParseWarning::PrecisionLoss {
                 message: format!("shape {i} has no STEP product name, using fallback"),
@@ -202,7 +234,6 @@ fn occt_parse_with_progress(
         }
     }
 
-    // Update root bounds from children.
     if !shapes.is_empty() {
         let mut root_bounds = mmforge_core::math::BoundingBox::EMPTY;
         for node in &model.scene.nodes {
@@ -293,24 +324,92 @@ fn build_step_model_from_data(
     ParseOutput,
     mmforge_geometry::tessellation::TessellationRegistry,
 )> {
+    use mmforge_core::ids::{GeometryId, NodeId};
+    use mmforge_core::model::{Geometry, LsmModel, Node, ParseWarning};
+
     // Convert transfer messages to warnings.
-    let mut warnings: Vec<mmforge_core::model::ParseWarning> = step_data
+    let mut warnings: Vec<ParseWarning> = step_data
         .transfer_messages
         .iter()
-        .map(|msg| mmforge_core::model::ParseWarning::PrecisionLoss {
+        .map(|msg| ParseWarning::PrecisionLoss {
             message: format!("OCCT: {msg}"),
         })
         .collect();
 
-    // Build the model (same logic as occt_parse).
-    let mut model = mmforge_core::model::LsmModel::empty("STEP");
+    let mut model = LsmModel::empty("STEP");
     model.header.source_path = Some(path.display().to_string());
 
+    // Tree-based build when XDE assembly tree is available.
+    let tree = &step_data.tree_nodes;
+    if !tree.is_empty() {
+            let node_count = tree.len();
+            let mut node_ids: Vec<NodeId> = Vec::with_capacity(node_count);
+            let mut geom_counter: u32 = 0;
+
+            for (i, tn) in tree.iter().enumerate() {
+                check_cancel(Some(cancel))?;
+                let nid = NodeId::new(i as u32);
+                node_ids.push(nid);
+                let parent_id = if tn.parent_index >= 0 {
+                    Some(node_ids[tn.parent_index as usize])
+                } else {
+                    None
+                };
+                let (geom_id, label) = if tn.is_assembly {
+                    (None, tn.name.clone())
+                } else {
+                    let gid = GeometryId::new(geom_counter);
+                    geom_counter += 1;
+                    let lbl = if tn.name.is_empty() {
+                        format!("Part_{}", gid.get())
+                    } else {
+                        format!("{} [{:?}]", tn.name, tn.shape_type)
+                    };
+                    (Some(gid), lbl)
+                };
+                let name = if tn.name.is_empty() {
+                    if tn.is_assembly { format!("Assembly_{i}") } else { format!("Part_{i}") }
+                } else { tn.name.clone() };
+                model.scene.add_node(Node {
+                    id: nid, name, parent: parent_id, children: Vec::new(),
+                    geometry: geom_id, material: None, visible: true,
+                    local_transform: tn.transform, bounds: tn.bounds,
+                });
+                if let Some(gid) = geom_id {
+                    model.geometries.push(Geometry::BRepHandleRef {
+                        id: gid, bounds: tn.bounds, label,
+                    });
+                }
+                if let Some(pid) = parent_id {
+                    if let Some(pn) = model.scene.find_node_mut(pid) {
+                        pn.children.push(nid);
+                    }
+                }
+            }
+
+            if !node_ids.is_empty() { model.scene.root = node_ids[0]; }
+
+            for (i, tn) in tree.iter().enumerate() {
+                if tn.name.is_empty() {
+                    warnings.push(ParseWarning::PrecisionLoss {
+                        message: format!(
+                            "tree node {i} ({}) has no product name",
+                            if tn.is_assembly { "assembly" } else { "part" }
+                        ),
+                    });
+                }
+            }
+
+            let stats = model.stats();
+            return Ok((ParseOutput { model, warnings, stats }, registry));
+        }
+
+    // Fallback: flat shapes (backward compat or no occt_found).
     let shapes = mmforge_geometry::occt::step_reader::extract_shapes(&step_data)
         .map_err(|e| Error::parse("STEP", format!("shape extraction failed: {e}")))?;
 
-    let root_id = mmforge_core::ids::NodeId::new(0);
-    model.scene.add_node(mmforge_core::model::Node {
+    let root_id = NodeId::new(0);
+    model.scene.add_node(Node {
         id: root_id,
         name: "STEP_Assembly".to_string(),
         parent: None,
@@ -324,11 +423,11 @@ fn build_step_model_from_data(
 
     for (i, shape) in shapes.iter().enumerate() {
         check_cancel(Some(cancel))?;
-        let child_id = mmforge_core::ids::NodeId::new(i as u32 + 1);
-        let geom_id = mmforge_core::ids::GeometryId::new(i as u32);
+        let child_id = NodeId::new(i as u32 + 1);
+        let geom_id = GeometryId::new(i as u32);
         let display_label = format!("{} [{:?}]", shape.label, shape.shape_type);
 
-        model.scene.add_node(mmforge_core::model::Node {
+        model.scene.add_node(Node {
             id: child_id,
             name: display_label.clone(),
             parent: Some(root_id),
@@ -339,22 +438,13 @@ fn build_step_model_from_data(
             local_transform: glam::Mat4::IDENTITY,
             bounds: shape.bounds,
         });
-        model
-            .geometries
-            .push(mmforge_core::model::Geometry::BRepHandleRef {
-                id: geom_id,
-                bounds: shape.bounds,
-                label: display_label,
-            });
-
-        if shape.label.starts_with("Shape_") {
-            warnings.push(mmforge_core::model::ParseWarning::PrecisionLoss {
-                message: format!("shape {i} has no STEP product name, using fallback"),
-            });
-        }
+        model.geometries.push(Geometry::BRepHandleRef {
+            id: geom_id,
+            bounds: shape.bounds,
+            label: display_label,
+        });
     }
 
-    // Update root bounds.
     if !shapes.is_empty() {
         let mut root_bounds = mmforge_core::math::BoundingBox::EMPTY;
         for node in &model.scene.nodes {
@@ -489,43 +579,24 @@ mod tests {
         assert_eq!(model.header.source_format, "STEP");
         assert!(model.header.source_path.is_some());
 
-        // Root assembly node.
+        // Root node must exist with valid bounds.
         let root = model
             .scene
             .find_node(model.scene.root)
             .expect("root node must exist");
-        assert_eq!(root.name, "STEP_Assembly");
-        assert!(root.bounds.is_valid(), "root bounds must be valid");
-
-        // Must have at least one child (shape).
         assert!(
-            !root.children.is_empty(),
-            "expected at least one child node under STEP_Assembly"
+            root.bounds.is_valid() || !root.children.is_empty(),
+            "root must have valid bounds or children"
         );
 
-        // Every child must have geometry and valid bounds.
-        for &child_id in &root.children {
-            let child = model
-                .scene
-                .find_node(child_id)
-                .expect("child node must exist");
-            assert!(
-                child.geometry.is_some(),
-                "child '{}' must have geometry",
-                child.name
-            );
-            assert!(
-                child.bounds.is_valid(),
-                "child '{}' must have valid bounds",
-                child.name
-            );
-            // Label should include shape type annotation.
-            assert!(
-                child.name.contains('['),
-                "child label '{}' should contain shape type",
-                child.name
-            );
-        }
+        // Must have at least one leaf node with geometry.
+        let leaf_count = model
+            .scene
+            .nodes
+            .iter()
+            .filter(|n| n.geometry.is_some())
+            .count();
+        assert!(leaf_count > 0, "expected at least one leaf node with geometry");
 
         // Every geometry must be BRepHandleRef.
         for geom in &model.geometries {

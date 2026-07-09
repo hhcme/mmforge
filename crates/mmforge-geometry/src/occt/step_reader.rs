@@ -21,6 +21,10 @@ use std::path::Path;
 pub struct StepData {
     /// Parsed shape handles with metadata.
     pub shapes: Vec<OcctShapeHandle>,
+    /// XDE assembly tree nodes (flat, pre-order).
+    /// Present when tree enumeration is available (always after transfer_roots).
+    #[cfg(feature = "occt")]
+    pub tree_nodes: Vec<super::adapter::TreeNode>,
     /// Transfer status messages from OCCT.
     pub transfer_messages: Vec<String>,
 }
@@ -83,7 +87,7 @@ pub fn read_step_file_with_tessellation(
 fn occt_read_step_with_tessellation(
     path: &Path,
 ) -> Result<(StepData, crate::tessellation::TessellationRegistry), OcctError> {
-    use crate::occt::adapter::{StepReaderAdapter, TessellatedMesh};
+    use crate::occt::adapter::{StepReaderAdapter, TessellatedMesh, TreeNode};
     use crate::tessellation::{TessellationQuality, TessellationRegistry};
     use mmforge_core::ids::GeometryId;
 
@@ -91,21 +95,49 @@ fn occt_read_step_with_tessellation(
     reader.read_file(path)?;
     reader.transfer_roots()?;
 
-    let count = reader.root_count();
-    let mut shapes = Vec::with_capacity(count);
+    // Enumerate XDE assembly tree.
+    let tree_nodes = reader.enum_tree_nodes();
+    let mut shapes = Vec::with_capacity(tree_nodes.len());
     let mut registry = TessellationRegistry::new();
+    let mut geom_counter: u32 = 0;
 
-    for i in 0..count {
+    // For backward compat: also collect flat shapes from roots.
+    let root_count = reader.root_count();
+    for i in 0..root_count {
         let handle = reader.get_root(i)?;
         let fallback = format!("Shape_{i}");
-        let shape_handle = handle.to_handle(&fallback)?;
+        shapes.push(handle.to_handle(&fallback)?);
+    }
 
-        // Tessellate while the reader and shape are still alive.
-        let quality = TessellationQuality::Standard;
-        let deflection = quality.linear_deflection(&shape_handle.bounds) as f64;
+    // Tessellate each leaf node in the tree.
+    for (node_idx, node) in tree_nodes.iter().enumerate() {
+        if node.is_assembly {
+            continue;
+        }
+        let shape_ptr = reader.tree_leaf_shape_ptr(node_idx);
+        if shape_ptr.is_none() {
+            continue;
+        }
+
+        // Compute quality from the tree-node bounds.
+        let deflection = if node.bounds.is_valid() {
+            TessellationQuality::Standard.linear_deflection(&node.bounds) as f64
+        } else {
+            0.5 // sane default for tiny models
+        };
+
+        // Create a temporary ShapeHandle for tessellation.
+        // SAFETY: shape_ptr is borrowed from the reader (valid until drop).
+        let handle = super::adapter::ShapeHandle {
+            reader_ptr: reader.as_ptr(),
+            ptr: shape_ptr.unwrap(),
+            _lifetime: std::marker::PhantomData,
+        };
+
         let mesh = TessellatedMesh::tessellate(&reader, &handle, deflection)?;
 
-        let geom_id = GeometryId::new(i as u32);
+        let geom_id = GeometryId::new(geom_counter);
+        geom_counter += 1;
         registry.insert(
             geom_id,
             crate::tessellation::TessellatedMeshData {
@@ -119,8 +151,6 @@ fn occt_read_step_with_tessellation(
                 bounds: mesh.bounds(),
             },
         );
-
-        shapes.push(shape_handle);
     }
 
     let messages = reader.warnings();
@@ -128,6 +158,7 @@ fn occt_read_step_with_tessellation(
     Ok((
         StepData {
             shapes,
+            tree_nodes,
             transfer_messages: messages,
         },
         registry,
@@ -154,10 +185,12 @@ fn occt_read_step(path: &Path) -> Result<StepData, OcctError> {
         shapes.push(handle.to_handle(&fallback)?);
     }
 
+    let tree_nodes = reader.enum_tree_nodes();
     let messages = reader.warnings();
 
     Ok(StepData {
         shapes,
+        tree_nodes,
         transfer_messages: messages,
     })
 }

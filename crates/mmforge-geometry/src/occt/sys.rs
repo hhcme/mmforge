@@ -45,6 +45,20 @@ pub struct ShapeIterator {
     _private: [u8; 0],
 }
 
+/// XDE assembly tree node (matches MmfTreeNode in the C header).
+/// All pointers are borrowed from the reader and valid until reader free.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct MmfTreeNode {
+    pub parent_index: std::ffi::c_int,
+    pub name: *const std::ffi::c_char,
+    pub shape_type: OcctShapeType,
+    pub bbox: OcctBBox,
+    pub is_assembly: std::ffi::c_int,
+    pub shape: *const TopoDsShape,
+    pub location: [std::ffi::c_double; 16],
+}
+
 /// Error codes returned by the C shim.
 ///
 /// These map 1-to-1 to the `MmfOcctError` enum in the shim header.
@@ -190,6 +204,33 @@ unsafe extern "C" {
     ) -> *const std::ffi::c_char;
 
     pub fn mmforge_iges_reader_free(reader: *mut IgesControlReader);
+}
+
+// ---------------------------------------------------------------------------
+// XDE Assembly Tree Enumeration
+// ---------------------------------------------------------------------------
+
+#[cfg(occt_found)]
+unsafe extern "C" {
+    /// Number of nodes in the XDE assembly tree (STEP).
+    pub fn mmforge_shape_tree_node_count(reader: *const StepControlReader) -> std::ffi::c_int;
+
+    /// Get tree node by index (STEP).  Returns null if out of bounds.
+    pub fn mmforge_shape_get_tree_node(
+        reader: *const StepControlReader,
+        index: std::ffi::c_int,
+    ) -> *const MmfTreeNode;
+
+    /// Number of nodes in the XDE assembly tree (IGES).
+    pub fn mmforge_iges_shape_tree_node_count(
+        reader: *const IgesControlReader,
+    ) -> std::ffi::c_int;
+
+    /// Get tree node by index (IGES).  Returns null if out of bounds.
+    pub fn mmforge_iges_shape_get_tree_node(
+        reader: *const IgesControlReader,
+        index: std::ffi::c_int,
+    ) -> *const MmfTreeNode;
 }
 
 // ---------------------------------------------------------------------------

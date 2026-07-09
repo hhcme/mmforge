@@ -24,8 +24,10 @@ use super::OcctError;
 use std::path::Path;
 
 #[cfg(occt_found)]
-use super::shape::{OcctShapeHandle, ShapeType};
-#[cfg(occt_found)]
+use super::shape::OcctShapeHandle;
+#[cfg(feature = "occt")]
+use super::shape::ShapeType;
+#[cfg(feature = "occt")]
 use mmforge_core::math::BoundingBox;
 #[cfg(occt_found)]
 use std::ffi::{CStr, CString};
@@ -72,7 +74,7 @@ pub struct ShapeHandle<'a> {
 /// Must match `MMFORGE_SHIM_ABI_VERSION` in `mmforge_occt_shim.h`.
 /// Bumped on every ABI-incompatible change to the shim.
 #[cfg(occt_found)]
-const EXPECTED_ABI_VERSION: i32 = 3;
+const EXPECTED_ABI_VERSION: i32 = 4;
 
 // ---------------------------------------------------------------------------
 // IGES adapter (same pattern as STEP)
@@ -176,6 +178,11 @@ impl IgesReaderAdapter {
     /// mmforge_tessellate_shape ignores the reader parameter).
     fn as_step_ptr(&self) -> *const super::sys::StepControlReader {
         self.ptr as *const super::sys::StepControlReader
+    }
+
+    /// Raw IGES reader pointer (for constructing shape handles).
+    pub fn as_iges_ptr(&self) -> *const super::sys::IgesControlReader {
+        self.ptr
     }
 }
 
@@ -443,6 +450,152 @@ impl<'a> ShapeHandle<'a> {
             bounds,
             shape_type: self.shape_type(),
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// XDE Assembly Tree Node (Rust-side representation)
+// ---------------------------------------------------------------------------
+
+/// One node in the recursive XDE assembly/product-structure tree.
+#[cfg(feature = "occt")]
+#[derive(Debug, Clone)]
+pub struct TreeNode {
+    /// Index of the parent node (-1 for root).
+    pub parent_index: i32,
+    /// Product name from XDE metadata (empty string if unnamed).
+    pub name: String,
+    /// OCCT shape type (Compound for assemblies, Solid/etc for leaves).
+    pub shape_type: ShapeType,
+    /// Axis-aligned bounding box (union of children for assemblies).
+    pub bounds: BoundingBox,
+    /// Whether this node is a sub-assembly (no tessellation, has children).
+    pub is_assembly: bool,
+    /// Local transform from XDE component location (identity if none).
+    pub transform: glam::Mat4,
+}
+
+#[cfg(feature = "occt")]
+impl StepReaderAdapter {
+    /// Enumerate the XDE assembly tree as a flat pre-order list.
+    ///
+    /// Node 0 is always the root.  `parent_index` references the
+    /// flat-array index of the parent node (-1 for root).
+    ///
+    /// Returns an empty Vec when the OCCT shim is not linked.
+    pub fn enum_tree_nodes(&self) -> Vec<TreeNode> {
+        #[cfg(occt_found)]
+        {
+            let count =
+                unsafe { super::sys::mmforge_shape_tree_node_count(self.ptr) as usize };
+            let mut nodes = Vec::with_capacity(count);
+            for i in 0..count {
+                let raw = unsafe {
+                    super::sys::mmforge_shape_get_tree_node(self.ptr, i as std::ffi::c_int)
+                };
+                if raw.is_null() {
+                    continue;
+                }
+                let raw = unsafe { &*raw };
+                let name = if raw.name.is_null() {
+                    String::new()
+                } else {
+                    unsafe { CStr::from_ptr(raw.name) }
+                        .to_string_lossy()
+                        .into_owned()
+                };
+                let shape_type = occt_to_shape_type(raw.shape_type);
+                let bounds = BoundingBox::new(
+                    glam::Vec3::new(raw.bbox.min_x as f32, raw.bbox.min_y as f32, raw.bbox.min_z as f32),
+                    glam::Vec3::new(raw.bbox.max_x as f32, raw.bbox.max_y as f32, raw.bbox.max_z as f32),
+                );
+                let is_assembly = raw.is_assembly != 0;
+                let transform = glam::Mat4::from_cols_array(&[
+                    raw.location[0] as f32, raw.location[1] as f32, raw.location[2] as f32, raw.location[3] as f32,
+                    raw.location[4] as f32, raw.location[5] as f32, raw.location[6] as f32, raw.location[7] as f32,
+                    raw.location[8] as f32, raw.location[9] as f32, raw.location[10] as f32, raw.location[11] as f32,
+                    raw.location[12] as f32, raw.location[13] as f32, raw.location[14] as f32, raw.location[15] as f32,
+                ]);
+                nodes.push(TreeNode { parent_index: raw.parent_index, name, shape_type, bounds, is_assembly, transform });
+            }
+            nodes
+        }
+        #[cfg(not(occt_found))]
+        {
+            Vec::new()
+        }
+    }
+
+    /// Return the raw shape pointer for a leaf node at the given flat-array index.
+    /// Returns `None` when OCCT shim is not linked.
+    pub fn tree_leaf_shape_ptr(&self, index: usize) -> Option<*const super::sys::TopoDsShape> {
+        #[cfg(occt_found)]
+        {
+            let raw = unsafe { super::sys::mmforge_shape_get_tree_node(self.ptr, index as std::ffi::c_int) };
+            if raw.is_null() { return None; }
+            let raw = unsafe { &*raw };
+            if raw.is_assembly != 0 || raw.shape.is_null() { return None; }
+            Some(raw.shape)
+        }
+        #[cfg(not(occt_found))]
+        {
+            let _ = index;
+            None
+        }
+    }
+}
+
+#[cfg(feature = "occt")]
+impl IgesReaderAdapter {
+    /// Enumerate the XDE assembly tree (IGES).
+    pub fn enum_tree_nodes(&self) -> Vec<TreeNode> {
+        #[cfg(occt_found)]
+        {
+            let count =
+                unsafe { super::sys::mmforge_iges_shape_tree_node_count(self.ptr) as usize };
+            let mut nodes = Vec::with_capacity(count);
+            for i in 0..count {
+                let raw = unsafe {
+                    super::sys::mmforge_iges_shape_get_tree_node(self.ptr, i as std::ffi::c_int)
+                };
+                if raw.is_null() { continue; }
+                let raw = unsafe { &*raw };
+                let name = if raw.name.is_null() { String::new() }
+                           else { unsafe { CStr::from_ptr(raw.name) }.to_string_lossy().into_owned() };
+                let shape_type = occt_to_shape_type(raw.shape_type);
+                let bounds = BoundingBox::new(
+                    glam::Vec3::new(raw.bbox.min_x as f32, raw.bbox.min_y as f32, raw.bbox.min_z as f32),
+                    glam::Vec3::new(raw.bbox.max_x as f32, raw.bbox.max_y as f32, raw.bbox.max_z as f32),
+                );
+                let is_assembly = raw.is_assembly != 0;
+                let transform = glam::Mat4::from_cols_array(&[
+                    raw.location[0] as f32, raw.location[1] as f32, raw.location[2] as f32, raw.location[3] as f32,
+                    raw.location[4] as f32, raw.location[5] as f32, raw.location[6] as f32, raw.location[7] as f32,
+                    raw.location[8] as f32, raw.location[9] as f32, raw.location[10] as f32, raw.location[11] as f32,
+                    raw.location[12] as f32, raw.location[13] as f32, raw.location[14] as f32, raw.location[15] as f32,
+                ]);
+                nodes.push(TreeNode { parent_index: raw.parent_index, name, shape_type, bounds, is_assembly, transform });
+            }
+            nodes
+        }
+        #[cfg(not(occt_found))]
+        { Vec::new() }
+    }
+
+    /// Return the raw shape pointer for a leaf node (IGES).
+    pub fn tree_leaf_shape_ptr(&self, index: usize) -> Option<*const super::sys::TopoDsShape> {
+        #[cfg(occt_found)]
+        {
+            let raw = unsafe {
+                super::sys::mmforge_iges_shape_get_tree_node(self.ptr, index as std::ffi::c_int)
+            };
+            if raw.is_null() { return None; }
+            let raw = unsafe { &*raw };
+            if raw.is_assembly != 0 || raw.shape.is_null() { return None; }
+            Some(raw.shape)
+        }
+        #[cfg(not(occt_found))]
+        { let _ = index; None }
     }
 }
 
@@ -851,6 +1004,11 @@ mod tests {
             crate::occt::sys::mmforge_iges_reader_warning_count as *const () as usize,
             crate::occt::sys::mmforge_iges_reader_get_warning as *const () as usize,
             crate::occt::sys::mmforge_iges_reader_free as *const () as usize,
+            // XDE Assembly Tree
+            crate::occt::sys::mmforge_shape_tree_node_count as *const () as usize,
+            crate::occt::sys::mmforge_shape_get_tree_node as *const () as usize,
+            crate::occt::sys::mmforge_iges_shape_tree_node_count as *const () as usize,
+            crate::occt::sys::mmforge_iges_shape_get_tree_node as *const () as usize,
             crate::occt::sys::mmforge_iges_shape_type as *const () as usize,
             crate::occt::sys::mmforge_iges_shape_bbox as *const () as usize,
             crate::occt::sys::mmforge_iges_shape_label as *const () as usize,

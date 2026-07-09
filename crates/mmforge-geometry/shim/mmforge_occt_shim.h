@@ -36,7 +36,7 @@ extern "C" {
 /* ------------------------------------------------------------------ */
 
 /** Current C ABI version.  Bump when function signatures change. */
-#define MMFORGE_SHIM_ABI_VERSION 3
+#define MMFORGE_SHIM_ABI_VERSION 4
 
 /* ------------------------------------------------------------------ */
 /*  Opaque handle types                                                */
@@ -235,6 +235,46 @@ const char* mmforge_shape_label(const MmfStepReader* reader,
                                 const MmfShape* shape);
 
 void mmforge_shape_free(MmfShape* shape);
+
+/* ------------------------------------------------------------------ */
+/*  XDE Assembly Tree Node                                             */
+/*                                                                     */
+/*  Represents one node in the recursive XDE assembly/product-         */
+/*  structure tree.  Assembly nodes have is_assembly=1 and NULL shape; */
+/*  leaf nodes have is_assembly=0 and a tessellatable TopoDS_Shape.    */
+/*  location is a 4×4 column-major double matrix (identity if none).   */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    int               parent_index;   /* -1 for root */
+    const char*       name;           /* product name (borrowed from XDE) */
+    MmfOcctShapeType  type;           /* shape type (Compound for assembly, Solid/etc for leaf) */
+    MmfOcctBBox       bbox;           /* union of children for assembly; BRepBndLib for leaf */
+    int               is_assembly;    /* 1 = has sub-components, geometry=none */
+    const MmfShape*   shape;          /* TopoDS_Shape for tessellation; NULL for assembly */
+    double            location[16];   /* 4×4 column-major transform (identity if none) */
+} MmfTreeNode;
+
+/* ------------------------------------------------------------------ */
+/*  XDE Assembly Tree Enumeration (STEP)                               */
+/* ------------------------------------------------------------------ */
+
+/** Number of nodes in the flat XDE assembly tree. */
+int mmforge_shape_tree_node_count(const MmfStepReader* reader);
+
+/** Get tree node by index (0-based).  Returns NULL if out of bounds.
+ *  Pointers inside the struct are borrowed from the reader. */
+const MmfTreeNode* mmforge_shape_get_tree_node(
+    const MmfStepReader* reader, int index);
+
+/* ------------------------------------------------------------------ */
+/*  XDE Assembly Tree Enumeration (IGES)                               */
+/* ------------------------------------------------------------------ */
+
+int mmforge_iges_shape_tree_node_count(const MmfIgesReader* reader);
+
+const MmfTreeNode* mmforge_iges_shape_get_tree_node(
+    const MmfIgesReader* reader, int index);
 
 /* ------------------------------------------------------------------ */
 /*  Tessellation                                                       */

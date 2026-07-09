@@ -88,17 +88,26 @@ using LabelMap = std::unordered_map<TopoDS_Shape, std::string,
  * clears previous roots/warnings/labels, so repeated read+transfer
  * cycles produce clean results.
  */
-struct ReaderWrapper {
-    // OCCT objects.
-    STEPCAFControl_Reader     caf;    // by value — not a transient
-    Handle(TDocStd_Document)  doc;    // rebuilt on each transfer
-    Handle(XCAFDoc_ShapeTool) st;    // rebuilt on each transfer
+	struct ReaderWrapper {
+	    // OCCT objects.
+	    STEPCAFControl_Reader     caf;    // by value — not a transient
+	    Handle(TDocStd_Document)  doc;    // rebuilt on each transfer
+	    Handle(XCAFDoc_ShapeTool) st;    // rebuilt on each transfer
 
-    // Transfer results — rebuilt on each transfer_roots() call.
-    std::vector<TopoDS_Shape> roots;
-    std::vector<std::string>  warnings;
-    LabelMap                  labels;
-};
+	    // Transfer results — rebuilt on each transfer_roots() call.
+	    std::vector<TopoDS_Shape> roots;
+	    std::vector<std::string>  warnings;
+	    LabelMap                  labels;
+
+	    // XDE assembly tree — rebuilt on each transfer_roots() call.
+	    // name_store holds the name strings (index-aligned with tree_nodes).
+	    // shape_store holds leaf TopoDS_Shape handles.
+	    // tree_nodes[].name / .shape point into these — stable because
+	    // the vectors are never modified after tree build completes.
+	    std::vector<MmfTreeNode>  tree_nodes;
+	    std::vector<std::string>  name_store;
+	    std::vector<TopoDS_Shape> shape_store;
+	};
 
 /**
  * Tessellated mesh data.
@@ -169,20 +178,245 @@ const char* lookupLabel(const ReaderWrapper* w,
     return it->second.c_str();
 }
 
+// ---------------------------------------------------------------------------
+// XDE Assembly Tree Builder
+// ---------------------------------------------------------------------------
+
+/// Extract a null-terminated name from a TDF_Label using TDataStd_Name.
+static std::string extractName(const Handle(XCAFDoc_ShapeTool)& st,
+                               const TDF_Label& label) {
+    (void)st;  // unused — name comes from TDataStd_Name on the label
+    Handle(TDataStd_Name) nameAttr;
+    if (label.FindAttribute(TDataStd_Name::GetID(), nameAttr)) {
+        TCollection_AsciiString ascii(nameAttr->Get(), '?');
+        std::string s(ascii.ToCString());
+        if (!s.empty())
+            return s;
+    }
+    return "";
+}
+
+/// Fill a 16-element double array with a 4×4 column-major matrix
+/// representing the given TopLoc_Location.  Identity if location is identity.
+static void extractLocationMatrix(const TopLoc_Location& loc,
+                                  double out[16]) {
+    for (int i = 0; i < 16; ++i) out[i] = 0.0;
+    out[0] = out[5] = out[10] = out[15] = 1.0;
+
+    if (loc.IsIdentity())
+        return;
+
+    gp_Trsf trsf = loc.Transformation();
+    // gp_Trsf::Value(row 1-3, col 1-4) → column-major 4×4
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            out[c * 4 + r] = trsf.Value(r + 1, c + 1);
+        }
+    }
+}
+
+/// Compute the bounding box of a TopoDS_Shape.
+static MmfOcctBBox computeBBox(const TopoDS_Shape& shape) {
+    MmfOcctBBox b = {0,0,0, 0,0,0};
+    if (shape.IsNull()) return b;
+    Bnd_Box box;
+    BRepBndLib::Add(shape, box);
+    if (!box.IsVoid()) {
+        Standard_Real xn, yn, zn, xx, yx, zx;
+        box.Get(xn, yn, zn, xx, yx, zx);
+        b.min_x = xn; b.min_y = yn; b.min_z = zn;
+        b.max_x = xx; b.max_y = yx; b.max_z = zx;
+    }
+    return b;
+}
+
+/// Recursively build XDE assembly tree nodes (pass 1 — collect data).
+/// parent_index: -1 for document root.
+/// Stores raw data in separate vectors; pointers are fixed up in pass 2.
+static void buildNodeRecursive(
+    const Handle(XCAFDoc_ShapeTool)& st,
+    const TDF_Label& label,
+    int parent_index,
+    std::vector<MmfTreeNode>&  tree_nodes,
+    std::vector<std::string>&  name_store,
+    std::vector<TopoDS_Shape>& shape_store)
+{
+    if (!st->IsShape(label))
+        return;
+
+    Standard_Boolean isAsm = st->IsAssembly(label);
+    bool is_assembly = (isAsm == Standard_True);
+
+    // Get the shape.
+    TopoDS_Shape shape;
+    if (is_assembly) {
+        shape = st->GetShape(label);
+    } else {
+        if (!st->GetReferredShape(label, shape))
+            shape = st->GetShape(label);
+    }
+
+    // Metadata.
+    std::string name = extractName(st, label);
+    MmfOcctShapeType type = mapShapeType(shape.ShapeType());
+
+    TopLoc_Location loc;
+    double location[16];
+    if (!is_assembly)
+        st->GetLocation(label, loc);
+    extractLocationMatrix(loc, location);
+
+    MmfOcctBBox bbox = {0,0,0, 0,0,0};
+    if (!is_assembly && !shape.IsNull()) {
+        bbox = computeBBox(shape);
+    }
+
+    // Create node (name and shape pointers will be fixed in pass 2).
+    MmfTreeNode node;
+    node.parent_index = parent_index;
+    node.name = nullptr;
+    node.type = type;
+    node.bbox = bbox;
+    node.is_assembly = is_assembly ? 1 : 0;
+    node.shape = nullptr;
+    for (int i = 0; i < 16; ++i) node.location[i] = location[i];
+
+    int node_idx = static_cast<int>(tree_nodes.size());
+    tree_nodes.push_back(node);
+    name_store.push_back(name);
+
+    if (!is_assembly && !shape.IsNull()) {
+        shape_store.push_back(shape);
+    }
+
+    // Recurse into sub-components.
+    if (is_assembly) {
+        TDF_LabelSequence components;
+        st->GetComponents(label, components);
+        for (Standard_Integer i = 1; i <= components.Length(); ++i) {
+            buildNodeRecursive(st, components.Value(i), node_idx,
+                               tree_nodes, name_store, shape_store);
+        }
+    }
+}
+
+/// Build the XDE assembly tree starting from free shapes.
+/// After this call, tree_nodes[].name and tree_nodes[].shape are valid
+/// pointers into name_store / shape_store (which must not be modified further).
+static void buildAssemblyTree(
+    const Handle(XCAFDoc_ShapeTool)& st,
+    std::vector<MmfTreeNode>&  tree_nodes,
+    std::vector<std::string>&  name_store,
+    std::vector<TopoDS_Shape>& shape_store)
+{
+    tree_nodes.clear();
+    name_store.clear();
+    shape_store.clear();
+
+    TDF_LabelSequence freeShapes;
+    st->GetFreeShapes(freeShapes);
+    if (freeShapes.Length() == 0)
+        return;
+
+    // Determine if we have a real root assembly or need a synthetic one.
+    bool hasRealRoot = (freeShapes.Length() == 1) &&
+                       (st->IsAssembly(freeShapes.Value(1)) == Standard_True);
+
+    if (hasRealRoot) {
+        buildNodeRecursive(st, freeShapes.Value(1), -1,
+                           tree_nodes, name_store, shape_store);
+    } else {
+        // Synthetic root.
+        MmfTreeNode root;
+        root.parent_index = -1;
+        root.name = nullptr;
+        root.type = MMF_COMPOUND;
+        root.bbox.min_x = root.bbox.max_x = 0.0;
+        root.bbox.min_y = root.bbox.max_y = 0.0;
+        root.bbox.min_z = root.bbox.max_z = 0.0;
+        root.is_assembly = 1;
+        root.shape = nullptr;
+        for (int i = 0; i < 16; ++i) root.location[i] = 0.0;
+        root.location[0] = root.location[5] = root.location[10] = root.location[15] = 1.0;
+
+        int rootIdx = static_cast<int>(tree_nodes.size());
+        tree_nodes.push_back(root);
+        name_store.push_back("Assembly");
+
+        for (Standard_Integer i = 1; i <= freeShapes.Length(); ++i) {
+            buildNodeRecursive(st, freeShapes.Value(i), rootIdx,
+                               tree_nodes, name_store, shape_store);
+        }
+    }
+
+    // --- Pass 2: fix up pointers and compute assembly bboxes ---
+
+    // 2a. Set name pointers (name_store entries never move after this point).
+    for (size_t i = 0; i < tree_nodes.size(); ++i) {
+        tree_nodes[i].name = name_store[i].c_str();
+    }
+
+    // 2b. Set shape pointers for leaf nodes.
+    size_t shape_idx = 0;
+    for (size_t i = 0; i < tree_nodes.size(); ++i) {
+        if (!tree_nodes[i].is_assembly) {
+            tree_nodes[i].shape =
+                reinterpret_cast<const MmfShape*>(&shape_store[shape_idx]);
+            ++shape_idx;
+        }
+    }
+
+    // 2c. Compute assembly bounding boxes (bottom-up: children before parents).
+    // tree_nodes is in pre-order, so iterate backwards for bottom-up.
+    for (int i = static_cast<int>(tree_nodes.size()) - 1; i >= 0; --i) {
+        if (!tree_nodes[static_cast<size_t>(i)].is_assembly)
+            continue;
+
+        Bnd_Box unionBox;
+        for (size_t j = static_cast<size_t>(i) + 1; j < tree_nodes.size(); ++j) {
+            if (tree_nodes[j].parent_index == i) {
+                Bnd_Box cb;
+                cb.Update(tree_nodes[j].bbox.min_x,
+                          tree_nodes[j].bbox.min_y,
+                          tree_nodes[j].bbox.min_z,
+                          tree_nodes[j].bbox.max_x,
+                          tree_nodes[j].bbox.max_y,
+                          tree_nodes[j].bbox.max_z);
+                unionBox.Add(cb);
+            }
+        }
+        if (!unionBox.IsVoid()) {
+            Standard_Real xn, yn, zn, xx, yx, zx;
+            unionBox.Get(xn, yn, zn, xx, yx, zx);
+            tree_nodes[static_cast<size_t>(i)].bbox.min_x = xn;
+            tree_nodes[static_cast<size_t>(i)].bbox.min_y = yn;
+            tree_nodes[static_cast<size_t>(i)].bbox.min_z = zn;
+            tree_nodes[static_cast<size_t>(i)].bbox.max_x = xx;
+            tree_nodes[static_cast<size_t>(i)].bbox.max_y = yx;
+            tree_nodes[static_cast<size_t>(i)].bbox.max_z = zx;
+        }
+    }
+}
+
 /**
  * Internal state for one IGES reader session.
  *
  * Same lifecycle as STEP: new → read_file → transfer_roots → shape_* → free.
  */
-struct IgesReaderWrapper {
-    IGESCAFControl_Reader     caf;
-    Handle(TDocStd_Document)  doc;
-    Handle(XCAFDoc_ShapeTool) st;
+	struct IgesReaderWrapper {
+	    IGESCAFControl_Reader     caf;
+	    Handle(TDocStd_Document)  doc;
+	    Handle(XCAFDoc_ShapeTool) st;
 
-    std::vector<TopoDS_Shape> roots;
-    std::vector<std::string>  warnings;
-    LabelMap                  labels;
-};
+	    std::vector<TopoDS_Shape> roots;
+	    std::vector<std::string>  warnings;
+	    LabelMap                  labels;
+
+	    // XDE assembly tree.
+	    std::vector<MmfTreeNode>  tree_nodes;
+	    std::vector<std::string>  name_store;
+	    std::vector<TopoDS_Shape> shape_store;
+	};
 
 /// Lookup label in an IGES reader's label map.
 const char* lookupIgesLabel(const IgesReaderWrapper* w,
@@ -305,6 +539,12 @@ MmfOcctError mmforge_step_reader_transfer_roots(MmfStepReader* reader) {
 
         // Build label map from XCAF metadata.
         buildLabelMap(w->st, w->labels);
+
+        // Build XDE assembly tree for product-structure extraction.
+        w->tree_nodes.clear();
+        w->name_store.clear();
+        w->shape_store.clear();
+        buildAssemblyTree(w->st, w->tree_nodes, w->name_store, w->shape_store);
 
         return MMF_OK;
     } catch (...) {
@@ -439,6 +679,12 @@ MmfOcctError mmforge_iges_reader_transfer_roots(MmfIgesReader* reader) {
 
         buildLabelMap(w->st, w->labels);
 
+        // Build XDE assembly tree.
+        w->tree_nodes.clear();
+        w->name_store.clear();
+        w->shape_store.clear();
+        buildAssemblyTree(w->st, w->tree_nodes, w->name_store, w->shape_store);
+
         return MMF_OK;
     } catch (...) {
         return MMF_INTERNAL_ERROR;
@@ -572,6 +818,46 @@ const char* mmforge_shape_label(const MmfStepReader* reader,
 
 void mmforge_shape_free(MmfShape* /*shape*/) {
     // No-op: shapes are owned by the reader's roots vector.
+}
+
+// ======================================================================
+// XDE Assembly Tree Enumeration
+// ======================================================================
+
+int mmforge_shape_tree_node_count(const MmfStepReader* reader) {
+    if (!reader) return 0;
+    auto* w = reinterpret_cast<ReaderWrapper*>(
+        const_cast<MmfStepReader*>(reader));
+    return static_cast<int>(w->tree_nodes.size());
+}
+
+const MmfTreeNode* mmforge_shape_get_tree_node(
+    const MmfStepReader* reader, int index)
+{
+    if (!reader) return nullptr;
+    auto* w = reinterpret_cast<ReaderWrapper*>(
+        const_cast<MmfStepReader*>(reader));
+    if (index < 0 || static_cast<size_t>(index) >= w->tree_nodes.size())
+        return nullptr;
+    return &w->tree_nodes[static_cast<size_t>(index)];
+}
+
+int mmforge_iges_shape_tree_node_count(const MmfIgesReader* reader) {
+    if (!reader) return 0;
+    auto* w = reinterpret_cast<IgesReaderWrapper*>(
+        const_cast<MmfIgesReader*>(reader));
+    return static_cast<int>(w->tree_nodes.size());
+}
+
+const MmfTreeNode* mmforge_iges_shape_get_tree_node(
+    const MmfIgesReader* reader, int index)
+{
+    if (!reader) return nullptr;
+    auto* w = reinterpret_cast<IgesReaderWrapper*>(
+        const_cast<MmfIgesReader*>(reader));
+    if (index < 0 || static_cast<size_t>(index) >= w->tree_nodes.size())
+        return nullptr;
+    return &w->tree_nodes[static_cast<size_t>(index)];
 }
 
 // ======================================================================
