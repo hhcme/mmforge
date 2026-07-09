@@ -2,11 +2,12 @@
 
 **Date**: 2026-07-09
 **Agent**: ZCode (deepseek-v4-pro)
-**Status**: VERIFIED WITH REAL OCCT 7.9.3 (Homebrew arm64)
+**Status**: VERIFIED WITH REAL OCCT 7.9.3 (Homebrew arm64) — v2 review fixes applied
 
 **Verification levels**:
 - ✅ **Real OCCT passed** — C++ shim compiled/linked, 360+ Rust tests pass, CLI produces tree output
-- ⚠️ **Stub path** — `cargo check --features occt` (no OCCT libs) passes with empty-tree fallback
+- ✅ **IGES bounds parity** — `build_iges_model_from_data` now uses registry post-transform mesh bounds (same as STEP)
+- ✅ **git diff --check** — working tree clean (trailing whitespace in assembly.stp fixture fixed)
 - ❌ **GUI not verified** — macOS app not launched (foreground GUI excluded per policy)
 
 ---
@@ -114,10 +115,11 @@ Real hierarchy with transforms, assembly nodes have no mesh, leaf nodes tessella
 | `nm libmmforge_occt_shim.a` (symbol check) | **All 37 symbols present** |
 | `cargo check --workspace --features occt` | **Clean** (0 errors) |
 | `cargo test --workspace --features occt` | **360+ passed, 0 failed** |
-| `cargo clippy --workspace` | **Clean** |
+| `cargo clippy --workspace --features occt -- -D warnings` | **Clean** (0 warnings) |
 | CLI `info PQ-04909-A.STEP` | **node_count=2, geoms=1, tri=4554** |
 | CLI `info assembly.stp` | **node_count=3, geoms=2, tri=244** |
-| `git diff --check` | **Clean** |
+| CLI `info box.igs` | **node_count=2, geoms=1, tri=12** |
+| `git diff --check` (working tree) | **Clean** |
 
 ### 4.2 Assembly Fixture Evidence
 
@@ -129,6 +131,16 @@ nodes   : 3        ← root assembly + 2 leaf components (>2 ✓)
 geoms   : 2        ← per-part mesh (>1 ✓)
 triangles: 244      ← real tessellated geometry
 bounds  : [-3,-3,0] – [10,10,15]
+```
+
+```
+$ mmforge info crates/mmforge-geometry/testdata/box.igs
+file    : box.igs
+format  : IGES
+nodes   : 2        ← root assembly + 1 leaf component
+geoms   : 1
+triangles: 12
+bounds  : [0,0,0] – [1,1,1]
 ```
 
 The 494-entity AP214 STEP assembly contains:
@@ -154,14 +166,25 @@ without requiring `RenderPacket` or Metal renderer changes.
 | `cargo check --features occt` (no env vars) | **Clean** — empty tree fallback |
 | Tree → empty vec → flat model fallback | **Working** |
 
-### 4.5 Not Verified
+### 4.5 GUI Items Not Yet Manually Verified
 
-| Check | Reason |
-|-------|--------|
-| macOS GUI launch | Foreground interactive — excluded per policy |
-| Metal rendering correctness | Requires GUI session |
-| Viewport picking with transforms | Requires GUI session |
-| Structure sidebar with assembly tree | Requires GUI session |
+All of the following require a foreground macOS GUI session (`MMFORGE_ALLOW_INTERACTIVE_GUI=1`)
+and have NOT been verified:
+
+| # | Item | Reason |
+|---|------|--------|
+| G1 | macOS app launch + Metal rendering | Requires interactive GUI session |
+| G2 | Structure sidebar showing assembly hierarchy | Requires GUI |
+| G3 | Viewport picking on individual components | Requires GUI |
+| G4 | Hide/isolate per component | Requires GUI |
+| G5 | Per-part bounds in inspector | Requires GUI |
+| G6 | Component transform correctness in viewport | Requires GUI |
+| G7 | Export PNG / DMG acceptance tests | Requires GUI |
+| G8 | Color/material per component | Requires GUI |
+
+These are implementation-complete on the Rust/Swift side (tree structure,
+node_id/geometry_id stability, mesh → node mapping unchanged) but need a
+dedicated foreground GUI session for end-to-end visual confirmation.
 
 ---
 

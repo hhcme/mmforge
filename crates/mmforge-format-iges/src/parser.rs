@@ -335,10 +335,17 @@ fn build_iges_model_from_data(
                 model.scene.add_node(Node {
                     id: nid, name, parent: parent_id, children: Vec::new(),
                     geometry: geom_id, material: None, visible: true,
-                    local_transform: tn.transform, bounds: tn.bounds,
+                    local_transform: tn.transform,
+                    bounds: geom_id.map_or(tn.bounds, |gid| {
+                        registry.get(&gid).map_or(tn.bounds, |m| m.bounds)
+                    }),
                 });
                 if let Some(gid) = geom_id {
-                    model.geometries.push(Geometry::BRepHandleRef { id: gid, bounds: tn.bounds, label });
+                    model.geometries.push(Geometry::BRepHandleRef {
+                        id: gid,
+                        bounds: registry.get(&gid).map_or(tn.bounds, |m| m.bounds),
+                        label,
+                    });
                 }
                 if let Some(pid) = parent_id {
                     if let Some(pn) = model.scene.find_node_mut(pid) { pn.children.push(nid); }
