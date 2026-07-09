@@ -2,7 +2,12 @@
 
 **Date**: 2026-07-09
 **Agent**: ZCode (deepseek-v4-pro)
-**Status**: IMPLEMENTED (shim rebuild + OCCT-enabled tests pending)
+**Status**: VERIFIED WITH REAL OCCT 7.9.3 (Homebrew arm64)
+
+**Verification levels**:
+- ✅ **Real OCCT passed** — C++ shim compiled/linked, 360+ Rust tests pass, CLI produces tree output
+- ⚠️ **Stub path** — `cargo check --features occt` (no OCCT libs) passes with empty-tree fallback
+- ❌ **GUI not verified** — macOS app not launched (foreground GUI excluded per policy)
 
 ---
 
@@ -101,30 +106,62 @@ Real hierarchy with transforms, assembly nodes have no mesh, leaf nodes tessella
 
 ## 4. Verification Status
 
+### 4.1 Real OCCT 7.9.3 (Homebrew arm64)
+
 | Check | Result |
 |-------|--------|
-| `cargo check --workspace` | **Clean** (no errors) |
-| `cargo check --features occt` (step+iges) | **Clean** |
+| `cmake .. && make` (shim rebuild) | **Compiled + linked** |
+| `nm libmmforge_occt_shim.a` (symbol check) | **All 37 symbols present** |
+| `cargo check --workspace --features occt` | **Clean** (0 errors) |
+| `cargo test --workspace --features occt` | **360+ passed, 0 failed** |
+| `cargo clippy --workspace` | **Clean** |
+| CLI `info PQ-04909-A.STEP` | **node_count=2, geoms=1, tri=4554** |
+| CLI `info assembly.stp` | **node_count=3, geoms=2, tri=244** |
 | `git diff --check` | **Clean** |
-| C++ shim rebuild | **Pending** — requires OCCT 7.9 headers/libs |
-| `cargo test --features occt` (E2E) | **Pending** — requires rebuilt shim |
-| Assembly STEP fixture | **Pending** — small AP214 assembly fixture needed |
 
-### 4.1 To Verify (requires OCCT-enabled build)
+### 4.2 Assembly Fixture Evidence
 
-```bash
-# Rebuild shim
-cd crates/mmforge-geometry/shim && mkdir -p build && cd build
-cmake .. && make -j$(sysctl -n hw.ncpu)
-
-# Full E2E
-MMFORGE_SHIM_DIR=$(pwd) \
-  OCCT_INCLUDE_DIR=/path/to/occt/include \
-  OCCT_LIB_DIR=/path/to/occt/lib \
-  cargo test -p mmforge-geometry --features occt
-cargo test -p mmforge-format-step --features occt
-cargo test -p mmforge-format-iges --features occt
 ```
+$ mmforge info crates/mmforge-geometry/testdata/assembly.stp
+file    : assembly.stp
+format  : STEP
+nodes   : 3        ← root assembly + 2 leaf components (>2 ✓)
+geoms   : 2        ← per-part mesh (>1 ✓)
+triangles: 244      ← real tessellated geometry
+bounds  : [-3,-3,0] – [10,10,15]
+```
+
+The 494-entity AP214 STEP assembly contains:
+- Root `ASSEMBLY` (Compound, no mesh, no geometry)
+- `Base_Box` — 10×10×10 box solid (12 triangles)
+- `Pillar_Cylinder` — radius 3, height 15 cylinder (232 triangles)
+
+### 4.3 Per-Part Transform Baking
+
+XDE component location transforms are pre-baked into tessellated mesh vertices:
+- Positions transformed by full `Mat4` (translation + rotation)
+- Normals transformed by `Mat3` (rotation only)
+- Bounds recomputed from transformed positions
+- Node bounds use registry mesh bounds (post-transform) for AABB consistency
+
+This ensures picking, hide/isolate, and viewport rendering are all consistent
+without requiring `RenderPacket` or Metal renderer changes.
+
+### 4.4 Stub Path (feature=occt, no OCCT libs)
+
+| Check | Result |
+|-------|--------|
+| `cargo check --features occt` (no env vars) | **Clean** — empty tree fallback |
+| Tree → empty vec → flat model fallback | **Working** |
+
+### 4.5 Not Verified
+
+| Check | Reason |
+|-------|--------|
+| macOS GUI launch | Foreground interactive — excluded per policy |
+| Metal rendering correctness | Requires GUI session |
+| Viewport picking with transforms | Requires GUI session |
+| Structure sidebar with assembly tree | Requires GUI session |
 
 ---
 
@@ -148,8 +185,8 @@ cargo test -p mmforge-format-iges --features occt
 
 | # | Gap | Status |
 |---|-----|--------|
-| G1 | C++ shim rebuild with OCCT 7.9 | Requires OCCT headers/libs |
-| G2 | E2E tree verification tests (occt_found) | Requires rebuilt shim |
-| G3 | Small AP214 assembly STEP fixture | Manual creation or OCCT export needed |
-| G4 | Assembly fixture with NEXT_ASSEMBLY_USAGE_OCCURRENCE + PRODUCT_DEFINITION | Validates real XDE hierarchy |
-| G5 | Non-OCCT build path: tree returns empty → flat fallback works | Verified via `cargo check --features occt` |
+| G1 | macOS GUI rendering verification | ❌ Requires foreground session |
+| G2 | Viewport picking with per-part transforms | ❌ Requires GUI session |
+| G3 | Structure sidebar displaying assembly hierarchy | ❌ Requires GUI session |
+| G4 | IGES assembly fixture | ⚠️ IGES parser supports tree but no multi-part IGES fixture |
+| G5 | Non-rigid transforms (scale/shear) | ⚠️ XDE locations are typically rigid; tested with translation only |
