@@ -28,6 +28,7 @@
 		A10019 /* AnnotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10022 /* AnnotationTests.swift */; };
 		A10020 /* AsyncParseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10023 /* AsyncParseTests.swift */; };
 		A10022 /* ProductizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10026 /* ProductizationTests.swift */; };
+		035115407A454809A9951D15 /* BridgeAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BFCBDDB2C7D4543AD26A6C6 /* BridgeAcceptanceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -67,6 +68,7 @@
 		B10026 /* ProductizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductizationTests.swift; sourceTree = "<group>"; };
 		C10001 /* MMForge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MMForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C10002 /* MMForgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MMForgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		2BFCBDDB2C7D4543AD26A6C6 /* BridgeAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeAcceptanceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -188,6 +190,7 @@
 				B10022 /* AnnotationTests.swift */,
 				B10023 /* AsyncParseTests.swift */,
 				B10026 /* ProductizationTests.swift */,
+				2BFCBDDB2C7D4543AD26A6C6 /* BridgeAcceptanceTests.swift */,
 			);
 			path = MMForgeTests;
 			sourceTree = "<group>";
@@ -308,6 +311,7 @@
 				A10019 /* AnnotationTests.swift in Sources */,
 				A10020 /* AsyncParseTests.swift in Sources */,
 				A10022 /* ProductizationTests.swift in Sources */,
+				035115407A454809A9951D15 /* BridgeAcceptanceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
