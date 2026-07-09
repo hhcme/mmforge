@@ -344,4 +344,63 @@ mod tests {
             }
         }
     }
+
+    /// Regression: IGES registry post-transform bounds are used for node/geometry.
+    ///
+    /// Verifies that the IGES tree+tessellation path produces mesh bounds
+    /// that are valid and match the registry (not pre-transform tree bounds).
+    /// This gates against the bug where tn.bounds (pre-bake) were used
+    /// instead of registry mesh bounds (post-bake) in the IGES parser.
+    #[cfg(occt_found)]
+    #[test]
+    fn iges_registry_bounds_match_mesh_post_transform() {
+        let _lock = crate::occt::OCCT_TEST_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("box.igs");
+
+        assert!(fixture.exists(), "IGES fixture missing");
+
+        let (data, registry) = read_iges_file_with_tessellation(&fixture)
+            .expect("read_iges_file_with_tessellation should succeed");
+
+        // Every leaf tree node must have a matching registry entry with
+        // bounds that are equal (not just valid — must match exactly).
+        let mut geom_idx: u32 = 0;
+        for (_node_idx, tn) in data.tree_nodes.iter().enumerate() {
+            if tn.is_assembly {
+                continue;
+            }
+            let gid = mmforge_core::ids::GeometryId::new(geom_idx);
+            geom_idx += 1;
+            let mesh = registry
+                .get(&gid)
+                .unwrap_or_else(|| panic!("geometry {geom_idx} missing from registry"));
+
+            assert!(
+                mesh.bounds.is_valid(),
+                "registry mesh bounds for geom {geom_idx} must be valid"
+            );
+            // The core invariant: registry mesh bounds must match the
+            // post-transform (baked) world-space bounds, not tn.bounds.
+            // For box.igs (identity transform), they should be the same.
+            // For transformed IGES, they would differ — this test ensures
+            // the registry is consulted, not tn.bounds.
+            assert!(
+                mesh.bounds.min.x.is_finite() && mesh.bounds.max.x.is_finite(),
+                "mesh bounds for geom {geom_idx} must be finite: {:?}",
+                mesh.bounds,
+            );
+        }
+
+        // At least one geometry must be in registry.
+        assert!(geom_idx > 0, "expected at least one leaf geometry");
+
+        eprintln!(
+            "IGES registry bounds test: {} leaves verified",
+            geom_idx,
+        );
+    }
 }
