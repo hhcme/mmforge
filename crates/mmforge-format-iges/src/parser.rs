@@ -284,7 +284,7 @@ pub fn parse_iges_with_tessellation_with_progress(
 }
 
 #[cfg(feature = "occt")]
-fn build_iges_model_from_data(
+pub(crate) fn build_iges_model_from_data(
     path: &Path,
     iges_data: mmforge_geometry::occt::iges_reader::IgesData,
     registry: mmforge_geometry::tessellation::TessellationRegistry,
@@ -398,4 +398,118 @@ fn build_iges_model_from_data(
         },
         registry,
     ))
+}
+
+#[cfg(test)]
+#[cfg(feature = "occt")]
+mod tests {
+    use super::*;
+    use mmforge_core::cancel::CancellationToken;
+    use mmforge_core::ids::GeometryId;
+    use mmforge_core::math::BoundingBox;
+    use mmforge_core::model::Geometry;
+    use mmforge_geometry::occt::adapter::TreeNode;
+    use mmforge_geometry::occt::iges_reader::IgesData;
+    use mmforge_geometry::occt::shape::ShapeType;
+    use mmforge_geometry::tessellation::{TessellatedMeshData, TessellationRegistry};
+    use std::path::Path;
+
+    /// Proves that build_iges_model_from_data uses registry post-transform
+    /// mesh bounds, NOT the pre-transform tree-node bounds.
+    ///
+    /// Constructs mock IgesData with tn.bounds = [0,0,0]–[1,1,1] and a
+    /// TessellationRegistry with mesh bounds = [10,0,0]–[20,1,1].  If the
+    /// parser incorrectly used tn.bounds, Node.bounds would be the smaller
+    /// box; the correct (post-bake) path uses registry bounds.
+    #[test]
+    fn parser_uses_registry_bounds_not_tree_node_bounds() {
+        // --- Mock tree node: pre-transform bounds ---
+        let tn = TreeNode {
+            parent_index: -1,
+            name: "TestPart".into(),
+            shape_type: ShapeType::Solid,
+            bounds: BoundingBox::new(
+                glam::Vec3::new(0.0, 0.0, 0.0),
+                glam::Vec3::new(1.0, 1.0, 1.0),
+            ),
+            is_assembly: false,
+            transform: glam::Mat4::IDENTITY,
+        };
+
+        // --- Mock registry: post-transform bounds (different!) ---
+        let mut registry = TessellationRegistry::new();
+        let gid = GeometryId::new(0);
+        registry.insert(
+            gid,
+            TessellatedMeshData {
+                positions: vec![[10.0, 0.0, 0.0], [20.0, 0.0, 0.0], [10.0, 1.0, 0.0]],
+                normals: vec![[0.0, 0.0, 1.0]; 3],
+                indices: vec![0, 1, 2],
+                bounds: BoundingBox::new(
+                    glam::Vec3::new(10.0, 0.0, 0.0),
+                    glam::Vec3::new(20.0, 1.0, 1.0),
+                ),
+            },
+        );
+
+        let iges_data = IgesData {
+            shapes: vec![],
+            tree_nodes: vec![tn],
+            transfer_messages: vec![],
+        };
+
+        let cancel = CancellationToken::new();
+        let result = build_iges_model_from_data(
+            Path::new("test.igs"),
+            iges_data,
+            registry.clone(),
+            &cancel,
+        );
+        assert!(result.is_ok(), "build_iges_model_from_data failed: {:?}", result.err());
+        let (output, _reg) = result.unwrap();
+        let model = &output.model;
+
+        // Must have exactly 1 node.
+        assert_eq!(model.scene.nodes.len(), 1, "expected 1 node");
+        let node = &model.scene.nodes[0];
+
+        // The node must have geometry.
+        assert!(node.geometry.is_some(), "node must have geometry");
+
+        // ---- THE KEY ASSERTIONS ----
+        // Node.bounds must equal registry mesh bounds (post-transform),
+        // NOT tn.bounds (pre-transform [0,0,0]–[1,1,1]).
+        let reg_mesh = registry.get(&gid).expect("mesh in registry");
+        assert_eq!(
+            node.bounds.min, reg_mesh.bounds.min,
+            "Node.bounds.min must match registry mesh bounds (post-transform)"
+        );
+        assert_eq!(
+            node.bounds.max, reg_mesh.bounds.max,
+            "Node.bounds.max must match registry mesh bounds (post-transform)"
+        );
+
+        // Geometry.bounds must also match registry.
+        assert_eq!(model.geometries.len(), 1, "expected 1 geometry");
+        match &model.geometries[0] {
+            Geometry::BRepHandleRef { bounds, .. } => {
+                assert_eq!(
+                    bounds.min, reg_mesh.bounds.min,
+                    "Geometry.bounds.min must match registry"
+                );
+                assert_eq!(
+                    bounds.max, reg_mesh.bounds.max,
+                    "Geometry.bounds.max must match registry"
+                );
+            }
+            _ => panic!("expected BRepHandleRef geometry"),
+        }
+
+        // Sanity: the bounds should NOT equal the pre-transform tn.bounds.
+        assert_ne!(
+            node.bounds.min,
+            glam::Vec3::new(0.0, 0.0, 0.0),
+            "bounds should differ from pre-transform tn.bounds"
+        );
+    }
 }
