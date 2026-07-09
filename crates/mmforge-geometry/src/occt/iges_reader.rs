@@ -138,25 +138,47 @@ fn occt_read_iges_with_tessellation(
             0.5
         };
 
-        // Create a temporary IgesShapeHandle for tessellation.
-        // SAFETY: shape_ptr is borrowed from the reader (valid until drop).
-        let handle = super::adapter::IgesShapeHandle {
-            reader_ptr: reader.as_iges_ptr(),
-            ptr: shape_ptr.unwrap(),
-            _lifetime: std::marker::PhantomData,
-        };
+        let handle = super::adapter::IgesShapeHandle::from_raw(
+            reader.as_iges_ptr(),
+            shape_ptr.unwrap(),
+        );
 
         let mesh =
             super::adapter::TessellatedMesh::tessellate_iges(&reader, &handle, deflection)?;
 
+        let mut positions: Vec<[f32; 3]> = mesh.positions().to_vec();
+        let mut normals: Vec<[f32; 3]> = mesh.normals().to_vec();
         let indices: Vec<u32> = mesh
             .indices()
             .iter()
             .flat_map(|tri| [tri[0] as u32, tri[1] as u32, tri[2] as u32])
             .collect();
 
-        let positions: Vec<[f32; 3]> = mesh.positions().to_vec();
-        let normals: Vec<[f32; 3]> = mesh.normals().to_vec();
+        // Bake the component's XDE location transform into the mesh.
+        let xform = node.transform;
+        let is_identity = xform.abs_diff_eq(glam::Mat4::IDENTITY, 1e-7);
+        if !is_identity {
+            let rot = glam::Mat3::from_mat4(xform);
+            for p in &mut positions {
+                *p = xform.transform_point3((*p).into()).into();
+            }
+            for n in &mut normals {
+                let v: glam::Vec3 = (*n).into();
+                *n = (rot * v).into();
+            }
+        }
+
+        let bounds = if positions.is_empty() {
+            mmforge_core::math::BoundingBox::EMPTY
+        } else {
+            let mut bb = mmforge_core::math::BoundingBox::from_point(
+                glam::Vec3::from(positions[0]),
+            );
+            for p in &positions[1..] {
+                bb.extend_point(glam::Vec3::from(*p));
+            }
+            bb
+        };
 
         let geom_id = mmforge_core::ids::GeometryId::new(geom_counter);
         geom_counter += 1;
@@ -166,7 +188,7 @@ fn occt_read_iges_with_tessellation(
                 positions,
                 normals,
                 indices,
-                bounds: mesh.bounds(),
+                bounds,
             },
         );
     }

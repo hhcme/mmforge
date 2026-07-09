@@ -252,7 +252,13 @@ static void buildNodeRecursive(
     if (is_assembly) {
         shape = st->GetShape(label);
     } else {
-        if (!st->GetReferredShape(label, shape))
+        // GetReferredShape(label, refLabel) returns the original definition
+        // label (without location).  Then GetShape(refLabel) gives the
+        // un-transformed shape for tessellation.
+        TDF_Label refLabel;
+        if (st->GetReferredShape(label, refLabel))
+            shape = st->GetShape(refLabel);
+        else
             shape = st->GetShape(label);
     }
 
@@ -263,7 +269,7 @@ static void buildNodeRecursive(
     TopLoc_Location loc;
     double location[16];
     if (!is_assembly)
-        st->GetLocation(label, loc);
+        loc = st->GetLocation(label);
     extractLocationMatrix(loc, location);
 
     MmfOcctBBox bbox = {0,0,0, 0,0,0};

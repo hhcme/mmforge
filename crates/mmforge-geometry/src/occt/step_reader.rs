@@ -87,7 +87,7 @@ pub fn read_step_file_with_tessellation(
 fn occt_read_step_with_tessellation(
     path: &Path,
 ) -> Result<(StepData, crate::tessellation::TessellationRegistry), OcctError> {
-    use crate::occt::adapter::{StepReaderAdapter, TessellatedMesh, TreeNode};
+    use crate::occt::adapter::{StepReaderAdapter, TessellatedMesh};
     use crate::tessellation::{TessellationQuality, TessellationRegistry};
     use mmforge_core::ids::GeometryId;
 
@@ -128,27 +128,55 @@ fn occt_read_step_with_tessellation(
 
         // Create a temporary ShapeHandle for tessellation.
         // SAFETY: shape_ptr is borrowed from the reader (valid until drop).
-        let handle = super::adapter::ShapeHandle {
-            reader_ptr: reader.as_ptr(),
-            ptr: shape_ptr.unwrap(),
-            _lifetime: std::marker::PhantomData,
-        };
+        let handle = super::adapter::ShapeHandle::from_raw(reader.as_ptr(), shape_ptr.unwrap());
 
         let mesh = TessellatedMesh::tessellate(&reader, &handle, deflection)?;
+
+        let mut positions: Vec<[f32; 3]> = mesh.positions().to_vec();
+        let mut normals: Vec<[f32; 3]> = mesh.normals().to_vec();
+        let indices: Vec<u32> = mesh
+            .indices()
+            .iter()
+            .flat_map(|t| [t[0] as u32, t[1] as u32, t[2] as u32])
+            .collect();
+
+        // Bake the component's XDE location transform into the mesh.
+        // This ensures per-part positions, bounds, picking, and
+        // hide/isolate are all consistent without renderer changes.
+        let xform = node.transform;
+        let is_identity = xform.abs_diff_eq(glam::Mat4::IDENTITY, 1e-7);
+        if !is_identity {
+            let rot = glam::Mat3::from_mat4(xform);
+            for p in &mut positions {
+                *p = xform.transform_point3((*p).into()).into();
+            }
+            for n in &mut normals {
+                let v: glam::Vec3 = (*n).into();
+                *n = (rot * v).into();
+            }
+        }
+
+        let bounds = if positions.is_empty() {
+            mmforge_core::math::BoundingBox::EMPTY
+        } else {
+            let mut bb = mmforge_core::math::BoundingBox::from_point(
+                glam::Vec3::from(positions[0]),
+            );
+            for p in &positions[1..] {
+                bb.extend_point(glam::Vec3::from(*p));
+            }
+            bb
+        };
 
         let geom_id = GeometryId::new(geom_counter);
         geom_counter += 1;
         registry.insert(
             geom_id,
             crate::tessellation::TessellatedMeshData {
-                positions: mesh.positions().to_vec(),
-                normals: mesh.normals().to_vec(),
-                indices: mesh
-                    .indices()
-                    .iter()
-                    .flat_map(|t| [t[0] as u32, t[1] as u32, t[2] as u32])
-                    .collect(),
-                bounds: mesh.bounds(),
+                positions,
+                normals,
+                indices,
+                bounds,
             },
         );
     }

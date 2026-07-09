@@ -296,7 +296,7 @@ fn build_iges_model_from_data(
     use mmforge_core::ids::{GeometryId, NodeId};
     use mmforge_core::model::{Geometry, LsmModel, Node, ParseWarning};
 
-    let mut warnings: Vec<ParseWarning> = iges_data
+    let warnings: Vec<ParseWarning> = iges_data
         .transfer_messages
         .iter()
         .map(|msg| ParseWarning::PrecisionLoss {

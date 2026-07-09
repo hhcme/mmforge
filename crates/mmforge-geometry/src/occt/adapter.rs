@@ -219,6 +219,14 @@ impl Drop for IgesReaderAdapter {
 
 #[cfg(occt_found)]
 impl<'a> IgesShapeHandle<'a> {
+    /// Construct an IgesShapeHandle from raw pointers.
+    pub(crate) fn from_raw(
+        reader_ptr: *const super::sys::IgesControlReader,
+        ptr: *const super::sys::TopoDsShape,
+    ) -> Self {
+        Self { reader_ptr, ptr, _lifetime: std::marker::PhantomData }
+    }
+
     pub fn shape_type(&self) -> ShapeType {
         let raw = unsafe { super::sys::mmforge_iges_shape_type(self.reader_ptr, self.ptr) };
         occt_to_shape_type(raw)
@@ -403,6 +411,15 @@ impl Drop for StepReaderAdapter {
 
 #[cfg(occt_found)]
 impl<'a> ShapeHandle<'a> {
+    /// Construct a ShapeHandle from raw pointers (for tree-based tessellation).
+    /// SAFETY: reader_ptr and ptr must be valid for lifetime 'a.
+    pub(crate) fn from_raw(
+        reader_ptr: *const super::sys::StepControlReader,
+        ptr: *const super::sys::TopoDsShape,
+    ) -> Self {
+        Self { reader_ptr, ptr, _lifetime: std::marker::PhantomData }
+    }
+
     /// Shape type (solid, shell, face, etc.).
     pub fn shape_type(&self) -> ShapeType {
         let raw = unsafe { super::sys::mmforge_shape_type(self.reader_ptr, self.ptr) };
