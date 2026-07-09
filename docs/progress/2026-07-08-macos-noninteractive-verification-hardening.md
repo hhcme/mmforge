@@ -221,14 +221,14 @@ Only on a dedicated machine where desktop takeover is acceptable. The script act
 
 ---
 
-## 8. Files Changed (v2 cumulative)
+## 8. Files Changed
 
 | File | Δ | Change |
 |------|---|--------|
 | `macos/MMForgeTests/AnnotationTests.swift` | +224 | 11 new `renderImage` unit tests; `pixelContentNonTrivial` rewritten with baseline-diff + ACI color detection |
 | `macos/scripts/preflight-check.sh` | +300 (new) | 10-category silent verification; Section 10 exit-code gating with `MMFORGE_ALLOW_NO_OCCT` advisory |
-| `docs/scripts/perf-baseline.sh` | +34/−0 | Exit codes (0/1/2); `MMFORGE_NO_OCCT_ADVISORY=1` downgrade for known OCCT-dependent formats |
-| `docs/progress/2026-07-08-macos-noninteractive-verification-hardening.md` | +260 (new) | This report (v2 with review fixes) |
+| `docs/scripts/perf-baseline.sh` | +34/−0 | Exit codes (0/1/2/3); `MMFORGE_NO_OCCT_ADVISORY=1` downgrade for known OCCT-dependent formats |
+| `docs/progress/2026-07-08-macos-noninteractive-verification-hardening.md` | +260 (new) | This report |
 | `docs/progress/2026-07-07-macos-format-gui-acceptance.md` | +14/−13 | perf-baseline OCCT/no-OCCT split: "4+1"→"2+1+2 ERROR (default); with OCCT: 4+1" |
 | `docs/progress/2026-07-07-macos-alpha-trial-package.md` | +4/−4 | perf-baseline OCCT/no-OCCT split |
 | `docs/progress/2026-07-07-macos-runtime-usability-performance.md` | +10/−9 | perf-baseline OCCT/no-OCCT split |

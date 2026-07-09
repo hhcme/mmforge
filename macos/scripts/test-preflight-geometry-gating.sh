@@ -18,11 +18,12 @@ green() { printf '  \033[32mPASS\033[0m %s\n' "$*"; PASS=$((PASS + 1)); }
 red()   { printf '  \033[31mFAIL\033[0m %s\n' "$*"; FAIL=$((FAIL + 1)); }
 
 # ---------------------------------------------------------------------------
-# Simulate perf-baseline.sh's exit-code logic against a fake summary table.
-# This is the extracted essence of lines ~154–198 of perf-baseline.sh.
+# Simulate perf-baseline.sh's exit-code + verdict logic against a fake summary
+# table.  This is the extracted essence of lines ~154–208 of perf-baseline.sh.
 # Arguments: advisory_flag output_file
 # The output file must contain rows like: | FMT | STATUS | ... |
-# Returns exit code (0/1/2/3) — same contract as perf-baseline.sh.
+# Echoes the GEOMETRY_VERDICT string to stdout (PASS / FAIL / PLACEHOLDER /
+# ADVISORY) and returns exit code (0/1/2/3) — same contract as perf-baseline.sh.
 # ---------------------------------------------------------------------------
 simulate_perf_verdict() {
   local advisory="$1" output="$2"
@@ -45,36 +46,49 @@ simulate_perf_verdict() {
     esac
   done < <(grep -E '^\| (STEP|IGES|STL|glTF|DXF)' "$output" 2>/dev/null || true)
 
+  # Determine verdict and exit code (mirrors perf-baseline.sh lines ~184–205)
   if [ "$had_non_occt_error" -eq 0 ] && [ "$had_placeholder" -eq 0 ] && [ "$had_occt_error" -eq 0 ]; then
-    return 0  # clean
+    echo "PASS"
+    return 0
   elif [ "$had_non_occt_error" -eq 1 ]; then
-    return 1  # hard error
+    echo "FAIL"
+    return 1
   elif [ "$had_placeholder" -eq 1 ]; then
-    return 2  # placeholder
+    echo "PLACEHOLDER"
+    return 2
   elif [ "$had_occt_error" -eq 1 ]; then
     if [ "$advisory" = "1" ]; then
-      return 3  # advisory
+      echo "ADVISORY"
+      return 3
     else
-      return 1  # hard error (no advisory)
+      echo "FAIL"
+      return 1
     fi
   fi
+  echo "FAIL"
   return 1
 }
 
 # ---------------------------------------------------------------------------
-# Test runner: creates a fake summary table, runs the gating logic, asserts.
+# Test runner: creates a fake summary table, runs the gating logic, asserts
+# both exit code and GEOMETRY_VERDICT string.
 # ---------------------------------------------------------------------------
 assert_verdict() {
-  local label="$1" advisory="$2" table_lines="$3" expect_rc="$4"
+  local label="$1" advisory="$2" table_lines="$3" expect_rc="$4" expect_verdict="$5"
 
   printf "%s\n" "$table_lines" > "$TEST_DIR/table.txt"
 
-  local rc=0
-  simulate_perf_verdict "$advisory" "$TEST_DIR/table.txt" || rc=$?
-  if [ "$rc" -eq "$expect_rc" ]; then
-    green "$label (rc=$rc expected=$expect_rc)"
+  local rc=0 verdict
+  verdict=$(simulate_perf_verdict "$advisory" "$TEST_DIR/table.txt") || rc=$?
+
+  local ok=1
+  if [ "$rc" -ne "$expect_rc" ]; then ok=0; fi
+  if [ -n "$expect_verdict" ] && [ "$verdict" != "$expect_verdict" ]; then ok=0; fi
+
+  if [ "$ok" -eq 1 ]; then
+    green "$label (rc=$rc verdict=$verdict)"
   else
-    red "$label (rc=$rc expected=$expect_rc)"
+    red "$label (rc=$rc verdict=$verdict expected rc=$expect_rc verdict=$expect_verdict)"
   fi
 }
 
@@ -118,7 +132,7 @@ assert_verdict \
 | STL    | REAL-GEOMETRY |     2 |     1 |        12 |
 | glTF   | REAL-GEOMETRY |     1 |     1 |         1 |
 | DXF    | 2D-ONLY       |     5 |     1 |         0 |" \
-  1
+  1 "FAIL"
 
 # Section 10 in preflight gets exit 1 → FAIL
 assert_summary "preflight: default STEP/IGES ERROR" 1 0 "CHECKS_FAILED"
@@ -135,7 +149,7 @@ assert_verdict \
 | STL    | REAL-GEOMETRY |     2 |     1 |        12 |
 | glTF   | REAL-GEOMETRY |     1 |     1 |         1 |
 | DXF    | 2D-ONLY       |     5 |     1 |         0 |" \
-  3
+  3 "ADVISORY"
 
 # Section 10 in preflight gets exit 3 → ADVISORY (exit 0, geometry_advisory=1)
 assert_summary "preflight: advisory exit 3" 0 1 "PASS_WITH_ADVISORY"
@@ -152,7 +166,7 @@ assert_verdict \
 | STL    | REAL-GEOMETRY |     2 |     1 |        12 |
 | glTF   | REAL-GEOMETRY |     1 |     1 |         1 |
 | DXF    | 2D-ONLY       |     5 |     1 |         0 |" \
-  3
+  3 "ADVISORY"
 
 assert_summary "preflight: advisory IGES only" 0 1 "PASS_WITH_ADVISORY"
 
@@ -168,7 +182,7 @@ assert_verdict \
 | STL    | ERROR         |       |       |           |
 | glTF   | REAL-GEOMETRY |     1 |     1 |         1 |
 | DXF    | 2D-ONLY       |     5 |     1 |         0 |" \
-  1
+  1 "FAIL"
 
 assert_summary "preflight: STL ERROR with advisory" 1 0 "CHECKS_FAILED"
 
@@ -184,7 +198,7 @@ assert_verdict \
 | STL    | REAL-GEOMETRY |     2 |     1 |        12 |
 | glTF   | REAL-GEOMETRY |     1 |     1 |         1 |
 | DXF    | ERROR         |       |       |           |" \
-  1
+  1 "FAIL"
 
 assert_summary "preflight: DXF ERROR with advisory" 1 0 "CHECKS_FAILED"
 
@@ -200,7 +214,7 @@ assert_verdict \
 | STL    | PLACEHOLDER   |     0 |     0 |         0 |
 | glTF   | REAL-GEOMETRY |     1 |     1 |         1 |
 | DXF    | 2D-ONLY       |     5 |     1 |         0 |" \
-  2
+  2 "PLACEHOLDER"
 
 assert_summary "preflight: PLACEHOLDER with advisory" 1 0 "CHECKS_FAILED"
 
@@ -216,7 +230,7 @@ assert_verdict \
 | STL    | REAL-GEOMETRY |     2 |     1 |        12 |
 | glTF   | REAL-GEOMETRY |     1 |     1 |         1 |
 | DXF    | 2D-ONLY       |     5 |     1 |         0 |" \
-  2
+  2 "PLACEHOLDER"
 
 # --------------------------------------------------------------------------
 # Test 8: All clean (no advisory needed) → exit 0
@@ -230,7 +244,7 @@ assert_verdict \
 | STL    | REAL-GEOMETRY |     2 |     1 |        12 |
 | glTF   | REAL-GEOMETRY |     1 |     1 |         1 |
 | DXF    | 2D-ONLY       |     5 |     1 |         0 |" \
-  0
+  0 "PASS"
 
 assert_summary "preflight: all clean" 0 0 "ALL_CHECKS_PASSED"
 
@@ -246,7 +260,7 @@ assert_verdict \
 | STL    | REAL-GEOMETRY |     2 |     1 |        12 |
 | glTF   | ERROR         |       |       |           |
 | DXF    | 2D-ONLY       |     5 |     1 |         0 |" \
-  1
+  1 "FAIL"
 
 # --------------------------------------------------------------------------
 # Test 10: No advisory + no ERROR → exit 0, clean summary
@@ -260,7 +274,7 @@ assert_verdict \
 | STL    | REAL-GEOMETRY |     2 |     1 |        12 |
 | glTF   | REAL-GEOMETRY |     1 |     1 |         1 |
 | DXF    | 2D-ONLY       |     5 |     1 |         0 |" \
-  0
+  0 "PASS"
 
 assert_summary "preflight: with OCCT, all clean" 0 0 "ALL_CHECKS_PASSED"
 
