@@ -285,11 +285,23 @@ build_rust() {
     local features=""
     local occt_incl="${OCCT_INCLUDE_DIR:-/opt/homebrew/include/opencascade}"
     local occt_lib="${OCCT_LIB_DIR:-/opt/homebrew/lib}"
-    local shim_a="${MMFORGE_SHIM_DIR:-${ROOT}/crates/mmforge-geometry/shim/build}/libmmforge_occt_shim.a"
 
-    if [ -d "$occt_incl" ] && [ -d "$occt_lib" ] && [ -f "$shim_a" ]; then
-        info "  [rust] Building with OCCT support"
-        features="--features occt"
+    # Use shared shim build script — ensures OCCT shim is built and current.
+    # Explicitly FAILS (exit 2) if OCCT is configured but shim build fails.
+    # Does NOT silently degrade.
+    if [ -d "$occt_incl" ] && [ -d "$occt_lib" ]; then
+        # Export OCCT dirs and any MMFORGE_SHIM_DIR override for the shared script.
+        export OCCT_INCLUDE_DIR="$occt_incl"
+        export OCCT_LIB_DIR="$occt_lib"
+        info "  [rust] Checking/building OCCT shim via build-occt-shim.sh ..."
+        local shim_path
+        if shim_path=$(bash "${SCRIPT_DIR}/build-occt-shim.sh"); then
+            features="--features occt"
+            info "  [rust] Building with OCCT support (shim: ${shim_path})"
+        else
+            local rc=$?
+            err "OCCT shim build failed (exit ${rc}). Fix OCCT configuration or unset OCCT_INCLUDE_DIR/OCCT_LIB_DIR to build without OCCT."
+        fi
     else
         info "  [rust] Building without OCCT (STEP/IGES will show guidance)"
     fi

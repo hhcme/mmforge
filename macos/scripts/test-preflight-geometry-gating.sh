@@ -60,14 +60,18 @@ if [ "$RUNTIME_OCCT" -eq 1 ]; then
 else
   info "OCCT NOT available — STEP/IGES will be advisory/error"
 fi
-echo ""
+	echo ""
+
+# Share CLI and target dir with the gate script.
+export MMFORGE_CLI="${MMFORGE_CLI:-}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-}"
 
 # ---------------------------------------------------------------------------
 # 2. Test advisory mode (MMFORGE_NO_OCCT_ADVISORY=1)
 # ---------------------------------------------------------------------------
 echo "--- Test 1: Advisory mode ---"
 set +e
-TABLE_ADV=$(MMFORGE_NO_OCCT_ADVISORY=1 bash "$GATE_SCRIPT" 2>/dev/null)
+TABLE_ADV=$(MMFORGE_NO_OCCT_ADVISORY=1 CARGO_TARGET_DIR="${CARGO_TARGET_DIR}" MMFORGE_CLI="${MMFORGE_CLI}" bash "$GATE_SCRIPT" 2>/dev/null)
 RC_ADV=$?
 set -e
 
@@ -92,7 +96,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "--- Test 2: Non-advisory mode ---"
 set +e
-TABLE=$(bash "$GATE_SCRIPT" 2>/dev/null)
+TABLE=$(CARGO_TARGET_DIR="${CARGO_TARGET_DIR}" MMFORGE_CLI="${MMFORGE_CLI}" bash "$GATE_SCRIPT" 2>/dev/null)
 RC=$?
 set -e
 

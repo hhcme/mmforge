@@ -206,26 +206,25 @@ final class OffscreenRenderTests: XCTestCase {
     }
 
     /// Interleaving proof: exactly one of {operationCompleted, timeoutFired}
-    /// is present — never both.
+    /// is present — never both.  Uses controlled alternation (not Bool.random).
     func testNeverBothOperationCompletedAndTimeoutFired() async {
-        // Run 20 races to increase chance of catching interleaving bugs.
-        for _ in 0..<20 {
+        // 10 fast-operation races (operation wins) + 10 slow-operation races (timeout wins).
+        for i in 0..<20 {
             var events: [OffscreenCoordinator.Outcome] = []
             let lock = NSLock()
             let observer: (OffscreenCoordinator.Outcome) -> Void = { outcome in
                 lock.lock(); events.append(outcome); lock.unlock()
             }
 
-            // 50% chance of fast operation vs slow with short timeout.
-            let fast = Bool.random()
+            let fastWins = (i % 2 == 0)  // alternate deterministically
             let _ = await OffscreenCoordinator.run(
-                timeout: fast ? 0.01 : 5.0,
+                timeout: fastWins ? 5.0 : 0.01,
                 observer: observer
             ) {
-                if fast {
+                if fastWins {
                     return NSImage(size: NSSize(width: 10, height: 10))
                 } else {
-                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    try? await Task.sleep(nanoseconds: 500_000_000) // 500ms > timeout
                     return nil
                 }
             }
@@ -239,9 +238,9 @@ final class OffscreenRenderTests: XCTestCase {
             let hasCompleted = captured.contains(.operationCompleted)
             let hasFired = captured.contains(.timeoutFired)
             XCTAssertFalse(hasCompleted && hasFired,
-                           "operationCompleted and timeoutFired must NEVER both be present. events: \(captured)")
+                           "iter \(i): operationCompleted and timeoutFired must NEVER both be present. events: \(captured)")
             XCTAssertTrue(hasCompleted || hasFired,
-                          "exactly one winner must be present. events: \(captured)")
+                          "iter \(i): exactly one winner must be present. events: \(captured)")
         }
     }
 
