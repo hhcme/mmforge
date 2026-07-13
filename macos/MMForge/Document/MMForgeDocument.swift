@@ -1033,11 +1033,10 @@ extension DocumentViewModel {
             exportError = "No renderer available."
             return
         }
-        Task {
-            guard let image = await renderer.captureImageAsync() else {
-                exportError = "Failed to capture viewport — no drawable available."
-                return
-            }
+        // Use offscreen render as primary path (works headless + GUI).
+        // Fall back to drawable capture only if offscreen fails.
+        let offscreenImage = renderer.renderOffscreenImage(size: CGSize(width: 1600, height: 1200))
+        if let image = offscreenImage {
             let panel = NSSavePanel()
             panel.title = "Export Image"
             panel.allowedContentTypes = [.png, .jpeg]

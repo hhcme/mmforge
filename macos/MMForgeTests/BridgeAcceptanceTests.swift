@@ -61,8 +61,32 @@ final class BridgeAcceptanceTests: XCTestCase {
     static let boxGltf          = "testdata/gltf/box.gltf"
     static let testDxf          = "crates/mmforge-format-dxf/testdata/test.dxf"
     static let lsmGolden        = "testdata/lsm/model_golden_v1.lsm"
+    static let deepAssembly     = "crates/mmforge-geometry/testdata/deep_assembly.stp"
 
     // MARK: - STEP assembly fixture
+
+    // MARK: - Deep assembly (multi-level, 7 nodes, 6 geometry)
+
+    func test_deep_assembly_multilevel_tree() throws {
+        let dto = try Self.loadDTO(relativePath: Self.deepAssembly)
+
+        // 2138-entity STEP: root + 3 sub-assemblies + 6 parts = 7+ nodes
+        XCTAssertGreaterThanOrEqual(dto.nodes.count, 7, "deep assembly: at least 7 nodes")
+        XCTAssertGreaterThanOrEqual(dto.meshes.count, 6, "deep assembly: at least 6 meshes")
+
+        // Find root
+        let root = dto.nodes.first { $0.parentIndex == -1 }
+        XCTAssertNotNil(root, "deep assembly has root node")
+        XCTAssertFalse(root!.hasGeometry, "root is assembly (no geometry)")
+
+        // Count leaf nodes (have geometry)
+        let leaves = dto.nodes.filter { $0.hasGeometry }
+        XCTAssertGreaterThanOrEqual(leaves.count, 6, "at least 6 leaf parts with geometry")
+
+        // Hierarchy: root → sub-assemblies → leaves
+        let nonRoot = dto.nodes.filter { $0.parentIndex >= 0 }
+        XCTAssertGreaterThanOrEqual(nonRoot.count, 6, "non-root nodes exist")
+    }
 
     func test_step_assembly_fixture_node_count_and_hierarchy() throws {
         let dto = try Self.loadDTO(relativePath: Self.assemblyStp)
@@ -714,8 +738,7 @@ final class BridgeAcceptanceTests: XCTestCase {
         }
 
         guard let hitIdx = hitNodeIndex else {
-            // No hit found — camera may be too far; skip with note
-            XCTAssertTrue(true, "no ray hit found at current camera position — skipping")
+            XCTFail("no ray hit found in 10×10 grid scan — camera may need fitToView first")
             return
         }
 
@@ -727,12 +750,12 @@ final class BridgeAcceptanceTests: XCTestCase {
         XCTAssertNotNil(hitMesh, "hit node should have a GPU mesh")
         XCTAssertTrue(hitMesh!.visible, "hit mesh should be visible")
 
-        // Hide the hit node, verify same point no longer hits it
-        vm.hiddenNodeIndices.insert(hitIdx)
-        renderer.setHiddenNodes(vm.hiddenNodeIndices)
+        // Hide hit node via formal API, verify same point no longer hits it
+        vm.selectNode(hitIdx)
+        vm.toggleNodeVisibility(hitIdx)
         let afterHide = renderer.pickNode(at: viewSize, point: hitPoint)
         XCTAssertNotEqual(afterHide, hitIdx,
-                          "same point should NOT hit hidden node \(hitIdx) after hide")
+                          "same point should NOT hit hidden node \(hitIdx) after toggleNodeVisibility")
     }
 
     // MARK: - Offscreen snapshot (headless, no MTKView.currentDrawable)
@@ -827,6 +850,86 @@ final class BridgeAcceptanceTests: XCTestCase {
         guard let restored = renderer.renderOffscreen(size: CGSize(width: 200, height: 150)) else { XCTFail(); return }
         let restoredCount = countNonBackgroundPixels(restored.0, width: restored.1, height: restored.2)
         XCTAssertGreaterThan(restoredCount, afterCount, "showAll restores rendered pixels")
+    }
+
+    // MARK: - PNG export (file-based, no GUI save panel)
+
+    /// Renders offscreen and writes a temporary PNG file. Returns the file URL.
+    func exportPNG(renderer: MetalRenderer, size: CGSize, suffix: String) -> URL? {
+        guard let image = renderer.renderOffscreenImage(size: size) else { return nil }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mmforge_test_\(suffix).png")
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { return nil }
+        try? png.write(to: url)
+        return url
+    }
+
+    func verifyPNGFile(_ url: URL, minBytes: Int = 100, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "PNG file exists", file: file, line: line)
+        guard let data = try? Data(contentsOf: url) else {
+            XCTFail("cannot read PNG", file: file, line: line); return
+        }
+        XCTAssertGreaterThan(data.count, minBytes, "PNG non-empty (>\(minBytes) bytes)", file: file, line: line)
+        // Verify valid PNG: first 8 bytes = PNG signature
+        let pngSig: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        XCTAssertEqual(Array(data.prefix(8)), pngSig, "valid PNG signature", file: file, line: line)
+        // Verify decodable
+        XCTAssertNotNil(NSImage(data: data), "PNG decodable as NSImage", file: file, line: line)
+    }
+
+    @MainActor
+    func test_png_export_assembly_solid_nonempty() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.renderMode = .solid
+        guard let url = exportPNG(renderer: renderer, size: CGSize(width: 400, height: 300), suffix: "assembly_solid") else { XCTFail(); return }
+        verifyPNGFile(url)
+    }
+
+    @MainActor
+    func test_png_export_all_render_modes_produce_files() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        for mode: RenderMode in [.solid, .wireframe, .solidWireframe, .transparent] {
+            renderer.renderMode = mode
+            guard let url = exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "mode_\(mode)") else { XCTFail("renderOffscreenImage nil for \(mode)"); return }
+            verifyPNGFile(url)
+        }
+    }
+
+    @MainActor
+    func test_png_export_two_sizes_aspect_correct() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.renderMode = .solid
+        guard let smallURL = exportPNG(renderer: renderer, size: CGSize(width: 200, height: 100), suffix: "small_2x1"),
+              let largeURL = exportPNG(renderer: renderer, size: CGSize(width: 600, height: 300), suffix: "large_2x1") else { XCTFail(); return }
+        verifyPNGFile(smallURL)
+        verifyPNGFile(largeURL)
+        // Larger image should have more bytes
+        let smallData = try Data(contentsOf: smallURL)
+        let largeData = try Data(contentsOf: largeURL)
+        XCTAssertGreaterThan(largeData.count, smallData.count, "larger viewport → larger PNG")
+    }
+
+    @MainActor
+    func test_png_export_hide_isolate_visible_changes_output() throws {
+        let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.renderMode = .solid
+
+        guard let allURL = exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "all_visible") else { XCTFail(); return }
+        verifyPNGFile(allURL)
+
+        // Hide all → fewer rendered pixels = smaller PNG
+        vm.hideAllNodes()
+        guard let hiddenURL = exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "all_hidden") else { XCTFail(); return }
+        verifyPNGFile(hiddenURL)
+        let allData = try Data(contentsOf: allURL)
+        let hiddenData = try Data(contentsOf: hiddenURL)
+        XCTAssertGreaterThan(allData.count, hiddenData.count, "all-visible PNG larger than all-hidden PNG")
     }
 
     // MARK: - Camera projection + reset concrete assertions

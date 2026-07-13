@@ -1040,11 +1040,30 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         return NSImage(cgImage: cgImage, size: NSSize(width: width, height: height))
     }
 
-    #if DEBUG
-    /// Render the current scene to an offscreen texture and return the raw RGBA8 pixel data.
+    /// Render the current scene to an offscreen texture and return as NSImage.
+    /// Does NOT require MTKView.currentDrawable — works headless or GUI.
+    /// - Parameter size: output image dimensions in pixels
+    /// - Returns: NSImage or nil on failure
+    func renderOffscreenImage(size: CGSize) -> NSImage? {
+        guard let (pixelData, width, height) = renderOffscreen(size: size) else { return nil }
+        let bytesPerRow = width * 4
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
+            .union(.byteOrder32Little)
+        guard let provider = CGDataProvider(data: pixelData as CFData),
+              let cgImage = CGImage(
+                width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                bytesPerRow: bytesPerRow, space: colorSpace, bitmapInfo: bitmapInfo,
+                provider: provider, decode: nil,
+                shouldInterpolate: false, intent: .defaultIntent
+              ) else { return nil }
+        return NSImage(cgImage: cgImage, size: NSSize(width: width, height: height))
+    }
+
+    /// Render to an offscreen texture, returning raw RGBA8 pixel data.
     /// Does NOT require MTKView.currentDrawable — works headless.
     /// - Parameter size: output image dimensions in pixels
-    /// - Returns: (pixelData, width, height) where pixelData is RGBA8, or nil on failure
+    /// - Returns: (pixelData, width, height) or nil on failure
     func renderOffscreen(size: CGSize) -> (Data, Int, Int)? {
         let width = Int(size.width)
         let height = Int(size.height)
@@ -1115,5 +1134,4 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
         return (pixelData, width, height)
     }
-    #endif
 }
