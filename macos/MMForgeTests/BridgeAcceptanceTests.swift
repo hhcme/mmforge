@@ -932,7 +932,81 @@ final class BridgeAcceptanceTests: XCTestCase {
         XCTAssertGreaterThan(allData.count, hiddenData.count, "all-visible PNG larger than all-hidden PNG")
     }
 
-    // MARK: - Camera projection + reset concrete assertions
+    @MainActor
+    func test_png_export_selected_highlight_changes_output() throws {
+        let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.renderMode = .solid
+
+        guard let beforeURL = exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "before_select") else { XCTFail(); return }
+        verifyPNGFile(beforeURL)
+
+        // Select a leaf and verify selection changes pixel output
+        vm.selectNode(1)
+        guard let afterURL = exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "after_select") else { XCTFail(); return }
+        verifyPNGFile(afterURL)
+
+        let beforeData = try Data(contentsOf: beforeURL)
+        let afterData = try Data(contentsOf: afterURL)
+        // Selection highlight should change pixel content
+        XCTAssertNotEqual(beforeData, afterData, "selection highlight changes PNG content")
+    }
+
+    @MainActor
+    func test_png_export_lsm_fixture_solid() throws {
+        guard let renderer = Self.headlessRenderer else { throw XCTSkip("MetalRenderer not available") }
+        renderer.clearMeshes()
+
+        let path = Self.fixturePath(Self.lsmGolden)
+        guard let doc = mmf_parse_file(path) else { throw XCTSkip("LSM parse failed") }
+        defer { mmf_document_free(doc) }
+        let dto = RustBridge.shared.buildDTO(from: doc)
+        let vm = DocumentViewModel(); vm.nodes = dto.nodes; vm.expandedIndices = [0]; vm.rebuildTreeCaches()
+        vm.setRenderer(renderer); vm.uploadToRenderer(dto: dto)
+
+        renderer.renderMode = .solid
+        guard let url = exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "lsm_solid") else { XCTFail(); return }
+        verifyPNGFile(url)
+    }
+
+    // MARK: - Sync/Async detection parity regression
+
+    @MainActor
+    func test_sync_async_lsm_detection_parity() throws {
+        let syncDTO = try Self.loadDTO(relativePath: Self.lsmGolden)
+        let data = try Self.fixtureData(Self.lsmGolden)
+
+        let vm = DocumentViewModel()
+        let loadedExpectation = expectation(description: "async loaded")
+        let cancellable = vm.$state
+            .filter { if case .loaded = $0 { true } else { false } }
+            .first()
+            .sink { _ in loadedExpectation.fulfill() }
+        vm.parseFile(data: data, fileExtension: "lsm")
+        wait(for: [loadedExpectation], timeout: 15.0)
+        cancellable.cancel()
+
+        XCTAssertEqual(vm.nodes.count, syncDTO.nodes.count, "sync/async LSM node count matches")
+        XCTAssertGreaterThan(vm.nodes.count, 0, "non-empty from both paths")
+    }
+
+    @MainActor
+    func test_sync_async_step_detection_parity() throws {
+        let syncDTO = try Self.loadDTO(relativePath: Self.assemblyStp)
+        let data = try Self.fixtureData(Self.assemblyStp)
+
+        let vm = DocumentViewModel()
+        let loadedExpectation = expectation(description: "async loaded")
+        let cancellable = vm.$state
+            .filter { if case .loaded = $0 { true } else { false } }
+            .first()
+            .sink { _ in loadedExpectation.fulfill() }
+        vm.parseFile(data: data, fileExtension: "stp")
+        wait(for: [loadedExpectation], timeout: 15.0)
+        cancellable.cancel()
+
+        XCTAssertEqual(vm.nodes.count, syncDTO.nodes.count, "sync/async STEP node count matches")
+    }
 
     @MainActor
     func test_camera_projection_toggle_changes_is_orthographic() throws {
