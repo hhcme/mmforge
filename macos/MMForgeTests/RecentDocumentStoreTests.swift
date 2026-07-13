@@ -2,18 +2,26 @@ import XCTest
 @testable import MMForge
 
 final class RecentDocumentStoreTests: XCTestCase {
-    private let store = RecentDocumentStore.shared
+    private var store: RecentDocumentStore!
+    private var suite: UserDefaults!
+    private var suiteName: String!
     private var tempFiles: [URL] = []
 
     override func setUp() {
         super.setUp()
-        store.clear()
-        store.waitForQueue()
+        // Each test gets an isolated UserDefaults suite, simulating a fresh
+        // launch without polluting UserDefaults.standard.
+        suiteName = "com.mmforge.test_\(UUID().uuidString)"
+        suite = UserDefaults(suiteName: suiteName)!
+        store = RecentDocumentStore(userDefaults: suite)
     }
 
     override func tearDown() {
         store.clear()
-        store.waitForQueue()
+        UserDefaults().removePersistentDomain(forName: suiteName)
+        store = nil
+        suite = nil
+        suiteName = nil
         for f in tempFiles {
             try? FileManager.default.removeItem(at: f)
         }
@@ -29,6 +37,8 @@ final class RecentDocumentStoreTests: XCTestCase {
         tempFiles.append(url)
         return url
     }
+
+    // MARK: - Existing tests (adapted for isolated UserDefaults)
 
     func testAddSingleURL() {
         let url = makeTempFile(name: "test1")
@@ -81,11 +91,10 @@ final class RecentDocumentStoreTests: XCTestCase {
         store.add(url: real)
         XCTAssertEqual(store.urls.count, 1)
 
-        // Add a stale path → real should survive (is reachable), stale might get filtered.
+        // Add a stale path — it is stored in urls (in-memory) because add()
+        // does not filter on write. Callers are expected to provide valid URLs.
         let stale = URL(fileURLWithPath: "/tmp/definitely_does_not_exist_928374.step")
         store.add(url: stale)
-        // stale is at front (just added, kept because it's the new URL).
-        // real is still reachable.
         XCTAssertGreaterThanOrEqual(store.urls.count, 1)
         XCTAssertEqual(store.urls.first, stale)
     }
@@ -95,12 +104,71 @@ final class RecentDocumentStoreTests: XCTestCase {
         let staleURL = URL(fileURLWithPath: "/tmp/definitely_does_not_exist_928374.step")
         let validURL = URL(fileURLWithPath: "/tmp")
 
-        // Set urls via add — the in-memory array is the source of truth.
         store.add(url: validURL)
-        store.add(url: staleURL) // stale is at front
+        store.add(url: staleURL)
 
         let filtered = store.recentURLs()
         XCTAssertFalse(filtered.contains(staleURL), "stale path should be filtered")
         XCTAssertTrue(filtered.contains(validURL), "valid path /tmp should be present")
+    }
+
+    // MARK: - New tests
+
+    /// Verify that URLs persist across simulated "restarts" (new store instance
+    /// backed by the same UserDefaults).
+    func testRestartPersistence() {
+        let url1 = makeTempFile(name: "persist_a")
+        let url2 = makeTempFile(name: "persist_b")
+
+        // Simulate first launch: create store A, add URLs.
+        let suiteName = "com.mmforge.test_persist"
+        let defaultsA = UserDefaults(suiteName: suiteName)!
+        let storeA = RecentDocumentStore(userDefaults: defaultsA)
+        storeA.add(url: url1)
+        storeA.add(url: url2)
+        XCTAssertEqual(storeA.urls.count, 2)
+        XCTAssertEqual(storeA.urls.first, url2)
+        XCTAssertEqual(storeA.urls.last, url1)
+
+        // Simulate restart: create store B with the same UserDefaults suite.
+        let defaultsB = UserDefaults(suiteName: suiteName)!
+        let storeB = RecentDocumentStore(userDefaults: defaultsB)
+        XCTAssertEqual(storeB.urls.count, 2, "URLs should survive restart")
+        XCTAssertEqual(storeB.urls.first, url2, "order should be preserved")
+        XCTAssertEqual(storeB.urls.last, url1, "order should be preserved")
+
+        // Clean up.
+        storeB.clear()
+        UserDefaults().removePersistentDomain(forName: suiteName)
+    }
+
+    /// Verify that stale (unreachable) URLs are cleaned from both the in-memory
+    /// list and the persisted UserDefaults on init.
+    func testStaleCleanupOnInit() {
+        let suiteName = "com.mmforge.test_stale_cleanup"
+        let defaults = UserDefaults(suiteName: suiteName)!
+
+        // Write a mix of valid and stale URLs directly to UserDefaults,
+        // simulating what a previous session might have persisted.
+        let validURL = makeTempFile(name: "valid_keep")
+        let staleURL = URL(fileURLWithPath: "/tmp/definitely_does_not_exist_928374.step")
+        let persistedStrings = [staleURL.path, validURL.path]
+        defaults.set(persistedStrings, forKey: "MMForgeRecentDocuments")
+
+        // Create a new store — init() should clean the stale entry.
+        let freshStore = RecentDocumentStore(userDefaults: defaults)
+        XCTAssertEqual(freshStore.urls.count, 1, "stale URL should be removed on init")
+        XCTAssertTrue(freshStore.urls.contains(validURL), "valid URL should survive")
+        XCTAssertFalse(freshStore.urls.contains(staleURL), "stale URL should be gone")
+
+        // Verify the persisted UserDefaults was also cleaned (saved back).
+        let savedStrings = defaults.stringArray(forKey: "MMForgeRecentDocuments") ?? []
+        XCTAssertEqual(savedStrings.count, 1, "persisted list should also be cleaned")
+        XCTAssertTrue(savedStrings.contains(validURL.path), "valid path should persist")
+        XCTAssertFalse(savedStrings.contains(staleURL.path), "stale path should be removed from persistence")
+
+        // Clean up.
+        freshStore.clear()
+        UserDefaults().removePersistentDomain(forName: suiteName)
     }
 }

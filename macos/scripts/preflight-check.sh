@@ -247,47 +247,53 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 10. perf-baseline (CLI geometry evidence, no GUI)
+# 10. Format geometry gate (real fixture parsing, no simulation)
 #
-# Exit codes from perf-baseline.sh:
+# Calls format-geometry-gate.sh which parses every fixture with the real CLI
+# and produces a structured verdict table with exit codes:
 #   0 = PASS — all formats REAL-GEOMETRY or 2D-ONLY
 #   1 = FAIL — hard ERROR (any format)
 #   2 = FAIL — PLACEHOLDER (empty model)
-#   3 = ADVISORY — STEP/IGES no-OCCT downgraded (MMFORGE_NO_OCCT_ADVISORY=1);
-#       no non-OCCT ERROR, no PLACEHOLDER
+#   3 = ADVISORY — STEP/IGES no-OCCT downgraded (MMFORGE_NO_OCCT_ADVISORY=1)
 #
 # MMFORGE_ALLOW_NO_OCCT=1 enables advisory downgrade for STEP/IGES only.
 # STL/glTF/DXF ERROR or any PLACEHOLDER always hard-fails (exit 1/2).
 # ---------------------------------------------------------------------------
-bold "10. CLI format geometry baseline"
+bold "10. CLI format geometry gate (real fixtures)"
 
 ADVISORY_NO_OCCT="${MMFORGE_ALLOW_NO_OCCT:-0}"
-PERF_OUTPUT="$ROOT/macos/build/.preflight-perf-baseline.log"
-mkdir -p "$(dirname "$PERF_OUTPUT")"
+GATE_OUTPUT="$ROOT/macos/build/.preflight-geometry-gate.log"
+mkdir -p "$(dirname "$GATE_OUTPUT")"
 GEOMETRY_ADVISORY=0
 
-echo -n "  perf-baseline.sh ... "
+echo -n "  format-geometry-gate.sh ... "
 set +e
 MMFORGE_NO_OCCT_ADVISORY="$ADVISORY_NO_OCCT" \
-  bash "$ROOT/docs/scripts/perf-baseline.sh" >"$PERF_OUTPUT" 2>&1
-PERF_RC=$?
+  bash "$ROOT/docs/scripts/format-geometry-gate.sh" >"$GATE_OUTPUT" 2>&1
+GATE_RC=$?
 set -e
 
-# Parse summary table to extract problematic format names
-PERF_ERROR_FORMATS=$(awk -F'|' '/^[|] (STEP|IGES|STL|glTF|DXF)/ && /ERROR/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); printf " %s", $2}' "$PERF_OUTPUT" 2>/dev/null || true)
-PERF_PLACEHOLDER_FORMATS=$(awk -F'|' '/^[|] (STEP|IGES|STL|glTF|DXF)/ && /PLACEHOLDER/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); printf " %s", $2}' "$PERF_OUTPUT" 2>/dev/null || true)
+# Parse error/placeholder formats from table
+GATE_ERROR_FORMATS=$(awk -F'|' '/^[|] (STEP|IGES|STL|glTF|DXF)/ && /ERROR/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); printf " %s", $2}' "$GATE_OUTPUT" 2>/dev/null || true)
+GATE_PLACEHOLDER_FORMATS=$(awk -F'|' '/^[|] (STEP|IGES|STL|glTF|DXF)/ && /PLACEHOLDER/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); printf " %s", $2}' "$GATE_OUTPUT" 2>/dev/null || true)
+GATE_FIXTURE_MISSING=$(awk -F'|' '/^[|] (STEP|IGES|STL|glTF|DXF)/ && /FIXTURE_MISSING/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); printf " %s", $2}' "$GATE_OUTPUT" 2>/dev/null || true)
 
-case "$PERF_RC" in
+case "$GATE_RC" in
   0)
     green "PASS (all formats REAL-GEOMETRY or 2D-ONLY)"
     ;;
   1)
-    red "FAIL — geometry ERROR:${PERF_ERROR_FORMATS}"
-    echo "    (Set MMFORGE_ALLOW_NO_OCCT=1 to accept STEP/IGES no-OCCT as advisory)"
+    if [ -n "$GATE_FIXTURE_MISSING" ]; then
+      red "FAIL — fixture missing:${GATE_FIXTURE_MISSING}"
+      echo "    (Test fixtures not found — check testdata/ and crates/*/testdata/)"
+    else
+      red "FAIL — geometry ERROR:${GATE_ERROR_FORMATS}"
+      echo "    (Set MMFORGE_ALLOW_NO_OCCT=1 to accept STEP/IGES no-OCCT as advisory)"
+    fi
     RESULT=1
     ;;
   2)
-    red "FAIL — geometry PLACEHOLDER:${PERF_PLACEHOLDER_FORMATS}"
+    red "FAIL — geometry PLACEHOLDER:${GATE_PLACEHOLDER_FORMATS}"
     echo "    (Parser returned empty model — format not wired or feature missing)"
     RESULT=1
     ;;
@@ -298,10 +304,28 @@ case "$PERF_RC" in
     GEOMETRY_ADVISORY=1
     ;;
   *)
-    red "FAIL — perf-baseline exited $PERF_RC"
+    red "FAIL — format-geometry-gate.sh exited $GATE_RC"
     RESULT=1
     ;;
 esac
+
+# ---------------------------------------------------------------------------
+# 11. Performance baseline (large model benchmark, separate from geometry gate)
+# ---------------------------------------------------------------------------
+bold "11. Performance baseline (large model benchmark)"
+
+echo -n "  perf-baseline.sh ... "
+set +e
+bash "$ROOT/docs/scripts/perf-baseline.sh" >/dev/null 2>&1
+PERF_RC=$?
+set -e
+
+if [ "$PERF_RC" -eq 0 ]; then
+  green "PASS"
+else
+  red "FAIL (exit $PERF_RC)"
+  RESULT=1
+fi
 
 # ---------------------------------------------------------------------------
 # Summary
