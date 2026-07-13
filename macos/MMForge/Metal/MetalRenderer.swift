@@ -1042,21 +1042,17 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     /// Render the current scene to an offscreen texture and return as NSImage.
     /// Does NOT require MTKView.currentDrawable — works headless or GUI.
+    /// This is the primary production API. Uses async command-buffer completion;
+    /// does NOT block the calling thread with waitUntilCompleted.
     /// - Parameter size: output image dimensions in pixels
-    /// - Returns: NSImage or nil on failure
-    func renderOffscreenImage(size: CGSize) -> NSImage? {
-        let semaphore = DispatchSemaphore(value: 0)
-        var result: NSImage? = nil
-        Task {
-            result = await renderOffscreenAsync(size: size)
-            semaphore.signal()
-        }
-        semaphore.wait()
-        return result
+    /// - Parameter timeout: seconds before giving up (default 10s)
+    /// - Returns: NSImage, or nil on invalid size, GPU error, or timeout
+    func renderOffscreenImage(size: CGSize, timeout: TimeInterval = 10.0) async -> NSImage? {
+        return await renderOffscreenAsync(size: size, timeout: timeout)
     }
 
-    /// Async offscreen render using command-buffer completion.
-    /// Does NOT block the calling thread. Uses withCheckedContinuation.
+    /// Async offscreen render using command-buffer completion handler.
+    /// Includes timeout via Task.sleep, single-resume guard, and GPU error checking.
     func renderOffscreenAsync(size: CGSize, timeout: TimeInterval = 10.0) async -> NSImage? {
         let width = Int(size.width); let height = Int(size.height)
         guard width > 0, height > 0 else { return nil }
@@ -1091,8 +1087,24 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
         encoder.endEncoding()
 
+        // Use withCheckedContinuation with timeout and single-resume protection
         return await withCheckedContinuation { cont in
-            cmdBuf.addCompletedHandler { _ in
+            var resumed = false
+            let lock = NSLock()
+            func safeResume(_ image: NSImage?) {
+                lock.lock(); defer { lock.unlock() }
+                guard !resumed else { return }
+                resumed = true
+                cont.resume(returning: image)
+            }
+
+            cmdBuf.addCompletedHandler { buf in
+                if buf.status != .completed {
+                    safeResume(nil); return
+                }
+                if let err = buf.error {
+                    safeResume(nil); return
+                }
                 let bpr = width * 4
                 var data = Data(count: bpr * height)
                 data.withUnsafeMutableBytes { offscreenTexture.getBytes($0.baseAddress!, bytesPerRow: bpr, from: MTLRegionMake2D(0,0,width,height), mipmapLevel: 0) }
@@ -1100,10 +1112,18 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 let bi = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue).union(.byteOrder32Little)
                 if let p = CGDataProvider(data: data as CFData),
                    let cg = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: bpr, space: cs, bitmapInfo: bi, provider: p, decode: nil, shouldInterpolate: false, intent: .defaultIntent) {
-                    cont.resume(returning: NSImage(cgImage: cg, size: NSSize(width: width, height: height)))
-                } else { cont.resume(returning: nil) }
+                    safeResume(NSImage(cgImage: cg, size: NSSize(width: width, height: height)))
+                } else {
+                    safeResume(nil)
+                }
             }
             cmdBuf.commit()
+
+            // Timeout protection
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                safeResume(nil) // timeout → nil
+            }
         }
     }
 

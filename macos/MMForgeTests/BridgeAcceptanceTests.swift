@@ -855,8 +855,8 @@ final class BridgeAcceptanceTests: XCTestCase {
     // MARK: - PNG export (file-based, no GUI save panel)
 
     /// Renders offscreen and writes a temporary PNG file. Returns the file URL.
-    func exportPNG(renderer: MetalRenderer, size: CGSize, suffix: String) -> URL? {
-        guard let image = renderer.renderOffscreenImage(size: size) else { return nil }
+    func exportPNG(renderer: MetalRenderer, size: CGSize, suffix: String) async -> URL? {
+        guard let image = await renderer.renderOffscreenImage(size: size) else { return nil }
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("mmforge_test_\(suffix).png")
         guard let tiff = image.tiffRepresentation,
@@ -880,32 +880,32 @@ final class BridgeAcceptanceTests: XCTestCase {
     }
 
     @MainActor
-    func test_png_export_assembly_solid_nonempty() throws {
+    func test_png_export_assembly_solid_nonempty() async throws {
         let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
         defer { mmf_document_free(doc) }
         renderer.renderMode = .solid
-        guard let url = exportPNG(renderer: renderer, size: CGSize(width: 400, height: 300), suffix: "assembly_solid") else { XCTFail(); return }
+        guard let url = await exportPNG(renderer: renderer, size: CGSize(width: 400, height: 300), suffix: "assembly_solid") else { XCTFail(); return }
         verifyPNGFile(url)
     }
 
     @MainActor
-    func test_png_export_all_render_modes_produce_files() throws {
+    func test_png_export_all_render_modes_produce_files() async throws {
         let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
         defer { mmf_document_free(doc) }
         for mode: RenderMode in [.solid, .wireframe, .solidWireframe, .transparent] {
             renderer.renderMode = mode
-            guard let url = exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "mode_\(mode)") else { XCTFail("renderOffscreenImage nil for \(mode)"); return }
+            guard let url = await exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "mode_\(mode)") else { XCTFail("renderOffscreenImage nil for \(mode)"); return }
             verifyPNGFile(url)
         }
     }
 
     @MainActor
-    func test_png_export_two_sizes_aspect_correct() throws {
+    func test_png_export_two_sizes_aspect_correct() async throws {
         let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
         defer { mmf_document_free(doc) }
         renderer.renderMode = .solid
-        guard let smallURL = exportPNG(renderer: renderer, size: CGSize(width: 200, height: 100), suffix: "small_2x1"),
-              let largeURL = exportPNG(renderer: renderer, size: CGSize(width: 600, height: 300), suffix: "large_2x1") else { XCTFail(); return }
+        guard let smallURL = await exportPNG(renderer: renderer, size: CGSize(width: 200, height: 100), suffix: "small_2x1"),
+              let largeURL = await exportPNG(renderer: renderer, size: CGSize(width: 600, height: 300), suffix: "large_2x1") else { XCTFail(); return }
         verifyPNGFile(smallURL)
         verifyPNGFile(largeURL)
         // Larger image should have more bytes
@@ -915,17 +915,17 @@ final class BridgeAcceptanceTests: XCTestCase {
     }
 
     @MainActor
-    func test_png_export_hide_isolate_visible_changes_output() throws {
+    func test_png_export_hide_isolate_visible_changes_output() async throws {
         let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
         defer { mmf_document_free(doc) }
         renderer.renderMode = .solid
 
-        guard let allURL = exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "all_visible") else { XCTFail(); return }
+        guard let allURL = await exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "all_visible") else { XCTFail(); return }
         verifyPNGFile(allURL)
 
         // Hide all → fewer rendered pixels = smaller PNG
         vm.hideAllNodes()
-        guard let hiddenURL = exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "all_hidden") else { XCTFail(); return }
+        guard let hiddenURL = await exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "all_hidden") else { XCTFail(); return }
         verifyPNGFile(hiddenURL)
         let allData = try Data(contentsOf: allURL)
         let hiddenData = try Data(contentsOf: hiddenURL)
@@ -933,17 +933,17 @@ final class BridgeAcceptanceTests: XCTestCase {
     }
 
     @MainActor
-    func test_png_export_selected_highlight_changes_output() throws {
+    func test_png_export_selected_highlight_changes_output() async throws {
         let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
         defer { mmf_document_free(doc) }
         renderer.renderMode = .solid
 
-        guard let beforeURL = exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "before_select") else { XCTFail(); return }
+        guard let beforeURL = await exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "before_select") else { XCTFail(); return }
         verifyPNGFile(beforeURL)
 
         // Select a leaf and verify selection changes pixel output
         vm.selectNode(1)
-        guard let afterURL = exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "after_select") else { XCTFail(); return }
+        guard let afterURL = await exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "after_select") else { XCTFail(); return }
         verifyPNGFile(afterURL)
 
         let beforeData = try Data(contentsOf: beforeURL)
@@ -953,7 +953,7 @@ final class BridgeAcceptanceTests: XCTestCase {
     }
 
     @MainActor
-    func test_png_export_lsm_fixture_solid() throws {
+    func test_png_export_lsm_fixture_solid() async throws {
         guard let renderer = Self.headlessRenderer else { throw XCTSkip("MetalRenderer not available") }
         renderer.clearMeshes()
 
@@ -965,7 +965,7 @@ final class BridgeAcceptanceTests: XCTestCase {
         vm.setRenderer(renderer); vm.uploadToRenderer(dto: dto)
 
         renderer.renderMode = .solid
-        guard let url = exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "lsm_solid") else { XCTFail(); return }
+        guard let url = await exportPNG(renderer: renderer, size: CGSize(width: 200, height: 150), suffix: "lsm_solid") else { XCTFail(); return }
         verifyPNGFile(url)
     }
 
