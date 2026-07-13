@@ -1,6 +1,6 @@
 # macOS Acceptance Remediation — Phase 1 Closure
 
-**提交**: `e095888` → `0757d74`（本轮最终）
+**提交**: `e095888` → `0757d74` → `5704394`（本轮最终）
 **日期**: 2026-07-13
 **范围**: OffscreenCoordinator 可观测化、RecentDocumentStore 依赖注入、CLI JSON 污染修复、真实门禁测试
 
