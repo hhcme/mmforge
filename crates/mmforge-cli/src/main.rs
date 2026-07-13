@@ -109,6 +109,9 @@ fn cmd_info(file: &std::path::Path, format: OutputFormat) {
             OutputFormat::Text => {
                 let bb = p.model.bounds();
                 println!("file    : {}", file.display());
+                if let Some(ref cf) = p.container_format {
+                    println!("container: {}", cf);
+                }
                 println!("format  : {}", p.model.header.source_format);
                 println!("nodes   : {}", p.model.scene.nodes.len());
                 println!("geoms   : {}", p.model.geometries.len());
@@ -128,6 +131,7 @@ fn cmd_info(file: &std::path::Path, format: OutputFormat) {
             OutputFormat::Json => {
                 let bb = p.model.bounds();
                 let json = serde_json::json!({
+                    "container_format": p.container_format,
                     "source_format": p.model.header.source_format,
                     "source_path": p.model.header.source_path,
                     "parser_version": p.model.header.parser_version,
@@ -302,6 +306,7 @@ fn cmd_benchmark(file: &std::path::Path, iterations: u32, format: OutputFormat) 
 struct Parsed {
     model: mmforge_core::LsmModel,
     warnings: Vec<mmforge_core::ParseWarning>,
+    container_format: Option<String>,
 }
 
 fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
@@ -313,10 +318,10 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
 
     // LSM/compressed LSM — read directly by extension.
     if ext == "lsm" {
-        return parse_lsm_file(path);
+        return parse_lsm_file(path).map(|mut p| { p.container_format = Some("LSM".into()); p });
     }
     if ext == "lsmc" {
-        return parse_lsmc_file(path);
+        return parse_lsmc_file(path).map(|mut p| { p.container_format = Some("LSMC".into()); p });
     }
 
     if ext == "stl" || ext == "stla" || ext == "stlb" {
@@ -328,8 +333,8 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
     // Magic detection for extension-less / unknown-extension files.
     if header.len() >= 4 {
         match &header[..4] {
-            b"LSMD" => return parse_lsm_file(path),
-            b"LSMC" => return parse_lsmc_file(path),
+            b"LSMD" => return parse_lsm_file(path).map(|mut p| { p.container_format = Some("LSM".into()); p }),
+            b"LSMC" => return parse_lsmc_file(path).map(|mut p| { p.container_format = Some("LSMC".into()); p }),
             _ => {}
         }
     }
@@ -357,6 +362,7 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
 fn parse_gltf_bridge(path: &std::path::Path) -> Result<Parsed, String> {
     mmforge_bridge::gltf_parser::parse_gltf(path)
         .map(|(output, _registry)| Parsed {
+            container_format: None,
             model: output.model,
             warnings: output.warnings,
         })
@@ -368,6 +374,7 @@ fn parse_lsm_file(path: &std::path::Path) -> Result<Parsed, String> {
     let model = mmforge_core::lsm::read_lsm(&mut std::io::Cursor::new(&data))
         .map_err(|e| format!("lsm read: {e}"))?;
     Ok(Parsed {
+            container_format: None,
         model,
         warnings: vec![],
     })
@@ -380,6 +387,7 @@ fn parse_lsmc_file(path: &std::path::Path) -> Result<Parsed, String> {
     let model = mmforge_core::lsm::read_lsm(&mut std::io::Cursor::new(&dec))
         .map_err(|e| format!("lsm read: {e}"))?;
     Ok(Parsed {
+        container_format: None,
         model,
         warnings: vec![],
     })
@@ -452,6 +460,7 @@ fn parse_binary_stl(data: &[u8]) -> Result<Parsed, String> {
     let gid = b.add_mesh(positions, normals, indices);
     let _ = b.add_child(root, "Part", Some(gid), None);
     Ok(Parsed {
+        container_format: None,
         model: b.build(),
         warnings: vec![],
     })
@@ -486,6 +495,7 @@ fn parse_ascii_stl(data: &[u8]) -> Result<Parsed, String> {
     let gid = b.add_mesh(positions, normals, indices);
     let _ = b.add_child(root, "Part", Some(gid), None);
     Ok(Parsed {
+        container_format: None,
         model: b.build(),
         warnings: vec![],
     })
@@ -507,6 +517,7 @@ fn parse_dxf_cli(path: &std::path::Path) -> Result<Parsed, String> {
     let (output, _drawing) =
         mmforge_format_dxf::parse_dxf(path).map_err(|e| format!("DXF: {e}"))?;
     Ok(Parsed {
+        container_format: None,
         model: output.model,
         warnings: output.warnings,
     })
@@ -542,6 +553,7 @@ fn enrich_model_with_tessellation(
     }
 
     Parsed {
+        container_format: None,
         model,
         warnings: output.warnings,
     }
@@ -1034,6 +1046,7 @@ mod tests {
             });
 
         let output = mmforge_core::model::ParseOutput {
+            container_format: None,
             model: b,
             warnings: vec![],
             stats: mmforge_core::model::ParseStats::default(),

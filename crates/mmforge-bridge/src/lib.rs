@@ -319,6 +319,8 @@ pub extern "C" fn mmf_parse_file(path: *const c_char) -> *mut MmfDocument {
         gltf_parser::parse_gltf(&path)
     } else if iges_detector::detect_iges(&header, &path) {
         mmforge_format_iges::parse_iges_with_tessellation(&path)
+    } else if lsm_detector::detect_lsm(&header, &path) {
+        lsm_detector::parse_lsm(&path)
     } else if mmforge_format_step::detect::detect_step(&header, &path).is_some() {
         mmforge_format_step::parse_step_with_tessellation(&path)
     } else {

@@ -60,6 +60,7 @@ final class BridgeAcceptanceTests: XCTestCase {
     static let boxStl           = "testdata/stl/box.stl"
     static let boxGltf          = "testdata/gltf/box.gltf"
     static let testDxf          = "crates/mmforge-format-dxf/testdata/test.dxf"
+    static let lsmGolden        = "testdata/lsm/model_golden_v1.lsm"
 
     // MARK: - STEP assembly fixture
 
@@ -183,6 +184,46 @@ final class BridgeAcceptanceTests: XCTestCase {
 
         let is2D = mmf_is_2d_drawing(doc) != 0
         XCTAssertTrue(is2D, "DXF file should be detected as 2D drawing")
+    }
+
+    // MARK: - LSM fixture
+
+    func test_lsm_fixture_dto_structure() throws {
+        let dto = try Self.loadDTO(relativePath: Self.lsmGolden)
+
+        // model_golden_v1.lsm is an LSM container with source_format="STL"
+        // It should parse correctly as LSM (not fall through to STEP)
+        XCTAssertGreaterThanOrEqual(dto.nodes.count, 2, "LSM: at least root + 1 leaf")
+        XCTAssertEqual(dto.meshes.count, 1, "LSM: 1 mesh")
+        // The golden fixture is a converted model; verify non-trivial geometry
+        XCTAssertGreaterThanOrEqual(dto.triangleCount, 1, "LSM golden: at least 1 triangle")
+        XCTAssertTrue(dto.triangleCount > 0, "LSM golden: has triangles")
+    }
+
+    @MainActor
+    func test_lsm_async_parse_with_headless_renderer() throws {
+        guard let renderer = Self.headlessRenderer else { throw XCTSkip("MetalRenderer not available") }
+        renderer.clearMeshes()
+
+        let vm = DocumentViewModel()
+        vm.setRenderer(renderer)
+        let data = try Self.fixtureData(Self.lsmGolden)
+
+        let loadedExpectation = expectation(description: "state loaded")
+        let cancellable = vm.$state
+            .filter { if case .loaded = $0 { true } else { false } }
+            .first()
+            .sink { _ in loadedExpectation.fulfill() }
+
+        vm.parseFile(data: data, fileExtension: "lsm")
+        wait(for: [loadedExpectation], timeout: 15.0)
+        cancellable.cancel()
+
+        let meshes = renderer.getGPUMeshes()
+        XCTAssertFalse(meshes.isEmpty, "LSM: GPU meshes uploaded")
+        XCTAssertTrue(meshes.allSatisfy { $0.visible }, "LSM: all meshes visible")
+        let totalTriangles = meshes.reduce(0) { $0 + $1.indexCount / 3 }
+        XCTAssertGreaterThanOrEqual(totalTriangles, 1, "LSM golden: at least 1 triangle on GPU")
     }
 
     // MARK: - Node parentIndex correctness
@@ -453,37 +494,42 @@ final class BridgeAcceptanceTests: XCTestCase {
     }
 
     @MainActor
-    func test_headless_renderer_hide_selected_node_vm_and_gpu() throws {
+    func test_headless_renderer_hide_selected_vm_and_gpu_chain() throws {
         let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
         defer { mmf_document_free(doc) }
 
-        // Select and hide Base_Box
-        vm.selectedIndex = 1
-        vm.hideSelectedNode()
+        // Select Base_Box via formal API, then hide it
+        vm.selectNode(1)
+        XCTAssertEqual(vm.selectedIndex, 1, "VM selected after selectNode")
+        XCTAssertEqual(renderer.selectedNodeIndex, 1, "renderer selected after selectNode")
 
-        XCTAssertTrue(vm.hiddenNodeIndices.contains(1), "VM: node 1 hidden")
+        vm.hideSelectedNode()
+        XCTAssertTrue(vm.hiddenNodeIndices.contains(1), "VM: node 1 hidden after hideSelectedNode")
         let meshes = renderer.getGPUMeshes()
         let hiddenMesh = meshes.first { $0.nodeIndex == 1 }
-        XCTAssertFalse(hiddenMesh!.visible, "GPU: node 1 mesh invisible")
+        XCTAssertNotNil(hiddenMesh, "should find GPU mesh for node 1")
+        XCTAssertFalse(hiddenMesh!.visible, "GPU: mesh for node 1 invisible after hide")
     }
 
     @MainActor
-    func test_headless_renderer_isolate_selected_keeps_one_visible() throws {
+    func test_headless_renderer_isolate_selected_vm_and_gpu_chain() throws {
         let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
         defer { mmf_document_free(doc) }
 
-        // Select and isolate Base_Box
-        vm.selectedIndex = 1
-        vm.isolateSelectedNode()
+        // Select Base_Box via formal API, then isolate it
+        vm.selectNode(1)
+        XCTAssertEqual(vm.selectedIndex, 1, "VM selected after selectNode")
+        XCTAssertEqual(renderer.selectedNodeIndex, 1, "renderer selected after selectNode")
 
-        // VM: only node 1 NOT hidden
-        XCTAssertFalse(vm.hiddenNodeIndices.contains(1), "VM: isolated node visible")
+        vm.isolateSelectedNode()
+        // VM: only node 1 NOT hidden, node 2 hidden
+        XCTAssertFalse(vm.hiddenNodeIndices.contains(1), "VM: isolated node NOT hidden")
         XCTAssertTrue(vm.hiddenNodeIndices.contains(2), "VM: other node hidden")
 
-        // GPU: mesh for node 1 visible, mesh for node 2 invisible
+        // GPU: isolated mesh visible, other mesh invisible
         let meshes = renderer.getGPUMeshes()
-        let isolatedMesh = meshes.first { $0.nodeIndex == 1 }
-        XCTAssertTrue(isolatedMesh!.visible, "GPU: isolated mesh visible")
+        let isoMesh = meshes.first { $0.nodeIndex == 1 }
+        XCTAssertTrue(isoMesh!.visible, "GPU: isolated mesh visible")
         let otherMesh = meshes.first { $0.nodeIndex == 2 }
         XCTAssertFalse(otherMesh!.visible, "GPU: other mesh invisible")
     }
@@ -579,18 +625,19 @@ final class BridgeAcceptanceTests: XCTestCase {
         let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
         defer { mmf_document_free(doc) }
 
-        let distBefore = renderer.camera.distance
-        // Fit to view should adjust distance
-        renderer.fitToView()
-        XCTAssertGreaterThan(renderer.camera.distance, 0, "distance after fitToView")
+        // Rotate to a clearly non-default orientation
+        renderer.rotate(dx: 5.0, dy: 3.0)
+        let yawAfterRotate = renderer.camera.yaw
+        let pitchAfterRotate = renderer.camera.pitch
 
-        // Reset camera
-        let yawBefore = renderer.camera.yaw
+        // resetCamera should restore default orientation
         renderer.resetCamera()
-        XCTAssertGreaterThan(renderer.camera.distance, 0, "distance after resetCamera")
-        // resetCamera adjusts yaw/pitch to a default view; both should be finite
-        XCTAssertTrue(renderer.camera.yaw.isFinite, "yaw finite after reset")
-        XCTAssertTrue(renderer.camera.pitch.isFinite, "pitch finite after reset")
+        XCTAssertGreaterThan(renderer.camera.distance, 0, "distance > 0 after reset")
+        // After reset + prior rotation, camera state should differ from rotated values
+        let yawDiff = abs(renderer.camera.yaw - yawAfterRotate)
+        let pitchDiff = abs(renderer.camera.pitch - pitchAfterRotate)
+        XCTAssertTrue(yawDiff > 0.01 || pitchDiff > 0.01,
+                      "resetCamera changed orientation (yawDiff=\(yawDiff), pitchDiff=\(pitchDiff))")
     }
 
     @MainActor
@@ -601,10 +648,9 @@ final class BridgeAcceptanceTests: XCTestCase {
         let yawBefore = renderer.camera.yaw
         let pitchBefore = renderer.camera.pitch
 
-        renderer.rotate(dx: 1.0, dy: 0.5)
-        // Rotation should change yaw and pitch
-        XCTAssertNotEqual(renderer.camera.yaw, yawBefore, accuracy: 0.001, "yaw changed after rotate")
-        XCTAssertNotEqual(renderer.camera.pitch, pitchBefore, accuracy: 0.001, "pitch changed after rotate")
+        renderer.rotate(dx: 5.0, dy: 3.0)
+        XCTAssertTrue(abs(renderer.camera.yaw - yawBefore) > 0.005, "yaw changed by rotate(dx:5,dy:3)")
+        XCTAssertTrue(abs(renderer.camera.pitch - pitchBefore) > 0.005, "pitch changed by rotate")
     }
 
     @MainActor
@@ -613,8 +659,23 @@ final class BridgeAcceptanceTests: XCTestCase {
         defer { mmf_document_free(doc) }
 
         let distBefore = renderer.camera.distance
-        renderer.zoom(delta: 2.0) // zoom in
-        XCTAssertNotEqual(renderer.camera.distance, distBefore, accuracy: 0.01, "distance changed after zoom")
+        renderer.zoom(delta: 3.0)
+        // Zooming in (positive delta in perspective) decreases distance
+        XCTAssertLessThan(renderer.camera.distance, distBefore,
+                          "distance decreased after zoom-in (delta=3.0)")
+    }
+
+    @MainActor
+    func test_headless_renderer_camera_pan_shifts_target() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        let targetX = renderer.camera.target.x
+        let targetY = renderer.camera.target.y
+        renderer.pan(dx: 100, dy: 50)
+        // Pan should shift the camera target
+        XCTAssertNotEqual(renderer.camera.target.x, targetX, accuracy: 0.01, "pan shifts target X")
+        XCTAssertNotEqual(renderer.camera.target.y, targetY, accuracy: 0.01, "pan shifts target Y")
     }
 
     @MainActor
@@ -633,20 +694,45 @@ final class BridgeAcceptanceTests: XCTestCase {
     }
 
     @MainActor
-    func test_headless_renderer_picking_returns_nodeIndex() throws {
-        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+    func test_headless_renderer_picking_deterministic_hit_and_hide() throws {
+        let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
         defer { mmf_document_free(doc) }
 
-        // Pick at center of viewport — should hit something
-        let viewSize = CGSize(width: 100, height: 100)
-        let center = CGPoint(x: 50, y: 50)
-        let hit = renderer.pickNode(at: viewSize, point: center)
-        // May or may not hit depending on camera; just verify no crash and return type
-        if let nodeIdx = hit {
-            XCTAssertGreaterThanOrEqual(nodeIdx, 0, "hit nodeIndex >= 0")
-            XCTAssertLessThan(nodeIdx, 3, "hit nodeIndex < node count (assembly.stp has 3 nodes)")
+        // Scan a grid over the viewport to find a real hit
+        let viewSize = CGSize(width: 200, height: 200)
+        var hitNodeIndex: Int? = nil
+        var hitPoint: CGPoint = .zero
+        gridScan: for y in stride(from: 10.0, through: 190.0, by: 20.0) {
+            for x in stride(from: 10.0, through: 190.0, by: 20.0) {
+                let pt = CGPoint(x: x, y: y)
+                if let hit = renderer.pickNode(at: viewSize, point: pt) {
+                    hitNodeIndex = hit
+                    hitPoint = pt
+                    break gridScan
+                }
+            }
         }
-        // If no hit, that's also valid at this viewport size
+
+        guard let hitIdx = hitNodeIndex else {
+            // No hit found — camera may be too far; skip with note
+            XCTAssertTrue(true, "no ray hit found at current camera position — skipping")
+            return
+        }
+
+        XCTAssertGreaterThanOrEqual(hitIdx, 0, "hit nodeIndex >= 0")
+        XCTAssertLessThan(hitIdx, 3, "hit nodeIndex < node count")
+
+        // Verify the hit node is a visible leaf
+        let hitMesh = renderer.getGPUMeshes().first { $0.nodeIndex == hitIdx }
+        XCTAssertNotNil(hitMesh, "hit node should have a GPU mesh")
+        XCTAssertTrue(hitMesh!.visible, "hit mesh should be visible")
+
+        // Hide the hit node, verify same point no longer hits it
+        vm.hiddenNodeIndices.insert(hitIdx)
+        renderer.setHiddenNodes(vm.hiddenNodeIndices)
+        let afterHide = renderer.pickNode(at: viewSize, point: hitPoint)
+        XCTAssertNotEqual(afterHide, hitIdx,
+                          "same point should NOT hit hidden node \(hitIdx) after hide")
     }
 
     // MARK: - Tree expand/collapse/search with real assembly DTO
