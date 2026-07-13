@@ -35,7 +35,7 @@ final class MockOffscreenRenderer: OffscreenRenderProtocol {
         let width = Int(size.width); let height = Int(size.height)
         guard width > 0, height > 0 else { return nil }
 
-        return await OffscreenCoordinator.run(timeout: timeout) {
+        return await OffscreenCoordinator.run(timeout: timeout) { [self] in
             switch result {
             case .success(let img): return img
             case .nilImage: return nil
@@ -294,9 +294,6 @@ final class OffscreenRenderTests: XCTestCase {
         let mock = MockOffscreenRenderer()
         let expected = NSImage(size: NSSize(width: 50, height: 50))
         mock.result = .delayedNil(5.0) // very slow operation
-        // Set timeout to a tiny value so it fires first.
-        mock.lastTimeout = nil
-        mock.lastSize = nil
 
         let start = Date()
         let image = await mock.renderOffscreenImage(
