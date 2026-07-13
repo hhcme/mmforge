@@ -40,6 +40,11 @@ fn main() {
     println!("cargo:rerun-if-env-changed=MMFORGE_SHIM_DIR");
     println!("cargo:rerun-if-changed=build.rs");
 
+    // Track shim source files — if they change, rebuild the shim.
+    println!("cargo:rerun-if-changed=shim/mmforge_occt_shim.cpp");
+    println!("cargo:rerun-if-changed=shim/mmforge_occt_shim.h");
+    println!("cargo:rerun-if-changed=shim/CMakeLists.txt");
+
     // Declare occt_found as a valid cfg.
     println!("cargo::rustc-check-cfg=cfg(occt_found)");
 
@@ -266,21 +271,40 @@ fn try_pkg_config() -> Option<OcctInfo> {
 // Shim auto-detection
 // ---------------------------------------------------------------------------
 
-/// Search common paths for `libmmforge_occt_shim.a`.
-/// Returns the parent directory if found, `None` otherwise.
+/// Search common paths for `libmmforge_occt_shim.a`, auto-building from
+/// source if the library is missing or any shim source file is newer.
+/// Returns the parent directory if found/built, `None` otherwise.
 #[cfg(feature = "occt")]
 fn find_shim_library() -> Option<std::path::PathBuf> {
     let manifest_dir =
         std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
+    let shim_src_dir = manifest_dir.join("shim");
+    let shim_build_dir = shim_src_dir.join("build");
+    let shim_lib = shim_build_dir.join("libmmforge_occt_shim.a");
 
-    let candidates: Vec<std::path::PathBuf> = vec![
-        // CMake default build output (with install prefix)
-        manifest_dir.join("shim/build/lib"),
-        // CMake build directory (no install)
-        manifest_dir.join("shim/build"),
-        // Cargo workspace target directory
+    // Try auto-build if OCCT is configured.
+    if let Ok(inc) = std::env::var("OCCT_INCLUDE_DIR") {
+        if let Ok(lib) = std::env::var("OCCT_LIB_DIR") {
+            let needs_build =
+                !shim_lib.is_file() || shim_sources_newer(&shim_src_dir, &shim_build_dir);
+            if needs_build {
+                println!("cargo:warning=Building OCCT shim (source newer or missing)...");
+                if let Err(e) = build_shim_with_cmake(&shim_src_dir, &shim_build_dir, &inc, &lib) {
+                    println!("cargo:warning=OCCT shim build failed: {e}");
+                    return None;
+                }
+                println!(
+                    "cargo:warning=OCCT shim built successfully at {}",
+                    shim_build_dir.display()
+                );
+            }
+        }
+    }
+
+    let candidates = vec![
+        shim_build_dir.clone(),
+        shim_build_dir.join("lib"),
         manifest_dir.join("../target/shim/lib"),
-        // System-wide installs
         std::path::PathBuf::from("/usr/local/lib"),
         std::path::PathBuf::from("/opt/homebrew/lib"),
     ];
@@ -292,6 +316,77 @@ fn find_shim_library() -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+/// Check if any shim source file (.cpp, .h, CMakeLists.txt) is newer than
+/// the built static library.
+#[cfg(feature = "occt")]
+fn shim_sources_newer(src_dir: &std::path::Path, build_dir: &std::path::Path) -> bool {
+    let lib = build_dir.join("libmmforge_occt_shim.a");
+    let lib_mtime = std::fs::metadata(&lib).ok().and_then(|m| m.modified().ok());
+
+    let sources = [
+        src_dir.join("mmforge_occt_shim.cpp"),
+        src_dir.join("mmforge_occt_shim.h"),
+        src_dir.join("CMakeLists.txt"),
+    ];
+
+    for src in &sources {
+        if let Ok(m) = std::fs::metadata(src) {
+            if let Ok(src_mtime) = m.modified() {
+                if let Some(lib_time) = lib_mtime {
+                    if src_mtime > lib_time {
+                        return true;
+                    }
+                } else {
+                    return true; // library has no mtime — rebuild
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Run CMake configure + build for the OCCT shim.
+#[cfg(feature = "occt")]
+fn build_shim_with_cmake(
+    src_dir: &std::path::Path,
+    build_dir: &std::path::Path,
+    occt_inc: &str,
+    occt_lib: &str,
+) -> Result<(), String> {
+    // Create build directory.
+    std::fs::create_dir_all(build_dir)
+        .map_err(|e| format!("mkdir {}: {e}", build_dir.display()))?;
+
+    // CMake configure — pass OCCT include/lib dirs.
+    let configure = std::process::Command::new("cmake")
+        .arg(src_dir)
+        .arg(format!("-DOpenCASCADE_INCLUDE_DIR={occt_inc}"))
+        .arg(format!("-DOpenCASCADE_LIBRARY_DIR={occt_lib}"))
+        .arg("-DCMAKE_BUILD_TYPE=Release")
+        .current_dir(build_dir)
+        .output()
+        .map_err(|e| format!("cmake configure: {e}"))?;
+
+    if !configure.status.success() {
+        let stderr = String::from_utf8_lossy(&configure.stderr);
+        return Err(format!("cmake configure failed: {stderr}"));
+    }
+
+    // CMake build.
+    let build = std::process::Command::new("cmake")
+        .args(["--build", "."])
+        .current_dir(build_dir)
+        .output()
+        .map_err(|e| format!("cmake build: {e}"))?;
+
+    if !build.status.success() {
+        let stderr = String::from_utf8_lossy(&build.stderr);
+        return Err(format!("cmake build failed: {stderr}"));
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

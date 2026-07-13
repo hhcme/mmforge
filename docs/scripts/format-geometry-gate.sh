@@ -40,29 +40,58 @@ if [ -f "$SHIM_LIB" ]; then
   HAVE_OCCT=1
 fi
 
-# Build CLI from source, with OCCT feature if shim exists.
-echo "# Building CLI from source (cargo build --release -p mmforge-cli)" >&2
-if [ -f "$SHIM_LIB" ]; then
-  echo "# OCCT shim detected at $SHIM_LIB — building with --features occt" >&2
-  cargo build --release -p mmforge-cli --features occt --manifest-path "$ROOT/Cargo.toml" || {
-    echo "# WARNING: OCCT build failed, falling back to no-OCCT build" >&2
-    HAVE_OCCT=0
-    cargo build --release -p mmforge-cli --manifest-path "$ROOT/Cargo.toml" || {
+# Build or reuse CLI.
+# MMFORGE_CLI overrides everything — skip build, use as-is.
+# CARGO_TARGET_DIR overrides the cargo target directory.
+# When OCCT is configured (OCCT_INCLUDE_DIR + OCCT_LIB_DIR set), build
+# with --features occt using a temporary target dir to isolate from
+# the default build cache and guarantee purity.
+TARGET_DIR_FLAG=""
+if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+  TARGET_DIR_FLAG="--target-dir $CARGO_TARGET_DIR"
+fi
+
+if [ -n "${MMFORGE_CLI:-}" ]; then
+  CLI="$MMFORGE_CLI"
+  echo "# Using MMFORGE_CLI: $CLI (skipping build)" >&2
+else
+  echo "# Building CLI from source (cargo build --release -p mmforge-cli)" >&2
+  if [ -n "${OCCT_INCLUDE_DIR:-}" ] && [ -n "${OCCT_LIB_DIR:-}" ]; then
+    echo "# OCCT configured (OCCT_INCLUDE_DIR/OCCT_LIB_DIR) — building with --features occt" >&2
+    cargo build --release -p mmforge-cli --features occt --manifest-path "$ROOT/Cargo.toml" $TARGET_DIR_FLAG || {
+      echo "# WARNING: OCCT build failed, falling back to no-OCCT build" >&2
+      HAVE_OCCT=0
+      cargo build --release -p mmforge-cli --manifest-path "$ROOT/Cargo.toml" $TARGET_DIR_FLAG || {
+        echo "FATAL: cargo build failed" >&2
+        exit 1
+      }
+    }
+  elif [ -f "$SHIM_LIB" ]; then
+    echo "# OCCT shim detected at $SHIM_LIB — building with --features occt" >&2
+    cargo build --release -p mmforge-cli --features occt --manifest-path "$ROOT/Cargo.toml" $TARGET_DIR_FLAG || {
+      echo "# WARNING: OCCT build failed, falling back to no-OCCT build" >&2
+      HAVE_OCCT=0
+      cargo build --release -p mmforge-cli --manifest-path "$ROOT/Cargo.toml" $TARGET_DIR_FLAG || {
+        echo "FATAL: cargo build failed" >&2
+        exit 1
+      }
+    }
+  else
+    echo "# No OCCT shim found — building without OCCT (STEP/IGES will be advisory)" >&2
+    cargo build --release -p mmforge-cli --manifest-path "$ROOT/Cargo.toml" $TARGET_DIR_FLAG || {
       echo "FATAL: cargo build failed" >&2
       exit 1
     }
-  }
-else
-  echo "# No OCCT shim found — building without OCCT (STEP/IGES will be advisory)" >&2
-  cargo build --release -p mmforge-cli --manifest-path "$ROOT/Cargo.toml" || {
-    echo "FATAL: cargo build failed" >&2
-    exit 1
-  }
+  fi
+
+  CLI="$ROOT/target/release/mmforge"
+  if [ -n "$TARGET_DIR_FLAG" ]; then
+    CLI="$CARGO_TARGET_DIR/release/mmforge"
+  fi
 fi
 
-CLI="$ROOT/target/release/mmforge"
 "$CLI" version >/dev/null 2>&1 || {
-  echo "FATAL: CLI binary check failed" >&2
+  echo "FATAL: CLI binary check failed ($CLI)" >&2
   exit 1
 }
 

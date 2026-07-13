@@ -149,8 +149,8 @@ final class OffscreenRenderTests: XCTestCase {
     // ----------------------------------------------------------------
 
     /// Operation completes first → timeout is cancelled.
-    /// Observer receives .operationCompleted then .timeoutCancelled.
-    /// Timeout must NOT fire (.timeoutFired absent).
+    /// Observer receives operationCompleted (winner) + timeoutCancelled (loser).
+    /// TimeoutFired must NOT appear.
     func testOperationWinsTimeoutCancelledNotFired() async {
         var events: [OffscreenCoordinator.Outcome] = []
         let lock = NSLock()
@@ -162,25 +162,22 @@ final class OffscreenRenderTests: XCTestCase {
             return NSImage(size: NSSize(width: 10, height: 10))
         }
 
-        XCTAssertNotNil(image, "operation must return image")
-        // Wait for the timeout task to observe its own cancellation.
+        XCTAssertNotNil(image)
         try? await Task.sleep(nanoseconds: 200_000_000)
 
         lock.lock()
         let captured = events
         lock.unlock()
 
-        XCTAssertTrue(captured.contains(.operationCompleted),
-                      "observer must see operationCompleted")
-        XCTAssertTrue(captured.contains(.timeoutCancelled),
-                      "observer must see timeoutCancelled (timeout was cancelled)")
+        XCTAssertTrue(captured.contains(.operationCompleted), "winner must be reported")
+        XCTAssertTrue(captured.contains(.timeoutCancelled), "loser must be reported")
         XCTAssertFalse(captured.contains(.timeoutFired),
-                       "timeout must NOT fire when operation wins")
+                       "timeoutFired must NOT appear when operation wins")
     }
 
     /// Timeout fires first → operation result discarded.
-    /// Observer receives .timeoutFired, result is nil.
-    /// Operation's .operationCompleted must NOT be observed.
+    /// Observer receives timeoutFired (winner) + timeoutCancelled (loser).
+    /// OperationCompleted must NOT appear.
     func testTimeoutWinsOperationDiscarded() async {
         var events: [OffscreenCoordinator.Outcome] = []
         let lock = NSLock()
@@ -190,22 +187,62 @@ final class OffscreenRenderTests: XCTestCase {
 
         let start = Date()
         let image = await OffscreenCoordinator.run(timeout: 0.05, observer: observer) {
-            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5s — will NOT complete
+            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5s
             return NSImage(size: NSSize(width: 10, height: 10))
         }
         let elapsed = Date().timeIntervalSince(start)
 
-        XCTAssertNil(image, "timeout must return nil")
-        XCTAssertLessThan(elapsed, 2.0, "must resolve via timeout, not wait 5s")
+        XCTAssertNil(image)
+        XCTAssertLessThan(elapsed, 2.0)
 
         lock.lock()
         let captured = events
         lock.unlock()
 
-        XCTAssertTrue(captured.contains(.timeoutFired),
-                      "observer must see timeoutFired")
+        XCTAssertTrue(captured.contains(.timeoutFired), "winner must be reported")
+        XCTAssertTrue(captured.contains(.timeoutCancelled), "loser must be reported")
         XCTAssertFalse(captured.contains(.operationCompleted),
-                       "operation must NOT complete (timeout won first)")
+                       "operationCompleted must NOT appear when timeout wins")
+    }
+
+    /// Interleaving proof: exactly one of {operationCompleted, timeoutFired}
+    /// is present — never both.
+    func testNeverBothOperationCompletedAndTimeoutFired() async {
+        // Run 20 races to increase chance of catching interleaving bugs.
+        for _ in 0..<20 {
+            var events: [OffscreenCoordinator.Outcome] = []
+            let lock = NSLock()
+            let observer: (OffscreenCoordinator.Outcome) -> Void = { outcome in
+                lock.lock(); events.append(outcome); lock.unlock()
+            }
+
+            // 50% chance of fast operation vs slow with short timeout.
+            let fast = Bool.random()
+            let _ = await OffscreenCoordinator.run(
+                timeout: fast ? 0.01 : 5.0,
+                observer: observer
+            ) {
+                if fast {
+                    return NSImage(size: NSSize(width: 10, height: 10))
+                } else {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    return nil
+                }
+            }
+
+            try? await Task.sleep(nanoseconds: 50_000_000)
+
+            lock.lock()
+            let captured = events
+            lock.unlock()
+
+            let hasCompleted = captured.contains(.operationCompleted)
+            let hasFired = captured.contains(.timeoutFired)
+            XCTAssertFalse(hasCompleted && hasFired,
+                           "operationCompleted and timeoutFired must NEVER both be present. events: \(captured)")
+            XCTAssertTrue(hasCompleted || hasFired,
+                          "exactly one winner must be present. events: \(captured)")
+        }
     }
 
     /// Rapid timeout: observer sees .timeoutFired, nil returned, done quickly.
@@ -287,8 +324,7 @@ final class OffscreenRenderTests: XCTestCase {
     // MARK: Controllable-blocking operation — timeout cancels task
     // ----------------------------------------------------------------
 
-    /// After timeout wins, the operation Task must receive cancellation
-    /// and must NOT emit operationCompleted.
+    /// Controllable-blocking operation — timeout cancels task.
     func testTimeoutCancelsOperationTaskNoOperationCompleted() async {
         actor Gate {
             var proceed = false
@@ -306,34 +342,32 @@ final class OffscreenRenderTests: XCTestCase {
 
         let start = Date()
         let image = await OffscreenCoordinator.run(timeout: 0.05, observer: observer) {
-            // Block until gate opens or we're cancelled.
             while true {
                 if Task.isCancelled {
                     await gate.markCancelled()
                     return NSImage?.none
                 }
                 if await gate.proceed { break }
-                try? await Task.sleep(nanoseconds: 1_000_000) // 1ms
+                try? await Task.sleep(nanoseconds: 1_000_000)
             }
             return NSImage(size: NSSize(width: 10, height: 10))
         }
         let elapsed = Date().timeIntervalSince(start)
 
-        XCTAssertNil(image, "timeout must return nil")
-        XCTAssertLessThan(elapsed, 2.0, "must resolve via timeout quickly")
+        XCTAssertNil(image)
+        XCTAssertLessThan(elapsed, 2.0)
 
-        // Now open the gate so the operation can observe its cancellation.
         await gate.open()
-        try? await Task.sleep(nanoseconds: 200_000_000) // wait for operation to notice
+        try? await Task.sleep(nanoseconds: 200_000_000)
 
         let wasCancelled = await gate.taskWasCancelled
-        XCTAssertTrue(wasCancelled, "operation Task must receive cancellation after timeout")
+        XCTAssertTrue(wasCancelled)
 
         lock.lock()
         let captured = events
         lock.unlock()
-        XCTAssertTrue(captured.contains(.timeoutFired), "observer must see timeoutFired")
+        XCTAssertTrue(captured.contains(.timeoutFired))
         XCTAssertFalse(captured.contains(.operationCompleted),
-                       "operationCompleted must NOT be emitted after timeout cancellation")
+                       "operationCompleted must NOT appear after cancellation")
     }
 }
