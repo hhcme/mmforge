@@ -1,5 +1,7 @@
 //! MMForge CLI — command-line interface for model inspection and conversion.
 
+mod gen_large_model;
+
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -41,6 +43,21 @@ enum Commands {
         iterations: u32,
         #[arg(long, default_value = "text")]
         format: OutputFormat,
+    },
+    /// Generate a deterministic large procedural model for performance baselines.
+    GenerateLargeModel {
+        /// Output .lsm file path.
+        #[arg(short, long, default_value = "/tmp/mmforge_gen.lsm")]
+        output: PathBuf,
+        /// Target minimum triangle count.
+        #[arg(long, default_value = "100000")]
+        triangles: usize,
+        /// Random seed for deterministic generation.
+        #[arg(long, default_value = "42")]
+        seed: u64,
+        /// Number of hierarchical levels including root (at least 3).
+        #[arg(long, default_value = "5")]
+        levels: u32,
     },
     /// Convert multiple files to .lsm/.lsmc in a single output directory.
     BatchConvert {
@@ -96,6 +113,12 @@ fn main() {
             format,
             continue_on_error,
         ),
+        Commands::GenerateLargeModel {
+            output,
+            triangles,
+            seed,
+            levels,
+        } => cmd_generate_large_model(&output, triangles, seed, levels),
     }
 }
 
@@ -298,6 +321,42 @@ fn cmd_benchmark(file: &std::path::Path, iterations: u32, format: OutputFormat) 
     }
 }
 
+fn cmd_generate_large_model(output: &std::path::Path, triangles: usize, seed: u64, levels: u32) {
+    if levels < 3 {
+        eprintln!("error: --levels must be at least 3 for meaningful scene hierarchy");
+        std::process::exit(1);
+    }
+    let params = gen_large_model::GenParams {
+        output: output.to_path_buf(),
+        triangles,
+        seed,
+        levels,
+    };
+    match gen_large_model::generate_large_model(&params) {
+        Ok((model, size)) => {
+            let stats = model.stats();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "output": output.display().to_string(),
+                    "file_size_bytes": size,
+                    "node_count": stats.node_count,
+                    "geometry_count": stats.geometry_count,
+                    "material_count": stats.material_count,
+                    "triangle_count": stats.triangle_count,
+                    "seed": seed,
+                    "levels": levels,
+                }))
+                .unwrap()
+            );
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 // ----------------------------------------------------------------
 // Detection + parsing
 // ----------------------------------------------------------------
@@ -318,10 +377,16 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
 
     // LSM/compressed LSM — read directly by extension.
     if ext == "lsm" {
-        return parse_lsm_file(path).map(|mut p| { p.container_format = Some("LSM".into()); p });
+        return parse_lsm_file(path).map(|mut p| {
+            p.container_format = Some("LSM".into());
+            p
+        });
     }
     if ext == "lsmc" {
-        return parse_lsmc_file(path).map(|mut p| { p.container_format = Some("LSMC".into()); p });
+        return parse_lsmc_file(path).map(|mut p| {
+            p.container_format = Some("LSMC".into());
+            p
+        });
     }
 
     if ext == "stl" || ext == "stla" || ext == "stlb" {
@@ -333,8 +398,18 @@ fn detect_and_parse(path: &std::path::Path) -> Result<Parsed, String> {
     // Magic detection for extension-less / unknown-extension files.
     if header.len() >= 4 {
         match &header[..4] {
-            b"LSMD" => return parse_lsm_file(path).map(|mut p| { p.container_format = Some("LSM".into()); p }),
-            b"LSMC" => return parse_lsmc_file(path).map(|mut p| { p.container_format = Some("LSMC".into()); p }),
+            b"LSMD" => {
+                return parse_lsm_file(path).map(|mut p| {
+                    p.container_format = Some("LSM".into());
+                    p
+                });
+            }
+            b"LSMC" => {
+                return parse_lsmc_file(path).map(|mut p| {
+                    p.container_format = Some("LSMC".into());
+                    p
+                });
+            }
             _ => {}
         }
     }
@@ -374,7 +449,7 @@ fn parse_lsm_file(path: &std::path::Path) -> Result<Parsed, String> {
     let model = mmforge_core::lsm::read_lsm(&mut std::io::Cursor::new(&data))
         .map_err(|e| format!("lsm read: {e}"))?;
     Ok(Parsed {
-            container_format: None,
+        container_format: None,
         model,
         warnings: vec![],
     })

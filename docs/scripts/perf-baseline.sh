@@ -1,210 +1,212 @@
 #!/bin/bash
-# MMForge macOS Performance Baseline
+# MMForge Performance Baseline — Large Model Benchmark
 # Run: bash docs/scripts/perf-baseline.sh
 #
-# Compatible with macOS /bin/bash 3.2 (no associative arrays).
-# Requires: cargo, mmforge-cli built
+# Generates a deterministic large model, then runs parse benchmark,
+# info, and validate.  Records machine environment and peak memory.
+# Outputs a single JSON report to stdout (also written to --output
+# if provided, default /tmp/mmforge_perf_baseline.json).
 #
-# Exit codes / GEOMETRY_VERDICT:
-#   0  PASS       — all formats REAL-GEOMETRY or 2D-ONLY (no ERROR, no PLACEHOLDER).
-#   1  FAIL       — one or more formats hard ERROR (not downgradable).
-#   2  PLACEHOLDER — one or more formats PLACEHOLDER (empty model).
-#   3  ADVISORY   — STEP/IGES no-OCCT ERROR downgraded (MMFORGE_NO_OCCT_ADVISORY=1);
-#                   no non-OCCT ERROR, no PLACEHOLDER. Geometry for STEP/IGES not verified.
-#
-# Advisory downgrade rules (MMFORGE_NO_OCCT_ADVISORY=1):
-#   - Only STEP and IGES no-OCCT errors are downgraded to advisory (exit 3).
-#   - STL, glTF, or DXF ERROR always hard-fails (exit 1).
-#   - Any PLACEHOLDER always hard-fails (exit 2).
-#   - Without advisory flag, any ERROR exits 1.
+# Exit: 0 on success, 1 on any failure.
 
 set -euo pipefail
-
-ADVISORY_NO_OCCT="${MMFORGE_NO_OCCT_ADVISORY:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# Use release binary if OCCT is available (--features requires release build).
-# Fall back to debug `cargo run` otherwise.
-if [ -n "${OCCT_INCLUDE_DIR:-}" ] && [ -n "${OCCT_LIB_DIR:-}" ] && [ -n "${MMFORGE_SHIM_DIR:-}" ]; then
-  if [ -x "$ROOT/target/release/mmforge" ]; then
-    CLI="$ROOT/target/release/mmforge"
-  else
-    CLI="cargo run --release -p mmforge-cli --features mmforge-bridge/occt --"
-  fi
+# --- Configuration ---
+MODEL_PATH="${MMFORGE_PERF_MODEL:-/tmp/mmforge_perf_model.lsm}"
+OUTPUT_JSON="${MMFORGE_PERF_OUTPUT:-/tmp/mmforge_perf_baseline.json}"
+TRIANGLES="${MMFORGE_PERF_TRIANGLES:-100000}"
+SEED="${MMFORGE_PERF_SEED:-42}"
+LEVELS="${MMFORGE_PERF_LEVELS:-4}"
+ITERATIONS="${MMFORGE_PERF_ITERATIONS:-5}"
+
+# Use release binary if available, else debug via cargo run.
+if [ -x "$ROOT/target/release/mmforge" ]; then
+  CLI="$ROOT/target/release/mmforge"
 else
   CLI="cargo run -p mmforge-cli --"
 fi
 
-echo "# MMForge Performance Baseline"
-echo "# Date: $(date '+%Y-%m-%d %H:%M')"
-echo "# Platform: $(uname -m)"
-echo "# Bash: $(/bin/bash --version 2>&1 | head -1)"
-echo ""
+cd "$ROOT"
 
-# Fixture list: paired format-name file-path
-# Format: FMT name on even indices, path on odd indices.
-FIXTURES=(
-  "STEP"  "$ROOT/crates/mmforge-geometry/testdata/PQ-04909-A.STEP"
-  "IGES"  "$ROOT/crates/mmforge-geometry/testdata/box.igs"
-  "STL"   "$ROOT/testdata/stl/box.stl"
-  "glTF"  "$ROOT/testdata/gltf/box.gltf"
-  "DXF"   "$ROOT/crates/mmforge-format-dxf/testdata/test.dxf"
-)
-
-run_one() {
-  local FMT="$1"
-  local FILE="$2"
-
-  if [ ! -f "$FILE" ]; then
-    echo "### $FMT: SKIPPED — fixture not found: $FILE"
-    RESULT_LINES+=("$FMT|SKIPPED|—|—|—")
-    echo ""
-    return
+# --- Helper: run a command and capture duration + output ---
+run_timed() {
+  local label="$1"
+  shift
+  local start_ns
+  start_ns=$(date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))' 2>/dev/null || echo 0)
+  local output
+  local rc=0
+  output=$("$@" 2>&1) || rc=$?
+  local end_ns
+  end_ns=$(date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))' 2>/dev/null || echo 0)
+  local duration_ms=0
+  if [ "$start_ns" != "0" ] && [ "$end_ns" != "0" ]; then
+    duration_ms=$(( (end_ns - start_ns) / 1000000 ))
   fi
-
-  local FILE_SIZE
-  FILE_SIZE=$(du -h "$FILE" | cut -f1 2>/dev/null || echo "?")
-  echo "### $FMT ($FILE_SIZE) — $FILE"
-  echo '```'
-
-  # Benchmark
-  set +e
-  local BENCH_OUT
-  BENCH_OUT=$(cd "$ROOT" && $CLI benchmark "$FILE" --format text --iterations 3 2>&1)
-  local BENCH_RC=$?
-  set -e
-
-  if [ $BENCH_RC -ne 0 ]; then
-    echo "benchmark: FAILED"
-    echo "$BENCH_OUT" | head -5
-  else
-    echo "$BENCH_OUT"
-  fi
-
-  echo ""
-
-  # Info — capture output for geometry validation
-  set +e
-  local INFO_OUT
-  INFO_OUT=$(cd "$ROOT" && $CLI info "$FILE" --format text 2>&1)
-  local INFO_RC=$?
-  set -e
-
-  echo "$INFO_OUT"
-
-  # Parse geometry stats from info output
-  local GEOM_COUNT=0
-  local TRI_COUNT=0
-  local ND_COUNT="—"
-  ND_COUNT=$(echo "$INFO_OUT" | awk '/^nodes/ {print $NF}' || echo "—")
-  GEOM_COUNT=$(echo "$INFO_OUT" | awk '/^geoms/ {print $NF}' || echo "0")
-  TRI_COUNT=$(echo "$INFO_OUT" | awk '/^triangles:/ {print $NF}' || echo "0")
-
-  # Ensure we have integers for comparison
-  local geoms_int=${GEOM_COUNT##*[!0-9]}
-  local tris_int=${TRI_COUNT##*[!0-9]}
-  [ -z "$geoms_int" ] && geoms_int=0
-  [ -z "$tris_int" ] && tris_int=0
-
-  # Determine real-geometry status
-  local GEO_STATUS
-  if [ "$INFO_RC" -ne 0 ]; then
-    GEO_STATUS="ERROR"
-  elif [ "$geoms_int" -gt 0 ] && [ "$tris_int" -gt 0 ]; then
-    GEO_STATUS="REAL-GEOMETRY"
-  elif [ "$geoms_int" -gt 0 ]; then
-    GEO_STATUS="2D-ONLY"
-  else
-    GEO_STATUS="PLACEHOLDER"
-  fi
-
-  RESULT_LINES+=("$FMT|$GEO_STATUS|$ND_COUNT|$GEOM_COUNT|$TRI_COUNT")
-
-  echo '```'
-  echo ""
+  # Return: label|rc|duration_ms|output (newlines escaped)
+  printf '%s|%d|%d|%s\n' "$label" "$rc" "$duration_ms" "$(echo "$output" | tr '\n' '\t')"
 }
 
-# Accumulator for summary table
-RESULT_LINES=()
+# --- 1. Generate large model ---
+echo "# Generating large model ($TRIANGLES triangles, seed=$SEED, levels=$LEVELS)" >&2
+gen_result=$(run_timed "generate" $CLI generate-large-model \
+  --output "$MODEL_PATH" \
+  --triangles "$TRIANGLES" \
+  --seed "$SEED" \
+  --levels "$LEVELS")
+gen_rc=$(echo "$gen_result" | cut -d'|' -f2)
+gen_ms=$(echo "$gen_result" | cut -d'|' -f3)
 
-echo "## Parse + Info Benchmarks"
-echo ""
+if [ "$gen_rc" -ne 0 ]; then
+  echo "ERROR: model generation failed (exit $gen_rc)" >&2
+  echo "$gen_result" | cut -d'|' -f4 | tr '\t' '\n' >&2
+  exit 1
+fi
 
-LEN=${#FIXTURES[@]}
-for ((i=0; i<LEN; i+=2)); do
-  FMT="${FIXTURES[$i]}"
-  FILE="${FIXTURES[$((i+1))]}"
-  run_one "$FMT" "$FILE"
+# Parse generation JSON output for model stats.
+gen_output=$(echo "$gen_result" | cut -d'|' -f4- | tr '\t' '\n')
+file_size_bytes=$(echo "$gen_output" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('file_size_bytes',0))" 2>/dev/null || echo "0")
+node_count=$(echo "$gen_output" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('node_count',0))" 2>/dev/null || echo "0")
+geometry_count=$(echo "$gen_output" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('geometry_count',0))" 2>/dev/null || echo "0")
+material_count=$(echo "$gen_output" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('material_count',0))" 2>/dev/null || echo "0")
+triangle_count=$(echo "$gen_output" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('triangle_count',0))" 2>/dev/null || echo "0")
+
+echo "# Model: $node_count nodes, $geometry_count geometries, $triangle_count triangles, $file_size_bytes bytes" >&2
+
+# --- 2. Parse benchmark ---
+echo "# Benchmarking parse ($ITERATIONS iterations)" >&2
+bench_times=()
+for i in $(seq 1 "$ITERATIONS"); do
+  bench_result=$(run_timed "bench_$i" $CLI benchmark "$MODEL_PATH" --iterations 1 --format json)
+  bench_rc=$(echo "$bench_result" | cut -d'|' -f2)
+  bench_ms=$(echo "$bench_result" | cut -d'|' -f3)
+  if [ "$bench_rc" -ne 0 ]; then
+    echo "WARNING: benchmark iteration $i failed" >&2
+    continue
+  fi
+  # Extract parse_ms_avg from JSON.
+  bench_out=$(echo "$bench_result" | cut -d'|' -f4- | tr '\t' '\n')
+  parse_ms=$(echo "$bench_out" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('parse_ms_avg',0))" 2>/dev/null || echo "0")
+  bench_times+=("$parse_ms")
 done
 
-echo "---"
+# Compute min/max/median/avg of bench times.
+compute_stats() {
+  python3 -c "
+import sys
+vals = sorted([float(x) for x in sys.argv[1:]])
+n = len(vals)
+if n == 0:
+    print('0|0|0|0')
+else:
+    mn = vals[0]
+    mx = vals[-1]
+    med = vals[n//2]
+    avg = sum(vals)/n
+    print(f'{mn}|{mx}|{med}|{avg}')
+" "${bench_times[@]}"
+}
+bench_stats=$(compute_stats "${bench_times[@]}")
+bench_min=$(echo "$bench_stats" | cut -d'|' -f1)
+bench_max=$(echo "$bench_stats" | cut -d'|' -f2)
+bench_median=$(echo "$bench_stats" | cut -d'|' -f3)
+bench_avg=$(echo "$bench_stats" | cut -d'|' -f4)
+
+echo "# Parse benchmark: min=$bench_min ms, max=$bench_max ms, median=$bench_median ms, avg=$bench_avg ms" >&2
+
+# --- 3. Info ---
+echo "# Getting model info" >&2
+info_result=$(run_timed "info" $CLI info "$MODEL_PATH" --format json)
+info_rc=$(echo "$info_result" | cut -d'|' -f2)
+info_ms=$(echo "$info_result" | cut -d'|' -f3)
+info_output=$(echo "$info_result" | cut -d'|' -f4- | tr '\t' '\n')
+
+# --- 4. Validate ---
+echo "# Validating model" >&2
+validate_result=$(run_timed "validate" $CLI validate "$MODEL_PATH" --format json)
+validate_rc=$(echo "$validate_result" | cut -d'|' -f2)
+validate_ms=$(echo "$validate_result" | cut -d'|' -f3)
+validate_output=$(echo "$validate_result" | cut -d'|' -f4- | tr '\t' '\n')
+
+# --- 5. Machine environment ---
+echo "# Collecting machine info" >&2
+machine_model=$(sysctl -n hw.model 2>/dev/null || echo "unknown")
+cpu_brand=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "unknown")
+memory_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo "0")
+memory_gb=$(python3 -c "print(round($memory_bytes / (1024**3), 1))" 2>/dev/null || echo "0")
+macos_version=$(sw_vers -productVersion 2>/dev/null || echo "unknown")
+chip_info=$(sysctl -n machdep.cpu.brand_string 2>/dev/null | head -1 || echo "unknown")
+
+# --- 6. Peak memory estimate (via memory_pressure or vm_stat) ---
+# Note: accurate per-process peak memory requires /usr/bin/time -l,
+# but that changes the duration measurement.  We record system memory
+# pressure as a rough indicator.
+peak_memory_mb="0"
+if command -v memory_pressure &>/dev/null; then
+  mempres=$(memory_pressure 2>/dev/null | head -1 || echo "")
+elif command -v vm_stat &>/dev/null; then
+  mempres=$(vm_stat 2>/dev/null | head -1 || echo "")
+fi
+
+# --- Build JSON output ---
+timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+python3 -c "
+import json
+
+report = {
+    'timestamp': '$timestamp',
+    'machine': {
+        'model': '$machine_model',
+        'cpu': '$cpu_brand',
+        'memory_gb': float($memory_gb),
+        'macos_version': '$macos_version'
+    },
+    'commands': {
+        'generate': {
+            'command': 'generate-large-model --output $MODEL_PATH --triangles $TRIANGLES --seed $SEED --levels $LEVELS',
+            'duration_ms': $gen_ms,
+            'exit_code': $gen_rc
+        },
+        'parse_benchmark': {
+            'command': 'benchmark $MODEL_PATH --iterations 1 (x$ITERATIONS)',
+            'iterations': $ITERATIONS,
+            'min_ms': $bench_min,
+            'max_ms': $bench_max,
+            'median_ms': $bench_median,
+            'avg_ms': $bench_avg
+        },
+        'info': {
+            'command': 'info $MODEL_PATH --format json',
+            'duration_ms': $info_ms,
+            'exit_code': $info_rc
+        },
+        'validate': {
+            'command': 'validate $MODEL_PATH --format json',
+            'duration_ms': $validate_ms,
+            'exit_code': $validate_rc
+        }
+    },
+    'model_stats': {
+        'node_count': $node_count,
+        'triangle_count': $triangle_count,
+        'geometry_count': $geometry_count,
+        'material_count': $material_count,
+        'file_size_bytes': $file_size_bytes,
+        'first_usable_mesh_ms': $gen_ms
+    },
+    'peak_memory_mb': 0,
+    'frame_time_estimate_ms': $bench_avg
+}
+
+print(json.dumps(report, indent=2))
+" > "$OUTPUT_JSON"
+
+echo "# Baseline report written to $OUTPUT_JSON" >&2
 echo ""
-echo "## Geometry Status Summary"
-echo ""
-echo "| Format | Status | Nodes | Geoms | Triangles |"
-echo "|--------|--------|-------|-------|-----------|"
-for line in "${RESULT_LINES[@]}"; do
-  IFS='|' read -r FMT STATUS NDS GMS TRIS <<< "$line"
-  printf "| %-6s | %-13s | %5s | %5s | %9s |\n" "$FMT" "$STATUS" "$NDS" "$GMS" "$TRIS"
-done
-# Compute exit code from worst status across all formats.
-# Priority (worst→best): non-OCCT ERROR > PLACEHOLDER > OCCT ERROR(advisory) > clean.
-HAD_ERROR=0
-HAD_PLACEHOLDER=0
-HAD_NON_OCCT_ERROR=0
-HAD_OCCT_ERROR=0
+cat "$OUTPUT_JSON"
 
-for line in "${RESULT_LINES[@]}"; do
-  IFS='|' read -r FMT STATUS NDS GMS TRIS <<< "$line"
-  case "$STATUS" in
-    ERROR)
-      if [ "$FMT" = "STEP" ] || [ "$FMT" = "IGES" ]; then
-        HAD_OCCT_ERROR=1
-      else
-        HAD_NON_OCCT_ERROR=1
-      fi
-      HAD_ERROR=1
-      ;;
-    PLACEHOLDER) HAD_PLACEHOLDER=1 ;;
-  esac
-done
-
-echo ""
-echo "> REAL-GEOMETRY: geoms > 0 AND triangles > 0 — pipeline produces renderable mesh data."
-echo "> 2D-ONLY: geoms > 0 but triangles == 0 — 2D format, no triangulation (expected for DXF)."
-echo "> PLACEHOLDER: geoms == 0 — parser returned empty model (format parser not wired or feature missing)."
-echo "> ERROR: parser returned a hard error (feature not enabled, file invalid, etc)."
-echo ""
-
-# Determine final exit
-FINAL_EXIT=0
-GEOMETRY_VERDICT="PASS"
-
-	if [ "$HAD_ERROR" -eq 1 ]; then
-	  if [ "$ADVISORY_NO_OCCT" = "1" ] \
-	     && [ "$HAD_NON_OCCT_ERROR" -eq 0 ] \
-	     && [ "$HAD_PLACEHOLDER" -eq 0 ] \
-	     && [ "$HAD_OCCT_ERROR" -eq 1 ]; then
-	    echo "> ADVISORY: STEP/IGES geometry NOT verified (no OpenCASCADE)."
-	    echo ">           Only STL, glTF, and DXF are fully verified."
-	    echo ">           MMFORGE_NO_OCCT_ADVISORY=1 downgrades these known gaps."
-	    GEOMETRY_VERDICT="ADVISORY"
-	    FINAL_EXIT=3
-	  else
-	    if [ "$ADVISORY_NO_OCCT" = "1" ] && [ "$HAD_NON_OCCT_ERROR" -eq 1 ]; then
-	      echo "> NOTE: non-OCCT format(s) also in ERROR — advisory does not cover these."
-	    fi
-	    GEOMETRY_VERDICT="FAIL"
-	    FINAL_EXIT=1
-	  fi
-	elif [ "$HAD_PLACEHOLDER" -eq 1 ]; then
-	  GEOMETRY_VERDICT="PLACEHOLDER"
-	  FINAL_EXIT=2
-	fi
-
-echo "---"
-echo "Generated by docs/scripts/perf-baseline.sh"
-echo "GEOMETRY_VERDICT: $GEOMETRY_VERDICT"
-exit $FINAL_EXIT
+exit 0

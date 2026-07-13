@@ -224,7 +224,11 @@ impl<'a> IgesShapeHandle<'a> {
         reader_ptr: *const super::sys::IgesControlReader,
         ptr: *const super::sys::TopoDsShape,
     ) -> Self {
-        Self { reader_ptr, ptr, _lifetime: std::marker::PhantomData }
+        Self {
+            reader_ptr,
+            ptr,
+            _lifetime: std::marker::PhantomData,
+        }
     }
 
     pub fn shape_type(&self) -> ShapeType {
@@ -417,7 +421,11 @@ impl<'a> ShapeHandle<'a> {
         reader_ptr: *const super::sys::StepControlReader,
         ptr: *const super::sys::TopoDsShape,
     ) -> Self {
-        Self { reader_ptr, ptr, _lifetime: std::marker::PhantomData }
+        Self {
+            reader_ptr,
+            ptr,
+            _lifetime: std::marker::PhantomData,
+        }
     }
 
     /// Shape type (solid, shell, face, etc.).
@@ -503,8 +511,7 @@ impl StepReaderAdapter {
     pub fn enum_tree_nodes(&self) -> Vec<TreeNode> {
         #[cfg(occt_found)]
         {
-            let count =
-                unsafe { super::sys::mmforge_shape_tree_node_count(self.ptr) as usize };
+            let count = unsafe { super::sys::mmforge_shape_tree_node_count(self.ptr) as usize };
             let mut nodes = Vec::with_capacity(count);
             for i in 0..count {
                 let raw = unsafe {
@@ -523,17 +530,44 @@ impl StepReaderAdapter {
                 };
                 let shape_type = occt_to_shape_type(raw.shape_type);
                 let bounds = BoundingBox::new(
-                    glam::Vec3::new(raw.bbox.min_x as f32, raw.bbox.min_y as f32, raw.bbox.min_z as f32),
-                    glam::Vec3::new(raw.bbox.max_x as f32, raw.bbox.max_y as f32, raw.bbox.max_z as f32),
+                    glam::Vec3::new(
+                        raw.bbox.min_x as f32,
+                        raw.bbox.min_y as f32,
+                        raw.bbox.min_z as f32,
+                    ),
+                    glam::Vec3::new(
+                        raw.bbox.max_x as f32,
+                        raw.bbox.max_y as f32,
+                        raw.bbox.max_z as f32,
+                    ),
                 );
                 let is_assembly = raw.is_assembly != 0;
                 let transform = glam::Mat4::from_cols_array(&[
-                    raw.location[0] as f32, raw.location[1] as f32, raw.location[2] as f32, raw.location[3] as f32,
-                    raw.location[4] as f32, raw.location[5] as f32, raw.location[6] as f32, raw.location[7] as f32,
-                    raw.location[8] as f32, raw.location[9] as f32, raw.location[10] as f32, raw.location[11] as f32,
-                    raw.location[12] as f32, raw.location[13] as f32, raw.location[14] as f32, raw.location[15] as f32,
+                    raw.location[0] as f32,
+                    raw.location[1] as f32,
+                    raw.location[2] as f32,
+                    raw.location[3] as f32,
+                    raw.location[4] as f32,
+                    raw.location[5] as f32,
+                    raw.location[6] as f32,
+                    raw.location[7] as f32,
+                    raw.location[8] as f32,
+                    raw.location[9] as f32,
+                    raw.location[10] as f32,
+                    raw.location[11] as f32,
+                    raw.location[12] as f32,
+                    raw.location[13] as f32,
+                    raw.location[14] as f32,
+                    raw.location[15] as f32,
                 ]);
-                nodes.push(TreeNode { parent_index: raw.parent_index, name, shape_type, bounds, is_assembly, transform });
+                nodes.push(TreeNode {
+                    parent_index: raw.parent_index,
+                    name,
+                    shape_type,
+                    bounds,
+                    is_assembly,
+                    transform,
+                });
             }
             nodes
         }
@@ -548,10 +582,16 @@ impl StepReaderAdapter {
     pub fn tree_leaf_shape_ptr(&self, index: usize) -> Option<*const super::sys::TopoDsShape> {
         #[cfg(occt_found)]
         {
-            let raw = unsafe { super::sys::mmforge_shape_get_tree_node(self.ptr, index as std::ffi::c_int) };
-            if raw.is_null() { return None; }
+            let raw = unsafe {
+                super::sys::mmforge_shape_get_tree_node(self.ptr, index as std::ffi::c_int)
+            };
+            if raw.is_null() {
+                return None;
+            }
             let raw = unsafe { &*raw };
-            if raw.is_assembly != 0 || raw.shape.is_null() { return None; }
+            if raw.is_assembly != 0 || raw.shape.is_null() {
+                return None;
+            }
             Some(raw.shape)
         }
         #[cfg(not(occt_found))]
@@ -575,28 +615,64 @@ impl IgesReaderAdapter {
                 let raw = unsafe {
                     super::sys::mmforge_iges_shape_get_tree_node(self.ptr, i as std::ffi::c_int)
                 };
-                if raw.is_null() { continue; }
+                if raw.is_null() {
+                    continue;
+                }
                 let raw = unsafe { &*raw };
-                let name = if raw.name.is_null() { String::new() }
-                           else { unsafe { CStr::from_ptr(raw.name) }.to_string_lossy().into_owned() };
+                let name = if raw.name.is_null() {
+                    String::new()
+                } else {
+                    unsafe { CStr::from_ptr(raw.name) }
+                        .to_string_lossy()
+                        .into_owned()
+                };
                 let shape_type = occt_to_shape_type(raw.shape_type);
                 let bounds = BoundingBox::new(
-                    glam::Vec3::new(raw.bbox.min_x as f32, raw.bbox.min_y as f32, raw.bbox.min_z as f32),
-                    glam::Vec3::new(raw.bbox.max_x as f32, raw.bbox.max_y as f32, raw.bbox.max_z as f32),
+                    glam::Vec3::new(
+                        raw.bbox.min_x as f32,
+                        raw.bbox.min_y as f32,
+                        raw.bbox.min_z as f32,
+                    ),
+                    glam::Vec3::new(
+                        raw.bbox.max_x as f32,
+                        raw.bbox.max_y as f32,
+                        raw.bbox.max_z as f32,
+                    ),
                 );
                 let is_assembly = raw.is_assembly != 0;
                 let transform = glam::Mat4::from_cols_array(&[
-                    raw.location[0] as f32, raw.location[1] as f32, raw.location[2] as f32, raw.location[3] as f32,
-                    raw.location[4] as f32, raw.location[5] as f32, raw.location[6] as f32, raw.location[7] as f32,
-                    raw.location[8] as f32, raw.location[9] as f32, raw.location[10] as f32, raw.location[11] as f32,
-                    raw.location[12] as f32, raw.location[13] as f32, raw.location[14] as f32, raw.location[15] as f32,
+                    raw.location[0] as f32,
+                    raw.location[1] as f32,
+                    raw.location[2] as f32,
+                    raw.location[3] as f32,
+                    raw.location[4] as f32,
+                    raw.location[5] as f32,
+                    raw.location[6] as f32,
+                    raw.location[7] as f32,
+                    raw.location[8] as f32,
+                    raw.location[9] as f32,
+                    raw.location[10] as f32,
+                    raw.location[11] as f32,
+                    raw.location[12] as f32,
+                    raw.location[13] as f32,
+                    raw.location[14] as f32,
+                    raw.location[15] as f32,
                 ]);
-                nodes.push(TreeNode { parent_index: raw.parent_index, name, shape_type, bounds, is_assembly, transform });
+                nodes.push(TreeNode {
+                    parent_index: raw.parent_index,
+                    name,
+                    shape_type,
+                    bounds,
+                    is_assembly,
+                    transform,
+                });
             }
             nodes
         }
         #[cfg(not(occt_found))]
-        { Vec::new() }
+        {
+            Vec::new()
+        }
     }
 
     /// Return the raw shape pointer for a leaf node (IGES).
@@ -606,13 +682,20 @@ impl IgesReaderAdapter {
             let raw = unsafe {
                 super::sys::mmforge_iges_shape_get_tree_node(self.ptr, index as std::ffi::c_int)
             };
-            if raw.is_null() { return None; }
+            if raw.is_null() {
+                return None;
+            }
             let raw = unsafe { &*raw };
-            if raw.is_assembly != 0 || raw.shape.is_null() { return None; }
+            if raw.is_assembly != 0 || raw.shape.is_null() {
+                return None;
+            }
             Some(raw.shape)
         }
         #[cfg(not(occt_found))]
-        { let _ = index; None }
+        {
+            let _ = index;
+            None
+        }
     }
 }
 

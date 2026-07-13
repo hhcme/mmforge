@@ -1,10 +1,11 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-mod dxf_detector;
+pub(crate) mod dxf_detector;
+pub mod format_route;
 pub mod gltf_parser;
-mod iges_detector;
-mod lsm_detector;
-mod stl_parser;
+pub(crate) mod iges_detector;
+pub(crate) mod lsm_detector;
+pub(crate) mod stl_parser;
 
 pub mod job;
 
@@ -204,26 +205,18 @@ fn build_document(output: ParseOutput, registry: TessellationRegistry) -> MmfDoc
     }
 }
 
-/// Shared parse logic used by both `mmf_parse_file` and `job::run_open_pipeline`.
+/// Get a progress label for the detected format.
 ///
-/// Detects the format from `header` and runs the appropriate parser.
-/// Returns a boxed `MmfDocument` on success.
+/// All call sites (sync `mmf_parse_file`, async `run_open_pipeline`,
+/// and the loading UI) derive from the same `format_route::detect()`.
 pub(crate) fn detect_format_name(header: &[u8], path: &std::path::Path) -> &'static str {
-    if dxf_detector::detect_dxf(header, path) {
-        "DXF detected — parsing"
-    } else if stl_parser::detect_stl(header, path) {
-        "STL detected — parsing"
-    } else if gltf_parser::detect_gltf(header, path) {
-        "glTF detected — parsing"
-    } else if iges_detector::detect_iges(header, path) {
-        "IGES detected — parsing"
-    } else if lsm_detector::detect_lsm(header, path) {
-        "LSM detected — parsing"
-    } else {
-        "STEP detected — parsing"
-    }
+    format_route::detect(header, path).as_progress_label()
 }
 
+/// Shared parse + build pipeline used by the async job.
+///
+/// Detects the format from `header` and dispatches to the appropriate
+/// progressive parser.  After parsing, builds a `MmfDocument`.
 pub(crate) fn parse_with_detection(
     path: &std::path::Path,
     header: &[u8],
@@ -234,22 +227,8 @@ pub(crate) fn parse_with_detection(
         return Err(mmforge_core::error::Error::Cancelled);
     }
 
-    // Detection cascade: DXF → STL → glTF → IGES → LSM → STEP (fallback).
-    let result = if dxf_detector::detect_dxf(header, path) {
-        mmforge_format_dxf::parse_dxf_with_progress(path, progress, Some(cancel))
-            .map(|(output, _drawing)| (output, TessellationRegistry::new()))
-    } else if stl_parser::detect_stl(header, path) {
-        stl_parser::parse_stl_with_progress(path, progress, Some(cancel))
-    } else if gltf_parser::detect_gltf(header, path) {
-        gltf_parser::parse_gltf_with_progress(path, progress, Some(cancel))
-    } else if iges_detector::detect_iges(header, path) {
-        mmforge_format_iges::parse_iges_with_tessellation_with_progress(path, progress, cancel)
-    } else if lsm_detector::detect_lsm(header, path) {
-        lsm_detector::parse_lsm(path)
-    } else {
-        // Default: try STEP (most flexible detection).
-        mmforge_format_step::parse_step_with_tessellation_with_progress(path, progress, cancel)
-    };
+    let fmt = format_route::detect(header, path);
+    let route = format_route::parse_with_progress(fmt, path, progress, cancel)?;
 
     // Check cancellation before the expensive build step.
     if cancel.is_cancelled() {
@@ -262,10 +241,8 @@ pub(crate) fn parse_with_detection(
         ));
     }
 
-    match result {
-        Ok((output, registry)) => Ok(Box::new(build_document(output, registry))),
-        Err(e) => Err(e),
-    }
+    let (output, registry) = route.into_parts();
+    Ok(Box::new(build_document(output, registry)))
 }
 
 /// Parse a STEP file.  Returns NULL on error.
@@ -285,7 +262,7 @@ pub extern "C" fn mmf_parse_step(path: *const c_char) -> *mut MmfDocument {
     }
 }
 
-/// Parse a file with auto-detection (STL, glTF/GLB, STEP).
+/// Parse a file with auto-detection (STL, glTF/GLB, STEP, IGES, DXF, LSM/LSMC).
 /// Returns NULL on error — call mmf_last_error() for the message.
 #[unsafe(no_mangle)]
 pub extern "C" fn mmf_parse_file(path: *const c_char) -> *mut MmfDocument {
@@ -308,28 +285,14 @@ pub extern "C" fn mmf_parse_file(path: *const c_char) -> *mut MmfDocument {
         }
     };
 
-    let result = if dxf_detector::detect_dxf(&header, &path) {
-        // DXF produces Drawing2D, not tessellated meshes.
-        // Wrap into (ParseOutput, empty TessellationRegistry).
-        mmforge_format_dxf::parse_dxf(&path)
-            .map(|(output, _drawing)| (output, TessellationRegistry::new()))
-    } else if stl_parser::detect_stl(&header, &path) {
-        stl_parser::parse_stl(&path)
-    } else if gltf_parser::detect_gltf(&header, &path) {
-        gltf_parser::parse_gltf(&path)
-    } else if iges_detector::detect_iges(&header, &path) {
-        mmforge_format_iges::parse_iges_with_tessellation(&path)
-    } else if lsm_detector::detect_lsm(&header, &path) {
-        lsm_detector::parse_lsm(&path)
-    } else if mmforge_format_step::detect::detect_step(&header, &path).is_some() {
-        mmforge_format_step::parse_step_with_tessellation(&path)
-    } else {
-        // Try STEP as fallback (it has the most flexible detection).
-        mmforge_format_step::parse_step_with_tessellation(&path)
-    };
+    let fmt = format_route::detect(&header, &path);
+    let result = format_route::parse_sync(fmt, &path);
 
     match result {
-        Ok((output, registry)) => Box::into_raw(Box::new(build_document(output, registry))),
+        Ok(route) => {
+            let (output, registry) = route.into_parts();
+            Box::into_raw(Box::new(build_document(output, registry)))
+        }
         Err(e) => {
             set_last_error(&format!("{e}"));
             ptr::null_mut()

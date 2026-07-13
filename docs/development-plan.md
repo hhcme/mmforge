@@ -2,7 +2,7 @@
 
 > 面向目标模式执行的完整产品开发计划。项目先完成 macOS 原生版本，再将稳定的 Rust 核心、LSM 运行时模型、渲染数据层和交互模型扩展到 iOS、Windows、Android、OpenHarmony。
 >
-> 最后更新：2026-06-29
+> 最后更新：2026-07-13 — Phase 1 closure complete; unified format routing landed
 
 ---
 
@@ -147,25 +147,15 @@ pub enum ParseWarning {
 
 ### 4.1 格式识别算法
 
-目标：
-
-- 不依赖文件扩展名作为唯一判断。
-- 先读 magic/header，再用扩展名作为辅助。
-- 返回候选格式和置信度，方便 UI 提示。
+状态：✅ 已实现统一格式路由（`crates/mmforge-bridge/src/format_route.rs`），单一 `DetectedFormat` 枚举和 `detect()` 函数被 `mmf_parse_file`、`parse_with_detection`、异步任务进度标签三个调用点共享。
 
 算法：
 
 ```text
-1. 读取文件前 4KB。
-2. 检查强 magic：
-   - STEP: starts_with "ISO-10303-21;"
-   - glB: starts_with "glTF"
-   - DWG: starts_with "AC10"
-3. 检查弱特征：
-   - DXF: group code pair "0 SECTION"
-   - ASCII STL: starts_with "solid"，但必须继续扫描 facet/vertex，否则可能是 binary STL header
-   - IGES: 80-column records and section marker at column 73
-4. 如果 magic 冲突，返回 ambiguous error，UI 提示用户选择。
+1. 读取文件前 84 字节（支持 binary STL 80-byte header + u32 count）。
+2. 按优先级顺序检测：DXF → STL → glTF/GLB → IGES → LSM/LSMC → STEP（兜底）。
+3. 各检测器使用扩展名 + header 特征联合判断。
+4. 检测结果作为单一 DetectedFormat 枚举值返回，所有调用点派生自此结果。
 5. 解析器启动后再次验证格式，不信任检测阶段。
 ```
 
@@ -173,6 +163,7 @@ pub enum ParseWarning {
 
 - 空文件、随机二进制、扩展名错误文件都有测试。
 - ASCII STL 与 binary STL header 为 `solid` 的冲突有测试。
+- 所有六种格式的 sync/async 类型、节点数、2D 标记和错误路径一致性均有测试覆盖。
 
 ### 4.2 STEP / OCCT 解析算法
 

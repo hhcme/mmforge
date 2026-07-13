@@ -28,6 +28,8 @@
 		A10019 /* AnnotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10022 /* AnnotationTests.swift */; };
 		A10020 /* AsyncParseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10023 /* AsyncParseTests.swift */; };
 		A10022 /* ProductizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10026 /* ProductizationTests.swift */; };
+		A10023 /* RecentDocumentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10027 /* RecentDocumentStore.swift */; };
+		A10024 /* OffscreenRenderProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10028 /* OffscreenRenderProtocol.swift */; };
 		035115407A454809A9951D15 /* BridgeAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BFCBDDB2C7D4543AD26A6C6 /* BridgeAcceptanceTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -66,6 +68,8 @@
 		B10022 /* AnnotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationTests.swift; sourceTree = "<group>"; };
 		B10023 /* AsyncParseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AsyncParseTests.swift; sourceTree = "<group>"; };
 		B10026 /* ProductizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductizationTests.swift; sourceTree = "<group>"; };
+		B10027 /* RecentDocumentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentDocumentStore.swift; sourceTree = "<group>"; };
+		B10028 /* OffscreenRenderProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OffscreenRenderProtocol.swift; sourceTree = "<group>"; };
 		C10001 /* MMForge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MMForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C10002 /* MMForgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MMForgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2BFCBDDB2C7D4543AD26A6C6 /* BridgeAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeAcceptanceTests.swift; sourceTree = "<group>"; };
@@ -110,6 +114,7 @@
 			children = (
 				B10001 /* MMForgeApp.swift */,
 				B10002 /* AppDelegate.swift */,
+				B10027 /* RecentDocumentStore.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -143,6 +148,7 @@
 				B10014 /* Shaders.metal */,
 				B10016 /* Picking.swift */,
 				B10018 /* SectionFill.swift */,
+				B10028 /* OffscreenRenderProtocol.swift */,
 			);
 			path = Metal;
 			sourceTree = "<group>";
@@ -299,6 +305,8 @@
 				A10013 /* Picking.swift in Sources */,
 				A10015 /* SectionFill.swift in Sources */,
 				A10018 /* Annotation.swift in Sources */,
+				A10023 /* RecentDocumentStore.swift in Sources */,
+				A10024 /* OffscreenRenderProtocol.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

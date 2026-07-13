@@ -222,9 +222,7 @@ unsafe extern "C" {
     ) -> *const MmfTreeNode;
 
     /// Number of nodes in the XDE assembly tree (IGES).
-    pub fn mmforge_iges_shape_tree_node_count(
-        reader: *const IgesControlReader,
-    ) -> std::ffi::c_int;
+    pub fn mmforge_iges_shape_tree_node_count(reader: *const IgesControlReader) -> std::ffi::c_int;
 
     /// Get tree node by index (IGES).  Returns null if out of bounds.
     pub fn mmforge_iges_shape_get_tree_node(

@@ -9,6 +9,19 @@ struct MMForgeApp: App {
             ContentView(document: file.$document)
         }
         .commands {
+            // Hide the standard New menu item — DocumentGroup already provides
+            // new-document creation via its own mechanism.
+            CommandGroup(replacing: .newItem) {}
+
+            // Clear Recent Documents sits in the File menu area.
+            CommandGroup(after: .saveItem) {
+                Divider()
+                Button("Clear Recent Documents") {
+                    NSDocumentController.shared.clearRecentDocuments(nil)
+                    RecentDocumentStore.shared.clear()
+                }
+            }
+
             SidebarCommands()
             InspectorCommands()
             CommandMenu("Camera") {

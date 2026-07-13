@@ -189,7 +189,7 @@ struct OverlayUniforms {
     var mvp: simd_float4x4
 }
 
-final class MetalRenderer: NSObject, MTKViewDelegate {
+	final class MetalRenderer: NSObject, MTKViewDelegate, OffscreenRenderProtocol {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     private let solidPipeline: MTLRenderPipelineState
@@ -1054,6 +1054,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// Async offscreen render using command-buffer completion handler.
     /// Includes timeout via Task.sleep, single-resume guard, and GPU error checking.
     func renderOffscreenAsync(size: CGSize, timeout: TimeInterval = 10.0) async -> NSImage? {
+        guard timeout.isFinite && timeout > 0 else { return nil }
         let width = Int(size.width); let height = Int(size.height)
         guard width > 0, height > 0 else { return nil }
 

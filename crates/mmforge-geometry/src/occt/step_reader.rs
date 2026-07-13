@@ -159,9 +159,8 @@ fn occt_read_step_with_tessellation(
         let bounds = if positions.is_empty() {
             mmforge_core::math::BoundingBox::EMPTY
         } else {
-            let mut bb = mmforge_core::math::BoundingBox::from_point(
-                glam::Vec3::from(positions[0]),
-            );
+            let mut bb =
+                mmforge_core::math::BoundingBox::from_point(glam::Vec3::from(positions[0]));
             for p in &positions[1..] {
                 bb.extend_point(glam::Vec3::from(*p));
             }

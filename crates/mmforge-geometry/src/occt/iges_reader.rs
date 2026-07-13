@@ -132,19 +132,16 @@ fn occt_read_iges_with_tessellation(
         }
 
         let deflection = if node.bounds.is_valid() {
-            crate::tessellation::TessellationQuality::Standard
-                .linear_deflection(&node.bounds) as f64
+            crate::tessellation::TessellationQuality::Standard.linear_deflection(&node.bounds)
+                as f64
         } else {
             0.5
         };
 
-        let handle = super::adapter::IgesShapeHandle::from_raw(
-            reader.as_iges_ptr(),
-            shape_ptr.unwrap(),
-        );
+        let handle =
+            super::adapter::IgesShapeHandle::from_raw(reader.as_iges_ptr(), shape_ptr.unwrap());
 
-        let mesh =
-            super::adapter::TessellatedMesh::tessellate_iges(&reader, &handle, deflection)?;
+        let mesh = super::adapter::TessellatedMesh::tessellate_iges(&reader, &handle, deflection)?;
 
         let mut positions: Vec<[f32; 3]> = mesh.positions().to_vec();
         let mut normals: Vec<[f32; 3]> = mesh.normals().to_vec();
@@ -171,9 +168,8 @@ fn occt_read_iges_with_tessellation(
         let bounds = if positions.is_empty() {
             mmforge_core::math::BoundingBox::EMPTY
         } else {
-            let mut bb = mmforge_core::math::BoundingBox::from_point(
-                glam::Vec3::from(positions[0]),
-            );
+            let mut bb =
+                mmforge_core::math::BoundingBox::from_point(glam::Vec3::from(positions[0]));
             for p in &positions[1..] {
                 bb.extend_point(glam::Vec3::from(*p));
             }
@@ -398,9 +394,6 @@ mod tests {
         // At least one geometry must be in registry.
         assert!(geom_idx > 0, "expected at least one leaf geometry");
 
-        eprintln!(
-            "IGES registry bounds test: {} leaves verified",
-            geom_idx,
-        );
+        eprintln!("IGES registry bounds test: {} leaves verified", geom_idx,);
     }
 }

@@ -148,44 +148,73 @@ fn occt_parse_with_progress(
     // Tree-based build when XDE assembly tree is available.
     let tree = &step_data.tree_nodes;
     if !tree.is_empty() {
-            let node_count = tree.len();
-            let mut node_ids: Vec<NodeId> = Vec::with_capacity(node_count);
-            let mut geom_counter: u32 = 0;
-            for (i, tn) in tree.iter().enumerate() {
-                check_cancel(Some(cancel))?;
-                let nid = NodeId::new(i as u32);
-                node_ids.push(nid);
-                let parent_id = if tn.parent_index >= 0 {
-                    Some(node_ids[tn.parent_index as usize])
-                } else { None };
-                let (geom_id, label) = if tn.is_assembly {
-                    (None, tn.name.clone())
+        let node_count = tree.len();
+        let mut node_ids: Vec<NodeId> = Vec::with_capacity(node_count);
+        let mut geom_counter: u32 = 0;
+        for (i, tn) in tree.iter().enumerate() {
+            check_cancel(Some(cancel))?;
+            let nid = NodeId::new(i as u32);
+            node_ids.push(nid);
+            let parent_id = if tn.parent_index >= 0 {
+                Some(node_ids[tn.parent_index as usize])
+            } else {
+                None
+            };
+            let (geom_id, label) = if tn.is_assembly {
+                (None, tn.name.clone())
+            } else {
+                let gid = GeometryId::new(geom_counter);
+                geom_counter += 1;
+                let lbl = if tn.name.is_empty() {
+                    format!("Part_{}", gid.get())
                 } else {
-                    let gid = GeometryId::new(geom_counter);
-                    geom_counter += 1;
-                    let lbl = if tn.name.is_empty() { format!("Part_{}", gid.get()) }
-                              else { format!("{} [{:?}]", tn.name, tn.shape_type) };
-                    (Some(gid), lbl)
+                    format!("{} [{:?}]", tn.name, tn.shape_type)
                 };
-                let name = if tn.name.is_empty() {
-                    if tn.is_assembly { format!("Assembly_{i}") } else { format!("Part_{i}") }
-                } else { tn.name.clone() };
-                model.scene.add_node(Node {
-                    id: nid, name, parent: parent_id, children: Vec::new(),
-                    geometry: geom_id, material: None, visible: true,
-                    local_transform: tn.transform, bounds: tn.bounds,
-                });
-                if let Some(gid) = geom_id {
-                    model.geometries.push(Geometry::BRepHandleRef { id: gid, bounds: tn.bounds, label });
+                (Some(gid), lbl)
+            };
+            let name = if tn.name.is_empty() {
+                if tn.is_assembly {
+                    format!("Assembly_{i}")
+                } else {
+                    format!("Part_{i}")
                 }
-                if let Some(pid) = parent_id {
-                    if let Some(pn) = model.scene.find_node_mut(pid) { pn.children.push(nid); }
+            } else {
+                tn.name.clone()
+            };
+            model.scene.add_node(Node {
+                id: nid,
+                name,
+                parent: parent_id,
+                children: Vec::new(),
+                geometry: geom_id,
+                material: None,
+                visible: true,
+                local_transform: tn.transform,
+                bounds: tn.bounds,
+            });
+            if let Some(gid) = geom_id {
+                model.geometries.push(Geometry::BRepHandleRef {
+                    id: gid,
+                    bounds: tn.bounds,
+                    label,
+                });
+            }
+            if let Some(pid) = parent_id {
+                if let Some(pn) = model.scene.find_node_mut(pid) {
+                    pn.children.push(nid);
                 }
             }
-            if !node_ids.is_empty() { model.scene.root = node_ids[0]; }
-            let stats = model.stats();
-            return Ok(ParseOutput { model, warnings, stats });
         }
+        if !node_ids.is_empty() {
+            model.scene.root = node_ids[0];
+        }
+        let stats = model.stats();
+        return Ok(ParseOutput {
+            model,
+            warnings,
+            stats,
+        });
+    }
 
     // Fallback: flat shapes (backward compat or no occt_found).
     let shapes = mmforge_geometry::occt::step_reader::extract_shapes(&step_data)
@@ -342,72 +371,92 @@ fn build_step_model_from_data(
     // Tree-based build when XDE assembly tree is available.
     let tree = &step_data.tree_nodes;
     if !tree.is_empty() {
-            let node_count = tree.len();
-            let mut node_ids: Vec<NodeId> = Vec::with_capacity(node_count);
-            let mut geom_counter: u32 = 0;
+        let node_count = tree.len();
+        let mut node_ids: Vec<NodeId> = Vec::with_capacity(node_count);
+        let mut geom_counter: u32 = 0;
 
-            for (i, tn) in tree.iter().enumerate() {
-                check_cancel(Some(cancel))?;
-                let nid = NodeId::new(i as u32);
-                node_ids.push(nid);
-                let parent_id = if tn.parent_index >= 0 {
-                    Some(node_ids[tn.parent_index as usize])
+        for (i, tn) in tree.iter().enumerate() {
+            check_cancel(Some(cancel))?;
+            let nid = NodeId::new(i as u32);
+            node_ids.push(nid);
+            let parent_id = if tn.parent_index >= 0 {
+                Some(node_ids[tn.parent_index as usize])
+            } else {
+                None
+            };
+            let (geom_id, label) = if tn.is_assembly {
+                (None, tn.name.clone())
+            } else {
+                let gid = GeometryId::new(geom_counter);
+                geom_counter += 1;
+                let lbl = if tn.name.is_empty() {
+                    format!("Part_{}", gid.get())
                 } else {
-                    None
+                    format!("{} [{:?}]", tn.name, tn.shape_type)
                 };
-                let (geom_id, label) = if tn.is_assembly {
-                    (None, tn.name.clone())
+                (Some(gid), lbl)
+            };
+            let name = if tn.name.is_empty() {
+                if tn.is_assembly {
+                    format!("Assembly_{i}")
                 } else {
-                    let gid = GeometryId::new(geom_counter);
-                    geom_counter += 1;
-                    let lbl = if tn.name.is_empty() {
-                        format!("Part_{}", gid.get())
-                    } else {
-                        format!("{} [{:?}]", tn.name, tn.shape_type)
-                    };
-                    (Some(gid), lbl)
-                };
-                let name = if tn.name.is_empty() {
-                    if tn.is_assembly { format!("Assembly_{i}") } else { format!("Part_{i}") }
-                } else { tn.name.clone() };
-                model.scene.add_node(Node {
-                    id: nid, name, parent: parent_id, children: Vec::new(),
-                    geometry: geom_id, material: None, visible: true,
-                    local_transform: tn.transform,
-                    bounds: geom_id.map_or(tn.bounds, |gid| {
-                        registry.get(&gid).map_or(tn.bounds, |m| m.bounds)
-                    }),
+                    format!("Part_{i}")
+                }
+            } else {
+                tn.name.clone()
+            };
+            model.scene.add_node(Node {
+                id: nid,
+                name,
+                parent: parent_id,
+                children: Vec::new(),
+                geometry: geom_id,
+                material: None,
+                visible: true,
+                local_transform: tn.transform,
+                bounds: geom_id.map_or(tn.bounds, |gid| {
+                    registry.get(&gid).map_or(tn.bounds, |m| m.bounds)
+                }),
+            });
+            if let Some(gid) = geom_id {
+                model.geometries.push(Geometry::BRepHandleRef {
+                    id: gid,
+                    bounds: registry.get(&gid).map_or(tn.bounds, |m| m.bounds),
+                    label,
                 });
-                if let Some(gid) = geom_id {
-                    model.geometries.push(Geometry::BRepHandleRef {
-                        id: gid,
-                        bounds: registry.get(&gid).map_or(tn.bounds, |m| m.bounds),
-                        label,
-                    });
-                }
-                if let Some(pid) = parent_id {
-                    if let Some(pn) = model.scene.find_node_mut(pid) {
-                        pn.children.push(nid);
-                    }
+            }
+            if let Some(pid) = parent_id {
+                if let Some(pn) = model.scene.find_node_mut(pid) {
+                    pn.children.push(nid);
                 }
             }
-
-            if !node_ids.is_empty() { model.scene.root = node_ids[0]; }
-
-            for (i, tn) in tree.iter().enumerate() {
-                if tn.name.is_empty() {
-                    warnings.push(ParseWarning::PrecisionLoss {
-                        message: format!(
-                            "tree node {i} ({}) has no product name",
-                            if tn.is_assembly { "assembly" } else { "part" }
-                        ),
-                    });
-                }
-            }
-
-            let stats = model.stats();
-            return Ok((ParseOutput { model, warnings, stats }, registry));
         }
+
+        if !node_ids.is_empty() {
+            model.scene.root = node_ids[0];
+        }
+
+        for (i, tn) in tree.iter().enumerate() {
+            if tn.name.is_empty() {
+                warnings.push(ParseWarning::PrecisionLoss {
+                    message: format!(
+                        "tree node {i} ({}) has no product name",
+                        if tn.is_assembly { "assembly" } else { "part" }
+                    ),
+                });
+            }
+        }
+
+        let stats = model.stats();
+        return Ok((
+            ParseOutput {
+                model,
+                warnings,
+                stats,
+            },
+            registry,
+        ));
+    }
 
     // Fallback: flat shapes (backward compat or no occt_found).
     let shapes = mmforge_geometry::occt::step_reader::extract_shapes(&step_data)
@@ -601,7 +650,10 @@ mod tests {
             .iter()
             .filter(|n| n.geometry.is_some())
             .count();
-        assert!(leaf_count > 0, "expected at least one leaf node with geometry");
+        assert!(
+            leaf_count > 0,
+            "expected at least one leaf node with geometry"
+        );
 
         // Every geometry must be BRepHandleRef.
         for geom in &model.geometries {

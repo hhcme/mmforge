@@ -4,7 +4,7 @@
 
 [中文文档](README_zh.md)
 
-![Project Status](https://img.shields.io/badge/status-macOS%20Alpha%20Trialable-yellow)
+![Project Status](https://img.shields.io/badge/status-macOS%20Alpha%20Trialable-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
 
 ---
@@ -13,7 +13,7 @@
 
 MMForge is an open-source industrial model parsing and rendering solution. It targets a complete, full-featured pipeline from file format parsing to cross-platform native rendering, with a permissively licensed core that can be used in both open-source and commercial projects.
 
-> **Project status:** Phase 0 (repository foundation) is complete. The Rust workspace, macOS SwiftUI app shell, and CI pipeline are operational. Phase 1 (LSM runtime model, OCCT integration, Metal rendering) is in progress. See [docs/progress/](docs/progress/) for handoff reports.
+> **Project status:** Phase 1 (macOS 3D main pipeline) is complete with 52+ acceptance tests. Phase 2 (multi-format 3D, 2D drawings, iOS) is in early development. All six formats (STEP, IGES, STL, glTF/GLB, DXF, LSM/LSMC) are integrated through the unified format routing in `mmforge-bridge`. The Metal renderer supports solid, wireframe, transparent, and x-ray modes with frustum culling, BVH picking, section fills, and async offscreen PNG export. See [docs/progress/](docs/progress/) for handoff reports.
 
 **Key Features:**
 - Multi-format parsing (STEP, IGES, glTF, STL, DXF, DWG)
@@ -82,13 +82,13 @@ MMForge is an open-source industrial model parsing and rendering solution. It ta
 
 | Format | Priority | Parser | Status |
 |--------|----------|--------|--------|
-| STEP (AP203/AP214) | P0 | OCCT | Parsed with OCCT; without OCCT shows build guidance |
-| glTF 2.0 / GLB | P0 | gltf-rs | Working (macOS app + bridge) |
-| STL (ASCII/Binary) | P0 | Custom | Working (macOS app, CLI) |
-| IGES | P1 | OCCT | Parsed with OCCT; without OCCT shows build guidance |
-| DXF | P0 | Custom | Working (macOS app, CLI) |
+| STEP (AP203/AP214) | P0 | OCCT | Parsed with OCCT; routed by unified detection via mmforge-bridge |
+| glTF 2.0 / GLB | P0 | gltf-rs | Working (macOS app via bridge; CLI via bridge crate) |
+| STL (ASCII/Binary) | P0 | Custom | Working (macOS app, CLI, bridge) |
+| IGES | P1 | OCCT | Parsed with OCCT; routed by unified detection via mmforge-bridge |
+| DXF | P0 | Custom | Working (macOS app, CLI, bridge) |
 | OBJ | P1 | Custom | Planned |
-| LSM / LSMC | — | Custom | CLI: read/write; app: registered but parser not yet integrated |
+| LSM / LSMC | P1 | Custom | Working (macOS app via bridge, CLI read/write) |
 
 ### 2D Formats
 
@@ -236,8 +236,10 @@ double-click to open):
 - **No OCCT by default**: STEP and IGES files require OpenCASCADE.
   Without OCCT the app shows build guidance.  With OCCT linked, STEP/IGES
   parse and render B-Rep models.
-- **glTF CLI not supported**: The CLI (`mmforge`) supports STL and DXF
-  only.  glTF, STEP, IGES are available through the macOS bridge crate.
+- **glTF requires bridge crate**: The standalone CLI (`mmforge`) supports
+  STL, DXF, LSM/LSMC via its own detection.  glTF, STEP, IGES are available
+  through the macOS bridge crate (`mmforge-bridge`) which provides the full
+  format cascade: DXF → STL → glTF/GLB → IGES → LSM/LSMC → STEP.
 - **Unsigned app**: The Debug build and Release DMG are unsigned.  macOS
   Gatekeeper will block first launch — right-click → Open to bypass.
 - **No sandbox / Hardened Runtime**: Not configured for App Store or
@@ -259,8 +261,8 @@ double-click to open):
 
 | Phase | Duration | Goal |
 |-------|----------|------|
-| Phase 1 | 3-4 months | Native macOS foundation: STEP parsing + Metal rendering |
-| Phase 2 | 3-4 months | More formats + native 2D drawing support |
+| Phase 1 | 3-4 months | ✅ Native macOS foundation: STEP parsing + Metal rendering — COMPLETE |
+| Phase 2 | 3-4 months | Multi-format 3D + 2D drawing + polish (in progress) |
 | Phase 3 | 3-4 months | iOS + complete viewer workflows |
 | Phase 4 | Future | Windows, Android, OpenHarmony |
 
