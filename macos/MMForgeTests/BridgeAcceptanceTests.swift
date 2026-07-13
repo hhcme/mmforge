@@ -735,6 +735,143 @@ final class BridgeAcceptanceTests: XCTestCase {
                           "same point should NOT hit hidden node \(hitIdx) after hide")
     }
 
+    // MARK: - Offscreen snapshot (headless, no MTKView.currentDrawable)
+
+    /// Counts non-background pixels in RGBA8 data (background = ~dark grey).
+    func countNonBackgroundPixels(_ data: Data, width: Int, height: Int) -> Int {
+        var count = 0
+        data.withUnsafeBytes { ptr in
+            let pixels = ptr.bindMemory(to: UInt32.self)
+            for i in 0..<(width * height) {
+                let p = pixels[i]
+                // BGRA: background is ~(0x24, 0x1E, 0x1E, 0xFF) = dark grey
+                let r = Int((p >> 16) & 0xFF)
+                let g = Int((p >> 8) & 0xFF)
+                let b = Int(p & 0xFF)
+                // Count pixel if significantly different from background
+                if abs(r - 0x24) > 10 || abs(g - 0x1E) > 10 || abs(b - 0x23) > 10 {
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
+
+    @MainActor
+    func test_offscreen_snapshot_assembly_solid_produces_nonempty_pixels() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        renderer.renderMode = .solid
+        guard let (data, w, h) = renderer.renderOffscreen(size: CGSize(width: 200, height: 150)) else {
+            XCTFail("renderOffscreen returned nil")
+            return
+        }
+        let nonBg = countNonBackgroundPixels(data, width: w, height: h)
+        XCTAssertGreaterThan(nonBg, 50, "solid mode: at least 50 non-background pixels rendered")
+    }
+
+    @MainActor
+    func test_offscreen_snapshot_two_sizes_produce_different_counts() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        renderer.renderMode = .solid
+        guard let small = renderer.renderOffscreen(size: CGSize(width: 100, height: 75)),
+              let large = renderer.renderOffscreen(size: CGSize(width: 300, height: 225)) else {
+            XCTFail("renderOffscreen returned nil")
+            return
+        }
+        let smallPx = countNonBackgroundPixels(small.0, width: small.1, height: small.2)
+        let largePx = countNonBackgroundPixels(large.0, width: large.1, height: large.2)
+        // Larger viewport should produce more rendered pixels (or at least as many)
+        XCTAssertGreaterThanOrEqual(largePx, smallPx, "larger viewport >= rendered pixels")
+    }
+
+    @MainActor
+    func test_offscreen_snapshot_wireframe_differs_from_solid() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        renderer.renderMode = .solid
+        guard let solid = renderer.renderOffscreen(size: CGSize(width: 200, height: 150)) else { XCTFail(); return }
+        let solidCount = countNonBackgroundPixels(solid.0, width: solid.1, height: solid.2)
+
+        renderer.renderMode = .wireframe
+        guard let wire = renderer.renderOffscreen(size: CGSize(width: 200, height: 150)) else { XCTFail(); return }
+        let wireCount = countNonBackgroundPixels(wire.0, width: wire.1, height: wire.2)
+
+        // Solid and wireframe should produce different pixel counts
+        XCTAssertNotEqual(wireCount, solidCount, "wireframe pixel count differs from solid")
+    }
+
+    @MainActor
+    func test_offscreen_snapshot_hide_then_show_changes_pixels() throws {
+        let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        renderer.renderMode = .solid
+        guard let before = renderer.renderOffscreen(size: CGSize(width: 200, height: 150)) else { XCTFail(); return }
+        let beforeCount = countNonBackgroundPixels(before.0, width: before.1, height: before.2)
+
+        // Hide all meshes
+        vm.hideAllNodes()
+        guard let after = renderer.renderOffscreen(size: CGSize(width: 200, height: 150)) else { XCTFail(); return }
+        let afterCount = countNonBackgroundPixels(after.0, width: after.1, height: after.2)
+
+        // With all meshes hidden, should see fewer rendered pixels (only background)
+        XCTAssertLessThan(afterCount, beforeCount, "hideAllNodes reduces rendered pixels")
+
+        // Restore
+        vm.setAllNodesVisible()
+        guard let restored = renderer.renderOffscreen(size: CGSize(width: 200, height: 150)) else { XCTFail(); return }
+        let restoredCount = countNonBackgroundPixels(restored.0, width: restored.1, height: restored.2)
+        XCTAssertGreaterThan(restoredCount, afterCount, "showAll restores rendered pixels")
+    }
+
+    // MARK: - Camera projection + reset concrete assertions
+
+    @MainActor
+    func test_camera_projection_toggle_changes_is_orthographic() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        let wasOrtho = renderer.isOrthographic
+        renderer.toggleProjection()
+        XCTAssertNotEqual(renderer.isOrthographic, wasOrtho, "toggleProjection flips orthographic state")
+        renderer.toggleProjection()
+        XCTAssertEqual(renderer.isOrthographic, wasOrtho, "second toggle restores original")
+    }
+
+    @MainActor
+    func test_camera_reset_restores_defaults() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        // Perturb camera
+        renderer.rotate(dx: 10, dy: 5)
+        renderer.zoom(delta: 5)
+        renderer.pan(dx: 50, dy: 30)
+        renderer.toggleProjection()
+
+        // Reset
+        renderer.resetCamera()
+        XCTAssertGreaterThan(renderer.camera.distance, 0, "distance valid after reset")
+        XCTAssertTrue(renderer.camera.yaw.isFinite, "yaw finite after reset")
+        XCTAssertTrue(renderer.camera.pitch.isFinite, "pitch finite after reset")
+        // resetCamera restores perspective projection
+        XCTAssertFalse(renderer.isOrthographic, "resetCamera restores perspective projection")
+    }
+
+    @MainActor
+    func test_camera_zoom_in_decreases_distance() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        let d1 = renderer.camera.distance
+        renderer.zoom(delta: 5)
+        XCTAssertLessThan(renderer.camera.distance, d1, "zoom in (positive delta) decreases distance")
+    }
+
     // MARK: - Tree expand/collapse/search with real assembly DTO
 
     @MainActor

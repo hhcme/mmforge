@@ -1039,4 +1039,81 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         ) else { return nil }
         return NSImage(cgImage: cgImage, size: NSSize(width: width, height: height))
     }
+
+    #if DEBUG
+    /// Render the current scene to an offscreen texture and return the raw RGBA8 pixel data.
+    /// Does NOT require MTKView.currentDrawable — works headless.
+    /// - Parameter size: output image dimensions in pixels
+    /// - Returns: (pixelData, width, height) where pixelData is RGBA8, or nil on failure
+    func renderOffscreen(size: CGSize) -> (Data, Int, Int)? {
+        let width = Int(size.width)
+        let height = Int(size.height)
+        guard width > 0, height > 0 else { return nil }
+
+        // Create offscreen render target
+        let texDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        texDesc.usage = [.renderTarget, .shaderRead]
+        texDesc.storageMode = .shared
+        guard let offscreenTexture = device.makeTexture(descriptor: texDesc) else { return nil }
+
+        // Depth buffer
+        let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .depth32Float, width: width, height: height, mipmapped: false)
+        depthDesc.usage = .renderTarget
+        depthDesc.storageMode = .private
+        guard let depthTexture = device.makeTexture(descriptor: depthDesc) else { return nil }
+
+        // Render pass
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = offscreenTexture
+        rpd.colorAttachments[0].loadAction = .clear
+        rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.12, green: 0.12, blue: 0.14, alpha: 1)
+        rpd.depthAttachment.texture = depthTexture
+        rpd.depthAttachment.loadAction = .clear
+        rpd.depthAttachment.clearDepth = 1.0
+
+        guard let cmdBuf = commandQueue.makeCommandBuffer(),
+              let encoder = cmdBuf.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
+
+        let aspect = Float(width) / Float(max(height, 1))
+        let mvp = camera.projectionMatrix(aspect: aspect) * camera.viewMatrix
+        let highlightTint = simd_float4(0.2, 0.5, 1.0, 0.4)
+
+        updateFrustumCulling(aspect: aspect)
+
+        switch renderMode {
+        case .solid:
+            drawPass(encoder: encoder, pipeline: solidPipeline, mvp: mvp,
+                     highlightTint: highlightTint, mode: 0, depthWrite: true, fillMode: .fill)
+        case .wireframe:
+            drawPass(encoder: encoder, pipeline: wireframePipeline, mvp: mvp,
+                     highlightTint: highlightTint, mode: 1, depthWrite: true, fillMode: .lines)
+        case .solidWireframe:
+            drawPass(encoder: encoder, pipeline: solidPipeline, mvp: mvp,
+                     highlightTint: highlightTint, mode: 0, depthWrite: true, fillMode: .fill)
+            encoder.setDepthBias(0.001, slopeScale: 1.0, clamp: 0.001)
+            drawPass(encoder: encoder, pipeline: wireframePipeline, mvp: mvp,
+                     highlightTint: simd_float4(0,0,0,0), mode: 1, depthWrite: false, fillMode: .lines)
+            encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+        case .transparent:
+            drawPass(encoder: encoder, pipeline: transparentPipeline, mvp: mvp,
+                     highlightTint: highlightTint, mode: 3, depthWrite: false, fillMode: .fill)
+        }
+        encoder.endEncoding()
+        cmdBuf.commit()
+        cmdBuf.waitUntilCompleted()
+
+        // Read back pixels
+        let bytesPerRow = width * 4
+        var pixelData = Data(count: bytesPerRow * height)
+        pixelData.withUnsafeMutableBytes { ptr in
+            offscreenTexture.getBytes(ptr.baseAddress!,
+                bytesPerRow: bytesPerRow,
+                from: MTLRegionMake2D(0, 0, width, height),
+                mipmapLevel: 0)
+        }
+        return (pixelData, width, height)
+    }
+    #endif
 }

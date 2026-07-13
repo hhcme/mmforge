@@ -1046,7 +1046,6 @@ mod tests {
             });
 
         let output = mmforge_core::model::ParseOutput {
-            container_format: None,
             model: b,
             warnings: vec![],
             stats: mmforge_core::model::ParseStats::default(),
