@@ -140,10 +140,16 @@ final class BridgeAcceptanceTests: XCTestCase {
         let dto = try Self.loadDTO(relativePath: Self.translatedIgs)
 
         XCTAssertEqual(dto.meshes.count, 1, "translated_box.igs: 1 mesh")
-        // The translated box is pre-positioned at x∈[20,30], y∈[0,10], z∈[5,15]
-        // Scene bounds should reflect this
-        XCTAssertGreaterThanOrEqual(dto.sceneBoundsMax.x - dto.sceneBoundsMin.x, 1.0,
-                                     "scene bounds must have non-trivial extent")
+        // Pre-translated box: original [0,0,0]–[10,10,10] moved to [20,0,5]–[30,10,15]
+        XCTAssertGreaterThan(dto.sceneBoundsMin.x, 15.0, "min X should be ~20 (translated)")
+        XCTAssertLessThan(dto.sceneBoundsMax.x, 35.0, "max X should be ~30")
+        XCTAssertGreaterThan(dto.sceneBoundsMin.z, 2.0,  "min Z should be ~5 (translated)")
+        XCTAssertLessThan(dto.sceneBoundsMax.z, 18.0, "max Z should be ~15")
+        // Y should match original (no translation in Y)
+        XCTAssertLessThan(abs(dto.sceneBoundsMin.y), 3.0, "min Y should be ~0")
+        XCTAssertGreaterThan(dto.sceneBoundsMax.y, 7.0, "max Y should be ~10")
+        // Non-trivial extent
+        XCTAssertGreaterThan(dto.sceneBoundsMax.x - dto.sceneBoundsMin.x, 5.0, "X extent")
     }
 
     // MARK: - STL fixture
@@ -257,9 +263,9 @@ final class BridgeAcceptanceTests: XCTestCase {
 
         XCTAssertTrue(gotStage, "should have received parse stage")
         if case .loaded(let tri, let mesh, let node) = vm.state {
-            XCTAssertGreaterThanOrEqual(tri, 0)
-            XCTAssertGreaterThanOrEqual(mesh, 0)
-            XCTAssertGreaterThanOrEqual(node, 0)
+            XCTAssertEqual(tri, 12, "box.stl: 12 triangles (unit cube)")
+            XCTAssertEqual(mesh, 1, "box.stl: 1 mesh")
+            XCTAssertGreaterThanOrEqual(node, 2, "box.stl: at least root + 1 leaf node")
         } else {
             XCTFail("expected .loaded state, got \(vm.state)")
         }
@@ -268,72 +274,86 @@ final class BridgeAcceptanceTests: XCTestCase {
         loadedCancellable.cancel()
     }
 
-    // MARK: - Selection and visibility (model layer, no renderer)
+    // MARK: - Selection, visibility, hide/isolate on real assembly.stp DTO
+
+    /// Loads assembly.stp DTO and assigns its nodes to a DocumentViewModel.
+    /// Expands root (index 0) so leaves are visible.
+    @MainActor
+    func makeAssemblyVM() throws -> (DocumentViewModel, RenderPacketDTO) {
+        let dto = try Self.loadDTO(relativePath: Self.assemblyStp)
+        let vm = DocumentViewModel()
+        vm.nodes = dto.nodes
+        vm.expandedIndices = [0]
+        vm.rebuildTreeCaches()
+        return (vm, dto)
+    }
 
     @MainActor
-    func test_selection_updates_selected_index() throws {
-        let vm = DocumentViewModel()
-        vm.nodes = [
-            .init(name: "Part A", parentIndex: -1, hasGeometry: true, geometryId: 0, meshIndex: 0, geometryLabel: "A", boundsMin: .zero, boundsMax: .one),
-            .init(name: "Part B", parentIndex: -1, hasGeometry: true, geometryId: 1, meshIndex: 1, geometryLabel: "B", boundsMin: .zero, boundsMax: .one),
-        ]
-        vm.selectedIndex = 0
-        XCTAssertEqual(vm.selectedIndex, 0)
+    func test_real_assembly_selection_updates_selected_index() throws {
+        let (vm, dto) = try makeAssemblyVM()
+
+        // Select first leaf (index 1 — Base_Box)
         vm.selectedIndex = 1
         XCTAssertEqual(vm.selectedIndex, 1)
+        let node = dto.nodes[1]
+        XCTAssertTrue(node.hasGeometry, "selected node should have geometry")
+        XCTAssertGreaterThanOrEqual(node.geometryId, 0)
+
+        // Deselect
         vm.selectedIndex = nil
         XCTAssertNil(vm.selectedIndex)
     }
 
     @MainActor
-    func test_hide_isolate_direct_hidden_indices() throws {
-        let vm = DocumentViewModel()
-        vm.nodes = [
-            .init(name: "Geo A", parentIndex: -1, hasGeometry: true,  geometryId: 1, meshIndex: 0, geometryLabel: "A", boundsMin: .zero, boundsMax: .one),
-            .init(name: "Assembly", parentIndex: -1, hasGeometry: false, geometryId: -1, meshIndex: -1, geometryLabel: nil, boundsMin: nil, boundsMax: nil),
-            .init(name: "Geo B", parentIndex: -1, hasGeometry: true,  geometryId: 2, meshIndex: 1, geometryLabel: "B", boundsMin: .zero, boundsMax: .one),
-        ]
-        // Directly set hidden — only geometry nodes at indices 0,2 are hideable
-        vm.hiddenNodeIndices.insert(2)
-        XCTAssertEqual(vm.hiddenNodeIndices.count, 1)
-        XCTAssertTrue(vm.hiddenNodeIndices.contains(2))
+    func test_real_assembly_visible_node_indices() throws {
+        let (vm, _) = try makeAssemblyVM()
+
+        // With root expanded, both leaf parts (indices 1,2) should be visible
+        let visible = vm.visibleNodeIndices
+        XCTAssertTrue(visible.contains(1), "Base_Box should be visible")
+        XCTAssertTrue(visible.contains(2), "Pillar_Cylinder should be visible")
+        // Root (index 0) is an assembly — it appears if it has visible descendants
     }
 
     @MainActor
-    func test_isolate_node_hides_others() throws {
-        let vm = DocumentViewModel()
-        vm.nodes = [
-            .init(name: "Root", parentIndex: -1, hasGeometry: false, geometryId: -1, meshIndex: -1, geometryLabel: nil, boundsMin: nil, boundsMax: nil),
-            .init(name: "A", parentIndex: 0, hasGeometry: true, geometryId: 1, meshIndex: 0, geometryLabel: "A", boundsMin: .zero, boundsMax: .one),
-            .init(name: "B", parentIndex: 0, hasGeometry: true, geometryId: 2, meshIndex: 1, geometryLabel: "B", boundsMin: .zero, boundsMax: .one),
-        ]
-        vm.expandedIndices = [0]
-        vm.rebuildTreeCaches()
+    func test_real_assembly_isolate_node_hides_other_leaf() throws {
+        let (vm, _) = try makeAssemblyVM()
 
+        // Isolate Base_Box (index 1)
         vm.isolateNode(1)
-        XCTAssertFalse(vm.hiddenNodeIndices.contains(1), "A should be visible after isolate")
-        XCTAssertTrue(vm.hiddenNodeIndices.contains(2), "B should be hidden after isolate")
-        XCTAssertEqual(vm.selectedIndex, 1, "isolated node should be selected")
+        // After isolate, only Base_Box should be visible in hiddenNodeIndices
+        XCTAssertFalse(vm.hiddenNodeIndices.contains(1), "Base_Box should NOT be hidden")
+        XCTAssertTrue(vm.hiddenNodeIndices.contains(2), "Pillar_Cylinder should be hidden")
+        XCTAssertEqual(vm.selectedIndex, 1)
+        // hiddenNodeIndices.count should be 1 (just the other leaf)
+        XCTAssertEqual(vm.hiddenNodeIndices.count, 1)
     }
 
-    // MARK: - Visibility lifecycle
-
     @MainActor
-    func test_hide_all_then_show_all_direct() throws {
-        let vm = DocumentViewModel()
-        vm.nodes = [
-            .init(name: "Geo A", parentIndex: -1, hasGeometry: true, geometryId: 0, meshIndex: 0, geometryLabel: "A", boundsMin: .zero, boundsMax: .one),
-            .init(name: "Assembly", parentIndex: -1, hasGeometry: false, geometryId: -1, meshIndex: -1, geometryLabel: nil, boundsMin: nil, boundsMax: nil),
-            .init(name: "Geo B", parentIndex: -1, hasGeometry: true, geometryId: 1, meshIndex: 1, geometryLabel: "B", boundsMin: .zero, boundsMax: .one),
-        ]
+    func test_real_assembly_hide_all_then_show_all() throws {
+        let (vm, _) = try makeAssemblyVM()
 
         vm.hideAllNodes()
-        // Only geometry nodes (0 and 2) should be hidden; assembly (1) is skipped
-        XCTAssertEqual(vm.hiddenNodeIndices.count, 2, "two geometry nodes hidden")
-        XCTAssertTrue(vm.hiddenNodeIndices.contains(0))
-        XCTAssertTrue(vm.hiddenNodeIndices.contains(2))
+        // Both leaf parts (indices 1,2) should be hidden; assembly root (0) skipped
+        XCTAssertTrue(vm.hiddenNodeIndices.contains(1), "Base_Box hidden")
+        XCTAssertTrue(vm.hiddenNodeIndices.contains(2), "Pillar_Cylinder hidden")
+        XCTAssertEqual(vm.hiddenNodeIndices.count, 2)
 
         vm.setAllNodesVisible()
-        XCTAssertEqual(vm.hiddenNodeIndices.count, 0, "all nodes visible again")
+        XCTAssertEqual(vm.hiddenNodeIndices.count, 0, "all visible again")
+    }
+
+    @MainActor
+    func test_real_assembly_hidden_node_then_toggle() throws {
+        let (vm, _) = try makeAssemblyVM()
+
+        // Hide Base_Box directly
+        vm.hiddenNodeIndices.insert(1)
+        XCTAssertTrue(vm.hiddenNodeIndices.contains(1), "Base_Box in hiddenNodeIndices")
+
+        // Un-hide it
+        vm.hiddenNodeIndices.remove(1)
+        XCTAssertFalse(vm.hiddenNodeIndices.contains(1), "Base_Box removed from hiddenNodeIndices")
+        XCTAssertEqual(vm.hiddenNodeIndices.count, 0, "no hidden nodes")
     }
 }
