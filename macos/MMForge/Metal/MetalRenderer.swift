@@ -1045,19 +1045,66 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// - Parameter size: output image dimensions in pixels
     /// - Returns: NSImage or nil on failure
     func renderOffscreenImage(size: CGSize) -> NSImage? {
-        guard let (pixelData, width, height) = renderOffscreen(size: size) else { return nil }
-        let bytesPerRow = width * 4
-        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
-            .union(.byteOrder32Little)
-        guard let provider = CGDataProvider(data: pixelData as CFData),
-              let cgImage = CGImage(
-                width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
-                bytesPerRow: bytesPerRow, space: colorSpace, bitmapInfo: bitmapInfo,
-                provider: provider, decode: nil,
-                shouldInterpolate: false, intent: .defaultIntent
-              ) else { return nil }
-        return NSImage(cgImage: cgImage, size: NSSize(width: width, height: height))
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: NSImage? = nil
+        Task {
+            result = await renderOffscreenAsync(size: size)
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return result
+    }
+
+    /// Async offscreen render using command-buffer completion.
+    /// Does NOT block the calling thread. Uses withCheckedContinuation.
+    func renderOffscreenAsync(size: CGSize, timeout: TimeInterval = 10.0) async -> NSImage? {
+        let width = Int(size.width); let height = Int(size.height)
+        guard width > 0, height > 0 else { return nil }
+
+        let texDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        texDesc.usage = [.renderTarget, .shaderRead]; texDesc.storageMode = .shared
+        guard let offscreenTexture = device.makeTexture(descriptor: texDesc) else { return nil }
+        let depthDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: width, height: height, mipmapped: false)
+        depthDesc.usage = .renderTarget; depthDesc.storageMode = .private
+        guard let depthTexture = device.makeTexture(descriptor: depthDesc) else { return nil }
+
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = offscreenTexture
+        rpd.colorAttachments[0].loadAction = .clear
+        rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.12, green: 0.12, blue: 0.14, alpha: 1)
+        rpd.depthAttachment.texture = depthTexture
+        rpd.depthAttachment.loadAction = .clear; rpd.depthAttachment.clearDepth = 1.0
+
+        guard let cmdBuf = commandQueue.makeCommandBuffer(),
+              let encoder = cmdBuf.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
+        let aspect = Float(width) / Float(max(height, 1))
+        let mvp = camera.projectionMatrix(aspect: aspect) * camera.viewMatrix
+        updateFrustumCulling(aspect: aspect)
+        switch renderMode {
+        case .solid: drawPass(encoder: encoder, pipeline: solidPipeline, mvp: mvp, highlightTint: simd_float4(0.2,0.5,1.0,0.4), mode: 0, depthWrite: true, fillMode: .fill)
+        case .wireframe: drawPass(encoder: encoder, pipeline: wireframePipeline, mvp: mvp, highlightTint: simd_float4(0.2,0.5,1.0,0.4), mode: 1, depthWrite: true, fillMode: .lines)
+        case .solidWireframe:
+            drawPass(encoder: encoder, pipeline: solidPipeline, mvp: mvp, highlightTint: simd_float4(0.2,0.5,1.0,0.4), mode: 0, depthWrite: true, fillMode: .fill)
+            encoder.setDepthBias(0.001, slopeScale: 1.0, clamp: 0.001)
+            drawPass(encoder: encoder, pipeline: wireframePipeline, mvp: mvp, highlightTint: simd_float4(0,0,0,0), mode: 1, depthWrite: false, fillMode: .lines)
+        case .transparent: drawPass(encoder: encoder, pipeline: transparentPipeline, mvp: mvp, highlightTint: simd_float4(0.2,0.5,1.0,0.4), mode: 3, depthWrite: false, fillMode: .fill)
+        }
+        encoder.endEncoding()
+
+        return await withCheckedContinuation { cont in
+            cmdBuf.addCompletedHandler { _ in
+                let bpr = width * 4
+                var data = Data(count: bpr * height)
+                data.withUnsafeMutableBytes { offscreenTexture.getBytes($0.baseAddress!, bytesPerRow: bpr, from: MTLRegionMake2D(0,0,width,height), mipmapLevel: 0) }
+                let cs = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+                let bi = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue).union(.byteOrder32Little)
+                if let p = CGDataProvider(data: data as CFData),
+                   let cg = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: bpr, space: cs, bitmapInfo: bi, provider: p, decode: nil, shouldInterpolate: false, intent: .defaultIntent) {
+                    cont.resume(returning: NSImage(cgImage: cg, size: NSSize(width: width, height: height)))
+                } else { cont.resume(returning: nil) }
+            }
+            cmdBuf.commit()
+        }
     }
 
     /// Render to an offscreen texture, returning raw RGBA8 pixel data.

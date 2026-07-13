@@ -1028,24 +1028,45 @@ extension DocumentViewModel {
             export2DImage()
             return
         }
-
         guard let renderer else {
             exportError = "No renderer available."
             return
         }
-        // Use offscreen render as primary path (works headless + GUI).
-        // Fall back to drawable capture only if offscreen fails.
-        let offscreenImage = renderer.renderOffscreenImage(size: CGSize(width: 1600, height: 1200))
-        if let image = offscreenImage {
-            let panel = NSSavePanel()
-            panel.title = "Export Image"
-            panel.allowedContentTypes = [.png, .jpeg]
-            panel.nameFieldStringValue = "mmforge_view.\(AppPreferences.exportFormat)"
-            panel.canCreateDirectories = true
-
-            panel.begin { response in
-                guard response == .OK, let url = panel.url else { return }
-                self.saveImage(image, to: url)
+        let exportSize = CGSize(width: 1600, height: 1200)
+        Task {
+            // Primary: async offscreen render (does not block main thread).
+            let image = await renderer.renderOffscreenAsync(size: exportSize)
+            if let image = image {
+                await MainActor.run {
+                    let panel = NSSavePanel()
+                    panel.title = "Export Image"
+                    panel.allowedContentTypes = [.png, .jpeg]
+                    panel.nameFieldStringValue = "mmforge_view.\(AppPreferences.exportFormat)"
+                    panel.canCreateDirectories = true
+                    panel.begin { response in
+                        guard response == .OK, let url = panel.url else { return }
+                        self.saveImage(image, to: url)
+                    }
+                }
+            } else {
+                // Fallback: try drawable capture if offscreen fails
+                if let fallback = await renderer.captureImageAsync() {
+                    await MainActor.run {
+                        let panel = NSSavePanel()
+                        panel.title = "Export Image"
+                        panel.allowedContentTypes = [.png, .jpeg]
+                        panel.nameFieldStringValue = "mmforge_view.\(AppPreferences.exportFormat)"
+                        panel.canCreateDirectories = true
+                        panel.begin { response in
+                            guard response == .OK, let url = panel.url else { return }
+                            self.saveImage(fallback, to: url)
+                        }
+                    }
+                } else {
+                    await MainActor.run {
+                        self.exportError = "Export failed: offscreen render and drawable capture both unavailable."
+                    }
+                }
             }
         }
     }
