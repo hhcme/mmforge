@@ -286,13 +286,17 @@ fn find_shim_library() -> Option<std::path::PathBuf> {
     if let Ok(inc) = std::env::var("OCCT_INCLUDE_DIR") {
         if let Ok(lib) = std::env::var("OCCT_LIB_DIR") {
             let needs_build =
-                !shim_lib.is_file() || shim_sources_newer(&shim_src_dir, &shim_build_dir);
+                !shim_lib.is_file() || shim_fingerprint_changed(&shim_src_dir, &shim_build_dir);
             if needs_build {
-                println!("cargo:warning=Building OCCT shim (source newer or missing)...");
+                println!(
+                    "cargo:warning=Building OCCT shim (fingerprint changed or library missing)..."
+                );
                 if let Err(e) = build_shim_with_cmake(&shim_src_dir, &shim_build_dir, &inc, &lib) {
                     println!("cargo:warning=OCCT shim build failed: {e}");
                     return None;
                 }
+                // Write fingerprint after successful build.
+                let _ = write_shim_fingerprint(&shim_src_dir, &shim_build_dir);
                 println!(
                     "cargo:warning=OCCT shim built successfully at {}",
                     shim_build_dir.display()
@@ -318,33 +322,49 @@ fn find_shim_library() -> Option<std::path::PathBuf> {
     None
 }
 
-/// Check if any shim source file (.cpp, .h, CMakeLists.txt) is newer than
-/// the built static library.
+/// Check if the shim source fingerprint differs from the stored one.
+/// Uses content hash (sha256) — NOT mtime — for reliability across
+/// git checkout, CI cache, and network filesystems.
 #[cfg(feature = "occt")]
-fn shim_sources_newer(src_dir: &std::path::Path, build_dir: &std::path::Path) -> bool {
-    let lib = build_dir.join("libmmforge_occt_shim.a");
-    let lib_mtime = std::fs::metadata(&lib).ok().and_then(|m| m.modified().ok());
+fn shim_fingerprint_changed(src_dir: &std::path::Path, build_dir: &std::path::Path) -> bool {
+    let current = compute_shim_fingerprint(src_dir);
+    let fp_file = build_dir.join(".shim_fingerprint");
+    match std::fs::read_to_string(&fp_file) {
+        Ok(stored) => stored.trim() != current.trim(),
+        Err(_) => true, // no fingerprint file — build needed
+    }
+}
 
+/// Compute content fingerprint of shim sources (sha256 of concatenated content).
+#[cfg(feature = "occt")]
+fn compute_shim_fingerprint(src_dir: &std::path::Path) -> String {
+    use sha2::Digest;
+    use std::io::Read;
     let sources = [
         src_dir.join("mmforge_occt_shim.cpp"),
         src_dir.join("mmforge_occt_shim.h"),
         src_dir.join("CMakeLists.txt"),
     ];
-
+    let mut hasher = sha2::Sha256::new();
     for src in &sources {
-        if let Ok(m) = std::fs::metadata(src) {
-            if let Ok(src_mtime) = m.modified() {
-                if let Some(lib_time) = lib_mtime {
-                    if src_mtime > lib_time {
-                        return true;
-                    }
-                } else {
-                    return true; // library has no mtime — rebuild
-                }
+        if let Ok(mut f) = std::fs::File::open(src) {
+            let mut buf = Vec::new();
+            if f.read_to_end(&mut buf).is_ok() {
+                hasher.update(&buf);
             }
         }
     }
-    false
+    format!("{:x}", hasher.finalize())
+}
+
+/// Write fingerprint to .shim_fingerprint after a successful build.
+#[cfg(feature = "occt")]
+fn write_shim_fingerprint(
+    src_dir: &std::path::Path,
+    build_dir: &std::path::Path,
+) -> std::io::Result<()> {
+    let fp = compute_shim_fingerprint(src_dir);
+    std::fs::write(build_dir.join(".shim_fingerprint"), fp)
 }
 
 /// Run CMake configure + build for the OCCT shim.

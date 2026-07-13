@@ -1,22 +1,18 @@
 #!/bin/bash
 # build-occt-shim.sh — Shared OCCT shim build logic
 #
-# Called by package.sh, Xcode Build Rust Bridge, and build.rs (via cargo).
+# Can be used in two ways:
+#   1. source build-occt-shim.sh && ensure_occt_shim   (by package.sh, Xcode)
+#   2. bash build-occt-shim.sh                          (direct execution)
+#
 # Uses content-hash fingerprint (sha256 of all shim sources) — NOT mtime.
 #
-# Exit codes:
-#   0 = shim is up to date (or was successfully built)
-#   1 = OCCT not configured (OCCT_INCLUDE_DIR/OCCT_LIB_DIR not set)
-#   2 = shim build failed
-#   3 = shim outdated and build required (caller should rebuild, then re-invoke)
+# Exit codes (when executed directly):
+#   0 = shim built successfully or already up to date
+#   1 = OCCT not configured (OCCT_INCLUDE_DIR/OCCT_LIB_DIR not set or invalid)
+#   2 = shim build failed (cmake configure or build error)
 #
-# Output (stdout): path to libmmforge_occt_shim.a
-# Diagnostics: stderr
-#
-# Usage:
-#   source build-occt-shim.sh
-#   ensure_occt_shim  # sets SHIM_LIB, OCCT_INCLUDE_DIR, OCCT_LIB_DIR vars
-#   if [ $? -eq 0 ]; then ... fi
+# When sourced, ensure_occt_shim returns the same codes via return.
 #
 # Environment:
 #   OCCT_INCLUDE_DIR     — required for OCCT build
@@ -30,10 +26,8 @@ set -euo pipefail
 if [ -n "${CARGO_MANIFEST_DIR:-}" ]; then
     SHIM_SRC_DIR="${CARGO_MANIFEST_DIR}/shim"
 else
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    MACOS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-    ROOT="$(cd "$MACOS_DIR/.." && pwd)"
-    SHIM_SRC_DIR="${ROOT}/crates/mmforge-geometry/shim"
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+    SHIM_SRC_DIR="$(cd "$SCRIPT_DIR/../../crates/mmforge-geometry/shim" && pwd)"
 fi
 
 SHIM_BUILD_DIR="${MMFORGE_SHIM_DIR:-${SHIM_SRC_DIR}/build}"
@@ -41,8 +35,7 @@ SHIM_LIB="${SHIM_BUILD_DIR}/libmmforge_occt_shim.a"
 
 # ── Content fingerprint ──────────────────────────────────────────────────
 # Hash all shim source files.  mtime alone is unreliable across git checkout,
-# CI cache, and network filesystems.  sha256 of concatenated source content
-# gives a deterministic, reproducible fingerprint.
+# CI cache, and network filesystems.  sha256 gives a deterministic fingerprint.
 compute_fingerprint() {
     local fp=""
     for f in \
@@ -65,18 +58,22 @@ ensure_occt_shim() {
         return 1
     fi
     if [ ! -d "${OCCT_INCLUDE_DIR}" ] || [ ! -d "${OCCT_LIB_DIR}" ]; then
-        echo "build-occt-shim: OCCT dirs not found: INCLUDE=${OCCT_INCLUDE_DIR}, LIB=${OCCT_LIB_DIR}" >&2
+        echo "build-occt-shim: OCCT dirs not found: INCLUDE=${OCCT_INCLUDE_DIR:-unset}, LIB=${OCCT_LIB_DIR:-unset}" >&2
         return 1
     fi
 
     # Ensure cmake is available.
     if ! command -v cmake &>/dev/null; then
-        echo "build-occt-shim: ERROR — cmake not found in PATH. Install cmake to build the OCCT shim." >&2
+        echo "build-occt-shim: ERROR — cmake not found in PATH." >&2
         return 2
     fi
 
     local current_fp
     current_fp=$(compute_fingerprint)
+    if [ -z "$current_fp" ]; then
+        echo "build-occt-shim: ERROR — could not compute source fingerprint (missing sources?)." >&2
+        return 2
+    fi
 
     # Check if shim exists and is current.
     local fp_file="${SHIM_BUILD_DIR}/.shim_fingerprint"
@@ -91,7 +88,7 @@ ensure_occt_shim() {
     fi
 
     # Build needed.
-    echo "build-occt-shim: Building shim (source fingerprint changed or library missing)..." >&2
+    echo "build-occt-shim: Building shim (fingerprint changed or library missing)..." >&2
     mkdir -p "${SHIM_BUILD_DIR}"
 
     if ! cmake \
@@ -115,10 +112,20 @@ ensure_occt_shim() {
         return 2
     fi
 
-    # Write fingerprint.
     echo "$current_fp" > "$fp_file"
-
     echo "build-occt-shim: Successfully built ${SHIM_LIB}" >&2
     echo "${SHIM_LIB}"
     return 0
 }
+
+# ── Direct execution ─────────────────────────────────────────────────────
+# When run as `bash build-occt-shim.sh`, call ensure_occt_shim and exit
+# with its return code.  Also export MMFORGE_SHIM_DIR for callers.
+if [[ "${BASH_SOURCE[0]:-}" == "$0" ]]; then
+    ensure_occt_shim
+    rc=$?
+    if [ $rc -eq 0 ]; then
+        echo "MMFORGE_SHIM_DIR=$(dirname "$SHIM_LIB")"
+    fi
+    exit $rc
+fi

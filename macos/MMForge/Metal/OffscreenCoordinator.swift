@@ -8,11 +8,18 @@ import Foundation
 /// - The path that wins the continuation owns cancellation of the other path.
 /// - All resolution (cancellation, observer, resume) happens inside a single
 ///   lock-protected function — no two paths can interleave their side effects.
+/// - Observer receives exactly TWO events: the winner, then the loser.
 struct OffscreenCoordinator {
+    /// Terminal outcome (winner).  Exactly one is reported per call.
     enum Outcome: Equatable {
-        case operationCompleted
-        case timeoutFired
-        case timeoutCancelled
+        case operationCompleted   // operation finished first
+        case timeoutFired         // timeout elapsed first
+    }
+
+    /// Loser outcome — what happened to the path that didn't win.
+    enum LoserOutcome: Equatable {
+        case operationCancelled   // operation was cancelled by timeout
+        case timeoutCancelled     // timeout was cancelled by operation
     }
 
     /// Run an async offscreen operation with timeout and observable outcomes.
@@ -28,25 +35,18 @@ struct OffscreenCoordinator {
             var resolved = false
 
             /// The single terminal resolution function.
-            /// Only the first caller proceeds; all subsequent callers are no-ops.
-            /// Cancels the OTHER task, notifies observer, and resumes.
             func resolve(winner: Outcome,
+                         loser: LoserOutcome,
                          image: NSImage?,
-                         cancelOther: @escaping () -> Void,
-                         notifyOther: Outcome) {
+                         cancelOther: @escaping () -> Void) {
                 lock.lock()
                 defer { lock.unlock() }
                 guard !resolved else { return }
                 resolved = true
 
-                // Cancel the losing path.
                 cancelOther()
-
-                // Notify observer of BOTH outcomes (winner + loser).
                 observer?(winner)
-                observer?(notifyOther)
 
-                // Resume the continuation exactly once.
                 cont.resume(returning: image)
             }
 
@@ -57,9 +57,9 @@ struct OffscreenCoordinator {
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                 resolve(
                     winner: .timeoutFired,
+                    loser: .operationCancelled,
                     image: nil,
-                    cancelOther: { operationTask?.cancel() },
-                    notifyOther: .timeoutCancelled
+                    cancelOther: { operationTask?.cancel() }
                 )
             }
 
@@ -67,9 +67,9 @@ struct OffscreenCoordinator {
                 let result = await operation()
                 resolve(
                     winner: .operationCompleted,
+                    loser: .timeoutCancelled,
                     image: result,
-                    cancelOther: { timeoutTask?.cancel() },
-                    notifyOther: .timeoutCancelled
+                    cancelOther: { timeoutTask?.cancel() }
                 )
             }
         }

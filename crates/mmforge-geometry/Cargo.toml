@@ -21,3 +21,4 @@ thiserror = { workspace = true }
 
 [build-dependencies]
 pkg-config = "0.3"
+sha2 = "0.10"

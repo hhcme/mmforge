@@ -148,8 +148,7 @@ final class OffscreenRenderTests: XCTestCase {
     // All assertions are on concrete observed values — never "no crash".
     // ----------------------------------------------------------------
 
-    /// Operation completes first → timeout is cancelled.
-    /// Observer receives operationCompleted (winner) + timeoutCancelled (loser).
+    /// Operation completes first → observer sees only operationCompleted.
     /// TimeoutFired must NOT appear.
     func testOperationWinsTimeoutCancelledNotFired() async {
         var events: [OffscreenCoordinator.Outcome] = []
@@ -169,14 +168,13 @@ final class OffscreenRenderTests: XCTestCase {
         let captured = events
         lock.unlock()
 
-        XCTAssertTrue(captured.contains(.operationCompleted), "winner must be reported")
-        XCTAssertTrue(captured.contains(.timeoutCancelled), "loser must be reported")
+        XCTAssertEqual(captured, [.operationCompleted],
+                       "observer must see exactly operationCompleted when operation wins")
         XCTAssertFalse(captured.contains(.timeoutFired),
                        "timeoutFired must NOT appear when operation wins")
     }
 
-    /// Timeout fires first → operation result discarded.
-    /// Observer receives timeoutFired (winner) + timeoutCancelled (loser).
+    /// Timeout fires first → observer sees only timeoutFired.
     /// OperationCompleted must NOT appear.
     func testTimeoutWinsOperationDiscarded() async {
         var events: [OffscreenCoordinator.Outcome] = []
@@ -199,8 +197,8 @@ final class OffscreenRenderTests: XCTestCase {
         let captured = events
         lock.unlock()
 
-        XCTAssertTrue(captured.contains(.timeoutFired), "winner must be reported")
-        XCTAssertTrue(captured.contains(.timeoutCancelled), "loser must be reported")
+        XCTAssertEqual(captured, [.timeoutFired],
+                       "observer must see exactly timeoutFired when timeout wins")
         XCTAssertFalse(captured.contains(.operationCompleted),
                        "operationCompleted must NOT appear when timeout wins")
     }
@@ -260,18 +258,18 @@ final class OffscreenRenderTests: XCTestCase {
         let elapsed = Date().timeIntervalSince(start)
 
         XCTAssertNil(image, "timeout must win")
-        XCTAssertLessThan(elapsed, 1.0, "must resolve via timeout quickly")
+        XCTAssertLessThan(elapsed, 1.0)
 
         lock.lock()
         let captured = events
         lock.unlock()
 
-        XCTAssertTrue(captured.contains(.timeoutFired),
-                      "observer must see timeoutFired for rapid race")
+        XCTAssertEqual(captured, [.timeoutFired],
+                       "observer must see exactly timeoutFired for rapid race")
     }
 
-    /// Mock-based test: timeout wins against slow mock operation.
-    func testTimeoutWinsFirstViaMock() async {
+    /// Operation completes quickly — image returned, timeout never fires.
+    func testOperationCompletesTimeoutNeverFires() async {
         let mock = MockOffscreenRenderer()
         mock.result = .delayedNil(5.0) // very slow
 
@@ -285,8 +283,8 @@ final class OffscreenRenderTests: XCTestCase {
         XCTAssertLessThan(elapsed, 2.0, "must resolve via timeout quickly")
     }
 
-    /// Operation completes quickly — image returned, timeout never fires.
-    func testOperationCompletesTimeoutNeverFires() async {
+    /// Mock-based test: timeout wins against slow mock operation.
+    func testTimeoutWinsFirstViaMock() async {
         let mock = MockOffscreenRenderer()
         let expected = NSImage(size: NSSize(width: 50, height: 50))
         mock.result = .success(expected)
