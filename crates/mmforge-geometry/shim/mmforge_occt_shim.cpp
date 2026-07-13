@@ -52,6 +52,35 @@
 #include <XSControl_TransferReader.hxx>
 #include <XSControl_WorkSession.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
+#include <Message.hxx>
+#include <Message_Messenger.hxx>
+#include <Message_Printer.hxx>
+
+// ======================================================================
+// OCCT Messenger redirection
+//
+// OpenCASCADE's default messenger prints diagnostic text to std::cout
+// during ReadFile/Transfer, which contaminates any JSON emitted on
+// stdout.  We redirect ALL OCCT messages to std::cerr via a static
+// initializer that runs once at library load time.
+// ======================================================================
+
+namespace {
+
+struct OcctMessengerInit {
+    OcctMessengerInit() {
+        Handle(Message_Messenger) msg = Message::DefaultMessenger();
+        // Remove all existing printers (which write to cout by default).
+        // OCCT messages go to printers; with none attached, messages
+        // are silently discarded — no stdout contamination.
+        msg->RemovePrinters(STANDARD_TYPE(Message_Printer));
+    }
+};
+
+// Static — runs before main() / any library usage.
+static OcctMessengerInit _occt_messenger_init;
+
+} // anonymous namespace
 
 // ======================================================================
 // Internal types

@@ -282,4 +282,58 @@ final class OffscreenRenderTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
         // No crash, and the observer pattern verifies correctness.
     }
+
+    // ----------------------------------------------------------------
+    // MARK: Controllable-blocking operation — timeout cancels task
+    // ----------------------------------------------------------------
+
+    /// After timeout wins, the operation Task must receive cancellation
+    /// and must NOT emit operationCompleted.
+    func testTimeoutCancelsOperationTaskNoOperationCompleted() async {
+        actor Gate {
+            var proceed = false
+            var taskWasCancelled = false
+            func open() { proceed = true }
+            func markCancelled() { taskWasCancelled = true }
+        }
+        let gate = Gate()
+
+        var events: [OffscreenCoordinator.Outcome] = []
+        let lock = NSLock()
+        let observer: (OffscreenCoordinator.Outcome) -> Void = { outcome in
+            lock.lock(); events.append(outcome); lock.unlock()
+        }
+
+        let start = Date()
+        let image = await OffscreenCoordinator.run(timeout: 0.05, observer: observer) {
+            // Block until gate opens or we're cancelled.
+            while true {
+                if Task.isCancelled {
+                    await gate.markCancelled()
+                    return NSImage?.none
+                }
+                if await gate.proceed { break }
+                try? await Task.sleep(nanoseconds: 1_000_000) // 1ms
+            }
+            return NSImage(size: NSSize(width: 10, height: 10))
+        }
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertNil(image, "timeout must return nil")
+        XCTAssertLessThan(elapsed, 2.0, "must resolve via timeout quickly")
+
+        // Now open the gate so the operation can observe its cancellation.
+        await gate.open()
+        try? await Task.sleep(nanoseconds: 200_000_000) // wait for operation to notice
+
+        let wasCancelled = await gate.taskWasCancelled
+        XCTAssertTrue(wasCancelled, "operation Task must receive cancellation after timeout")
+
+        lock.lock()
+        let captured = events
+        lock.unlock()
+        XCTAssertTrue(captured.contains(.timeoutFired), "observer must see timeoutFired")
+        XCTAssertFalse(captured.contains(.operationCompleted),
+                       "operationCompleted must NOT be emitted after timeout cancellation")
+    }
 }

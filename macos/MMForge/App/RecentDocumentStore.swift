@@ -112,8 +112,18 @@ final class RecentDocumentStore: ObservableObject {
         Self.save(list, to: defaults)
     }
 
+    /// Return reachable URLs.  If any stale entries are discovered,
+    /// they are synchronously cleaned from memory, UserDefaults, and
+    /// the system Open Recent menu.
     func recentURLs() -> [URL] {
-        urls.filter(reachability)
+        let valid = urls.filter(reachability)
+        if valid.count != urls.count {
+            // Stale entries found — clean everything.
+            urls = valid
+            Self.save(valid, to: defaults)
+            cleanSystemMenu()
+        }
+        return valid
     }
 
     func clear() {

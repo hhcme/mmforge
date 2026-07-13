@@ -3,33 +3,28 @@ import Foundation
 
 /// Coordinates async offscreen rendering with timeout and single-resume protection.
 ///
-/// Used by MetalRenderer (real GPU path) and MockOffscreenRenderer (test path)
-/// to share the same timeout/single-resume logic.
+/// Used by MetalRenderer (real GPU path) and MockOffscreenRenderer (test path).
 ///
-/// ## Observable outcomes
-/// The `observer` closure receives every resolution event — both the operation
-/// result and timeout firings. This enables deterministic XCTest assertions
-/// (no "didn't crash" or `XCTAssertTrue(true)` as evidence).
+/// ## Contract
+/// - Exactly ONE terminal outcome is reported to `observer` per call.
+/// - When timeout fires first, the operation Task is cancelled.
+/// - When the operation completes first, the timeout Task is cancelled.
+/// - `Task.isCancelled` is checked before any resume call.
 struct OffscreenCoordinator {
-    /// What resolved the coordinator.
+    /// What resolved the coordinator.  Exactly one is reported per call.
     enum Outcome: Equatable {
-        /// The operation completed (may be nil on GPU error).
         case operationCompleted
-        /// The timeout fired.
         case timeoutFired
-        /// The timeout was cancelled because the operation won.
         case timeoutCancelled
     }
 
     /// Run an async offscreen operation with timeout and observable outcomes.
     ///
     /// - Parameters:
-    ///   - timeout: Maximum seconds to wait (must be > 0 and finite).
-    ///   - observer: Called on EVERY resolution event (operation result,
-    ///     timeout fired, timeout cancelled). Thread-safe, called at most
-    ///     once per event type. Pass `nil` in production.
-    ///   - operation: The async rendering work. Returns NSImage? on completion.
-    /// - Returns: NSImage? on success, nil on timeout or operation failure.
+    ///   - timeout: Maximum seconds (must be > 0 and finite).
+    ///   - observer: Called on EVERY resolution event.  Thread-safe.
+    ///   - operation: The async work.  Returns NSImage? on completion.
+    /// - Returns: NSImage? on success, nil on timeout or failure.
     static func run(
         timeout: TimeInterval,
         observer: ((Outcome) -> Void)? = nil,
@@ -49,6 +44,9 @@ struct OffscreenCoordinator {
                 cont.resume(returning: image)
             }
 
+            // Hold the operation Task so we can cancel it on timeout.
+            var operationTask: Task<Void, Never>?
+
             let timeoutTask = Task {
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                 lock.lock()
@@ -58,15 +56,22 @@ struct OffscreenCoordinator {
                     observer?(.timeoutCancelled)
                     return
                 }
+                // Timeout wins — cancel the operation if still running.
+                lock.lock()
+                operationTask?.cancel()
+                lock.unlock()
                 observer?(.timeoutFired)
                 safeResume(nil)
             }
 
-            // Start the operation.
-            Task {
+            operationTask = Task {
                 let result = await operation()
                 timeoutTask.cancel()
-                observer?(.operationCompleted)
+                // Only report completion if WE were not cancelled.
+                // If timeoutTask cancelled us, don't emit operationCompleted.
+                if !Task.isCancelled {
+                    observer?(.operationCompleted)
+                }
                 safeResume(result)
             }
         }

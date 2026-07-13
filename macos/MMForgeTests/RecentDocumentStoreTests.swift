@@ -144,4 +144,27 @@ final class RecentDocumentStoreTests: XCTestCase {
         let raw = suite.stringArray(forKey: "MMForgeRecentDocuments") ?? []
         XCTAssertTrue(raw.isEmpty, "persistence cleaned")
     }
+
+    // MARK: - recentURLs() cleans stale
+
+    func testRecentURLsCleansMemoryAndPersistence() {
+        let real = makeURL("real")
+        let stale = makeURL("stale")
+        store.add(url: real)
+        store.add(url: stale)
+        XCTAssertEqual(store.urls.count, 2)
+
+        // Make "stale" unreachable → recentURLs() must clean it everywhere.
+        reachable.remove(stale)
+
+        let filtered = store.recentURLs()
+        XCTAssertEqual(filtered.count, 1, "stale filtered from result")
+        XCTAssertEqual(store.urls.count, 1, "stale removed from memory")
+        XCTAssertFalse(store.urls.contains(stale), "stale gone from urls")
+
+        // Verify persistence was cleaned.
+        let raw = suite.stringArray(forKey: "MMForgeRecentDocuments") ?? []
+        XCTAssertEqual(raw.count, 1, "persistence cleaned — only reachable URL saved")
+        XCTAssertFalse(raw.contains(stale.path), "stale path not in persistence")
+    }
 }
