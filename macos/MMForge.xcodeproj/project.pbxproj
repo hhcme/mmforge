@@ -30,6 +30,8 @@
 		A10022 /* ProductizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10026 /* ProductizationTests.swift */; };
 		A10023 /* RecentDocumentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10027 /* RecentDocumentStore.swift */; };
 		A10024 /* OffscreenRenderProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10028 /* OffscreenRenderProtocol.swift */; };
+		A10025 /* OffscreenCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10029 /* OffscreenCoordinator.swift */; };
+		A10026 /* RecentDocumentStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10030 /* RecentDocumentStoreTests.swift */; };
 		035115407A454809A9951D15 /* BridgeAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BFCBDDB2C7D4543AD26A6C6 /* BridgeAcceptanceTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -70,6 +72,8 @@
 		B10026 /* ProductizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductizationTests.swift; sourceTree = "<group>"; };
 		B10027 /* RecentDocumentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentDocumentStore.swift; sourceTree = "<group>"; };
 		B10028 /* OffscreenRenderProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OffscreenRenderProtocol.swift; sourceTree = "<group>"; };
+		B10029 /* OffscreenCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OffscreenCoordinator.swift; sourceTree = "<group>"; };
+		B10030 /* RecentDocumentStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentDocumentStoreTests.swift; sourceTree = "<group>"; };
 		C10001 /* MMForge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MMForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C10002 /* MMForgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MMForgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2BFCBDDB2C7D4543AD26A6C6 /* BridgeAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeAcceptanceTests.swift; sourceTree = "<group>"; };
@@ -140,16 +144,17 @@
 			path = Document;
 			sourceTree = "<group>";
 		};
-		E10006 /* Metal */ = {
-			isa = PBXGroup;
-			children = (
-				B10008 /* MetalViewPlaceholder.swift */,
-				B10013 /* MetalRenderer.swift */,
-				B10014 /* Shaders.metal */,
-				B10016 /* Picking.swift */,
-				B10018 /* SectionFill.swift */,
-				B10028 /* OffscreenRenderProtocol.swift */,
-			);
+			E10006 /* Metal */ = {
+				isa = PBXGroup;
+				children = (
+					B10008 /* MetalViewPlaceholder.swift */,
+					B10013 /* MetalRenderer.swift */,
+					B10014 /* Shaders.metal */,
+					B10016 /* Picking.swift */,
+					B10018 /* SectionFill.swift */,
+					B10028 /* OffscreenRenderProtocol.swift */,
+					B10029 /* OffscreenCoordinator.swift */,
+				);
 			path = Metal;
 			sourceTree = "<group>";
 		};
@@ -188,16 +193,17 @@
 			path = Resources;
 			sourceTree = "<group>";
 		};
-		E10011 /* MMForgeTests */ = {
-			isa = PBXGroup;
-			children = (
-				B10017 /* PickingTests.swift */,
-				B10020 /* TransformTests.swift */,
-				B10022 /* AnnotationTests.swift */,
-				B10023 /* AsyncParseTests.swift */,
-				B10026 /* ProductizationTests.swift */,
-				2BFCBDDB2C7D4543AD26A6C6 /* BridgeAcceptanceTests.swift */,
-			);
+			E10011 /* MMForgeTests */ = {
+				isa = PBXGroup;
+				children = (
+					B10017 /* PickingTests.swift */,
+					B10020 /* TransformTests.swift */,
+					B10022 /* AnnotationTests.swift */,
+					B10023 /* AsyncParseTests.swift */,
+					B10026 /* ProductizationTests.swift */,
+					2BFCBDDB2C7D4543AD26A6C6 /* BridgeAcceptanceTests.swift */,
+					B10030 /* RecentDocumentStoreTests.swift */,
+				);
 			path = MMForgeTests;
 			sourceTree = "<group>";
 		};
@@ -307,6 +313,7 @@
 				A10018 /* Annotation.swift in Sources */,
 				A10023 /* RecentDocumentStore.swift in Sources */,
 				A10024 /* OffscreenRenderProtocol.swift in Sources */,
+				A10025 /* OffscreenCoordinator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -320,6 +327,7 @@
 				A10020 /* AsyncParseTests.swift in Sources */,
 				A10022 /* ProductizationTests.swift in Sources */,
 				035115407A454809A9951D15 /* BridgeAcceptanceTests.swift in Sources */,
+				A10026 /* RecentDocumentStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

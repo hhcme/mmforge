@@ -1088,42 +1088,35 @@ struct OverlayUniforms {
         }
         encoder.endEncoding()
 
-        // Use withCheckedContinuation with timeout and single-resume protection
-        return await withCheckedContinuation { cont in
-            var resumed = false
-            let lock = NSLock()
-            func safeResume(_ image: NSImage?) {
-                lock.lock(); defer { lock.unlock() }
-                guard !resumed else { return }
-                resumed = true
-                cont.resume(returning: image)
-            }
-
-            cmdBuf.addCompletedHandler { buf in
-                if buf.status != .completed {
-                    safeResume(nil); return
+        // Use OffscreenCoordinator for timeout and single-resume protection
+        return await OffscreenCoordinator.run(timeout: timeout) {
+            await withCheckedContinuation { gpuCont in
+                cmdBuf.addCompletedHandler { buf in
+                    if buf.status != .completed || buf.error != nil {
+                        gpuCont.resume(returning: nil)
+                        return
+                    }
+                    let bpr = width * 4
+                    var data = Data(count: bpr * height)
+                    data.withUnsafeMutableBytes {
+                        offscreenTexture.getBytes($0.baseAddress!, bytesPerRow: bpr,
+                            from: MTLRegionMake2D(0,0,width,height), mipmapLevel: 0)
+                    }
+                    let cs = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+                    let bi = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
+                        .union(.byteOrder32Little)
+                    if let p = CGDataProvider(data: data as CFData),
+                       let cg = CGImage(width: width, height: height,
+                           bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: bpr,
+                           space: cs, bitmapInfo: bi, provider: p,
+                           decode: nil, shouldInterpolate: false,
+                           intent: .defaultIntent) {
+                        gpuCont.resume(returning: NSImage(cgImage: cg, size: NSSize(width: width, height: height)))
+                    } else {
+                        gpuCont.resume(returning: nil)
+                    }
                 }
-                if let err = buf.error {
-                    safeResume(nil); return
-                }
-                let bpr = width * 4
-                var data = Data(count: bpr * height)
-                data.withUnsafeMutableBytes { offscreenTexture.getBytes($0.baseAddress!, bytesPerRow: bpr, from: MTLRegionMake2D(0,0,width,height), mipmapLevel: 0) }
-                let cs = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-                let bi = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue).union(.byteOrder32Little)
-                if let p = CGDataProvider(data: data as CFData),
-                   let cg = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: bpr, space: cs, bitmapInfo: bi, provider: p, decode: nil, shouldInterpolate: false, intent: .defaultIntent) {
-                    safeResume(NSImage(cgImage: cg, size: NSSize(width: width, height: height)))
-                } else {
-                    safeResume(nil)
-                }
-            }
-            cmdBuf.commit()
-
-            // Timeout protection
-            Task {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                safeResume(nil) // timeout → nil
+                cmdBuf.commit()
             }
         }
     }

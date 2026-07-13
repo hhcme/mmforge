@@ -1,11 +1,10 @@
 #!/bin/bash
-# MMForge Performance Baseline — Large Model Benchmark
-# Run: bash docs/scripts/perf-baseline.sh
+# MMForge Performance Baseline
+# Builds CLI from current source, generates large model, runs parse benchmark.
+# Output: JSON report with ONLY verified, reproducible metrics. Unimplemented
+# metrics are explicitly marked as "not_implemented" with a reason.
 #
-# Generates a deterministic large model, then runs parse benchmark,
-# info, and validate.  Records machine environment and peak memory.
-# Outputs a single JSON report to stdout (also written to --output
-# if provided, default /tmp/mmforge_perf_baseline.json).
+# Run: bash docs/scripts/perf-baseline.sh
 #
 # Exit: 0 on success, 1 on any failure.
 
@@ -22,16 +21,41 @@ SEED="${MMFORGE_PERF_SEED:-42}"
 LEVELS="${MMFORGE_PERF_LEVELS:-4}"
 ITERATIONS="${MMFORGE_PERF_ITERATIONS:-5}"
 
-# Use release binary if available, else debug via cargo run.
-if [ -x "$ROOT/target/release/mmforge" ]; then
-  CLI="$ROOT/target/release/mmforge"
-else
-  CLI="cargo run -p mmforge-cli --"
-fi
-
 cd "$ROOT"
 
-# --- Helper: run a command and capture duration + output ---
+# --- 0. Build from source (never reuse stale binaries) ---
+echo "# Building CLI from current source (cargo build --release -p mmforge-cli)" >&2
+cargo build --release -p mmforge-cli
+
+CLI="$ROOT/target/release/mmforge"
+
+# Verify the binary actually works
+echo "# Verifying binary" >&2
+"$CLI" version >/dev/null || {
+  echo "ERROR: Built binary failed 'version' check" >&2
+  exit 1
+}
+
+# --- Helper: run a command and capture duration + output (stdout only) ---
+run_timed_json() {
+  local label="$1"
+  shift
+  local start_ns
+  start_ns=$(date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))' 2>/dev/null || echo 0)
+  local output
+  local rc=0
+  output=$("$@") || rc=$?
+  local end_ns
+  end_ns=$(date +%s%N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1e9))' 2>/dev/null || echo 0)
+  local duration_ms=0
+  if [ "$start_ns" != "0" ] && [ "$end_ns" != "0" ]; then
+    duration_ms=$(( (end_ns - start_ns) / 1000000 ))
+  fi
+  # Return: label|rc|duration_ms|output (newlines escaped)
+  printf '%s|%d|%d|%s\n' "$label" "$rc" "$duration_ms" "$(echo "$output" | tr '\n' '\t')"
+}
+
+# --- Helper: run a command, capture stdout+stderr, duration ---
 run_timed() {
   local label="$1"
   shift
@@ -52,7 +76,7 @@ run_timed() {
 
 # --- 1. Generate large model ---
 echo "# Generating large model ($TRIANGLES triangles, seed=$SEED, levels=$LEVELS)" >&2
-gen_result=$(run_timed "generate" $CLI generate-large-model \
+gen_result=$(run_timed_json "generate" "$CLI" generate-large-model \
   --output "$MODEL_PATH" \
   --triangles "$TRIANGLES" \
   --seed "$SEED" \
@@ -80,7 +104,7 @@ echo "# Model: $node_count nodes, $geometry_count geometries, $triangle_count tr
 echo "# Benchmarking parse ($ITERATIONS iterations)" >&2
 bench_times=()
 for i in $(seq 1 "$ITERATIONS"); do
-  bench_result=$(run_timed "bench_$i" $CLI benchmark "$MODEL_PATH" --iterations 1 --format json)
+  bench_result=$(run_timed "bench_$i" "$CLI" benchmark "$MODEL_PATH" --iterations 1 --format json)
   bench_rc=$(echo "$bench_result" | cut -d'|' -f2)
   bench_ms=$(echo "$bench_result" | cut -d'|' -f3)
   if [ "$bench_rc" -ne 0 ]; then
@@ -119,14 +143,14 @@ echo "# Parse benchmark: min=$bench_min ms, max=$bench_max ms, median=$bench_med
 
 # --- 3. Info ---
 echo "# Getting model info" >&2
-info_result=$(run_timed "info" $CLI info "$MODEL_PATH" --format json)
+info_result=$(run_timed "info" "$CLI" info "$MODEL_PATH" --format json)
 info_rc=$(echo "$info_result" | cut -d'|' -f2)
 info_ms=$(echo "$info_result" | cut -d'|' -f3)
 info_output=$(echo "$info_result" | cut -d'|' -f4- | tr '\t' '\n')
 
 # --- 4. Validate ---
 echo "# Validating model" >&2
-validate_result=$(run_timed "validate" $CLI validate "$MODEL_PATH" --format json)
+validate_result=$(run_timed "validate" "$CLI" validate "$MODEL_PATH" --format json)
 validate_rc=$(echo "$validate_result" | cut -d'|' -f2)
 validate_ms=$(echo "$validate_result" | cut -d'|' -f3)
 validate_output=$(echo "$validate_result" | cut -d'|' -f4- | tr '\t' '\n')
@@ -138,20 +162,8 @@ cpu_brand=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "unknown")
 memory_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo "0")
 memory_gb=$(python3 -c "print(round($memory_bytes / (1024**3), 1))" 2>/dev/null || echo "0")
 macos_version=$(sw_vers -productVersion 2>/dev/null || echo "unknown")
-chip_info=$(sysctl -n machdep.cpu.brand_string 2>/dev/null | head -1 || echo "unknown")
 
-# --- 6. Peak memory estimate (via memory_pressure or vm_stat) ---
-# Note: accurate per-process peak memory requires /usr/bin/time -l,
-# but that changes the duration measurement.  We record system memory
-# pressure as a rough indicator.
-peak_memory_mb="0"
-if command -v memory_pressure &>/dev/null; then
-  mempres=$(memory_pressure 2>/dev/null | head -1 || echo "")
-elif command -v vm_stat &>/dev/null; then
-  mempres=$(vm_stat 2>/dev/null | head -1 || echo "")
-fi
-
-# --- Build JSON output ---
+# --- 6. Build JSON output ---
 timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 python3 -c "
@@ -165,41 +177,43 @@ report = {
         'memory_gb': float($memory_gb),
         'macos_version': '$macos_version'
     },
-    'commands': {
-        'generate': {
-            'command': 'generate-large-model --output $MODEL_PATH --triangles $TRIANGLES --seed $SEED --levels $LEVELS',
-            'duration_ms': $gen_ms,
-            'exit_code': $gen_rc
-        },
-        'parse_benchmark': {
-            'command': 'benchmark $MODEL_PATH --iterations 1 (x$ITERATIONS)',
-            'iterations': $ITERATIONS,
-            'min_ms': $bench_min,
-            'max_ms': $bench_max,
-            'median_ms': $bench_median,
-            'avg_ms': $bench_avg
-        },
-        'info': {
-            'command': 'info $MODEL_PATH --format json',
-            'duration_ms': $info_ms,
-            'exit_code': $info_rc
-        },
-        'validate': {
-            'command': 'validate $MODEL_PATH --format json',
-            'duration_ms': $validate_ms,
-            'exit_code': $validate_rc
-        }
+    'build': {
+        'command': 'cargo build --release -p mmforge-cli',
+        'profile': 'release'
     },
-    'model_stats': {
+    'model': {
         'node_count': $node_count,
         'triangle_count': $triangle_count,
         'geometry_count': $geometry_count,
         'material_count': $material_count,
         'file_size_bytes': $file_size_bytes,
-        'first_usable_mesh_ms': $gen_ms
+        'generation_duration_ms': $gen_ms
     },
-    'peak_memory_mb': 0,
-    'frame_time_estimate_ms': $bench_avg
+    'parse_benchmark': {
+        'iterations': $ITERATIONS,
+        'min_ms': $bench_min,
+        'max_ms': $bench_max,
+        'median_ms': $bench_median,
+        'avg_ms': $bench_avg
+    },
+    'unimplemented_metrics': {
+        'first_usable_mesh_ms': {
+            'status': 'not_implemented',
+            'reason': 'Requires streaming mesh availability tracking in renderer. Not measurable from CLI alone.'
+        },
+        'peak_memory_mb': {
+            'status': 'not_implemented',
+            'reason': 'Requires per-process memory profiling. Rough estimate via /usr/bin/time -l possible but not yet integrated.'
+        },
+        'frame_time_ms': {
+            'status': 'not_implemented',
+            'reason': 'Requires Metal frame timing instrumentation. Not measurable from CLI alone. See macos/MMForge/Metal/MetalRenderer.swift for future integration point.'
+        }
+    },
+    'validation': {
+        'info_exit_code': $info_rc,
+        'validate_exit_code': $validate_rc
+    }
 }
 
 print(json.dumps(report, indent=2))

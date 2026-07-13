@@ -258,12 +258,17 @@ mod tests {
     }
 
     #[test]
-    fn detect_gltf() {
-        assert_eq!(detect(b"glTF", &p("model.gltf")), DetectedFormat::Gltf);
+    fn detect_gltf_json() {
+        // glTF JSON detection: starts with '{' and has .gltf extension.
+        assert_eq!(
+            detect(b"{\"asset\":{\"version\":\"2.0\"}}", &p("model.gltf")),
+            DetectedFormat::Gltf
+        );
     }
 
     #[test]
-    fn detect_glb() {
+    fn detect_glb_binary() {
+        // GLB binary detection: magic "glTF" bytes.
         let mut hdr = [0u8; 84];
         hdr[..4].copy_from_slice(b"glTF");
         assert_eq!(detect(&hdr, &p("model.glb")), DetectedFormat::Gltf);
@@ -409,18 +414,24 @@ mod tests {
     }
 
     #[test]
-    fn e2e_gltf() {
-        // Minimal valid glTF JSON
-        let json = r#"{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"accessors":[{"bufferView":0,"componentType":5126,"type":"VEC3","count":3,"max":[1,1,0],"min":[0,0,0]}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36}],"buffers":[{"byteLength":36}]}"#;
-        let mut f = tempfile::Builder::new().suffix(".gltf").tempfile().unwrap();
-        f.write_all(json.as_bytes()).unwrap();
-        let fmt = detect(json.as_bytes(), f.path());
-        let result = parse_sync(fmt, f.path());
-        // Without buffer data this may fail, but the format was routed correctly
+    fn e2e_gltf_real_fixture() {
+        // Parse the real box.gltf fixture with embedded base64 buffer data.
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/gltf/box.gltf");
         assert!(
-            result.is_err() || result.is_ok(),
-            "format routing must not panic"
+            fixture.exists(),
+            "box.gltf fixture must exist at {fixture:?}"
         );
+        let fmt = detect(b"{", &fixture); // JSON glTF starts with '{'
+        let route = parse_sync(fmt, &fixture).expect("real glTF fixture must parse");
+        let (output, registry) = route.into_parts();
+        assert_eq!(output.model.header.source_format, "glTF");
+        assert!(
+            output.model.total_triangle_count() > 0,
+            "must have triangles"
+        );
+        assert!(!registry.is_empty(), "must have tessellation data");
+        assert!(output.model.scene.nodes.len() > 0, "must have scene nodes");
     }
 
     #[test]

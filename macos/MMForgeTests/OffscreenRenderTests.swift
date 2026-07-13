@@ -31,20 +31,18 @@ final class MockOffscreenRenderer: OffscreenRenderProtocol {
         lastSize = size
         lastTimeout = timeout
 
-        // ---------- validate inputs (mirrors MetalRenderer) ----------
         guard timeout.isFinite && timeout > 0 else { return nil }
         let width = Int(size.width); let height = Int(size.height)
         guard width > 0, height > 0 else { return nil }
-        // -------------------------------------------------------------
 
-        switch result {
-        case .success(let img):
-            return img
-        case .nilImage:
-            return nil
-        case .delayedNil(let delay):
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            return nil
+        return await OffscreenCoordinator.run(timeout: timeout) {
+            switch result {
+            case .success(let img): return img
+            case .nilImage: return nil
+            case .delayedNil(let delay):
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                return nil
+            }
         }
     }
 }
