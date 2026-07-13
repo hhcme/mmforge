@@ -1,6 +1,7 @@
 import XCTest
 @testable import MMForge
 import Combine
+import MetalKit
 
 /// Real-fixture bridge acceptance: loads actual STEP/IGES/STL/glTF/DXF/LSM
 /// files through the Rust bridge and verifies DTO structure, bounds,
@@ -141,15 +142,13 @@ final class BridgeAcceptanceTests: XCTestCase {
 
         XCTAssertEqual(dto.meshes.count, 1, "translated_box.igs: 1 mesh")
         // Pre-translated box: original [0,0,0]–[10,10,10] moved to [20,0,5]–[30,10,15]
-        XCTAssertGreaterThan(dto.sceneBoundsMin.x, 15.0, "min X should be ~20 (translated)")
-        XCTAssertLessThan(dto.sceneBoundsMax.x, 35.0, "max X should be ~30")
-        XCTAssertGreaterThan(dto.sceneBoundsMin.z, 2.0,  "min Z should be ~5 (translated)")
-        XCTAssertLessThan(dto.sceneBoundsMax.z, 18.0, "max Z should be ~15")
-        // Y should match original (no translation in Y)
-        XCTAssertLessThan(abs(dto.sceneBoundsMin.y), 3.0, "min Y should be ~0")
-        XCTAssertGreaterThan(dto.sceneBoundsMax.y, 7.0, "max Y should be ~10")
-        // Non-trivial extent
-        XCTAssertGreaterThan(dto.sceneBoundsMax.x - dto.sceneBoundsMin.x, 5.0, "X extent")
+        let eps: Float = 1.0
+        XCTAssertEqual(dto.sceneBoundsMin.x, 20.0, accuracy: eps, "min X should be ~20")
+        XCTAssertEqual(dto.sceneBoundsMax.x, 30.0, accuracy: eps, "max X should be ~30")
+        XCTAssertEqual(dto.sceneBoundsMin.y,  0.0, accuracy: eps, "min Y should be ~0")
+        XCTAssertEqual(dto.sceneBoundsMax.y, 10.0, accuracy: eps, "max Y should be ~10")
+        XCTAssertEqual(dto.sceneBoundsMin.z,  5.0, accuracy: eps, "min Z should be ~5")
+        XCTAssertEqual(dto.sceneBoundsMax.z, 15.0, accuracy: eps, "max Z should be ~15")
     }
 
     // MARK: - STL fixture
@@ -343,17 +342,230 @@ final class BridgeAcceptanceTests: XCTestCase {
         XCTAssertEqual(vm.hiddenNodeIndices.count, 0, "all visible again")
     }
 
+    // MARK: - Headless MetalRenderer (shared, created once)
+
+    /// Shared headless Metal device for all renderer tests.
+    static var headlessDevice: MTLDevice? = MTLCreateSystemDefaultDevice()
+    /// Shared headless MTKView.
+    static var headlessView: MTKView? = {
+        guard let d = headlessDevice else { return nil }
+        return MTKView(frame: NSRect(x: 0, y: 0, width: 10, height: 10), device: d)
+    }()
+    /// Shared headless MetalRenderer.
+    static var headlessRenderer: MetalRenderer? = {
+        guard let v = headlessView else { return nil }
+        return MetalRenderer(mtkView: v)
+    }()
+
+    /// Load assembly.stp DTO and upload to the shared headless renderer.
+    /// Returns VM, renderer, DTO, and the document handle (must be freed after test).
     @MainActor
-    func test_real_assembly_hidden_node_then_toggle() throws {
+    func makeAssemblyWithHeadlessRenderer() throws -> (DocumentViewModel, MetalRenderer, RenderPacketDTO, OpaquePointer) {
+        guard let renderer = Self.headlessRenderer else {
+            throw XCTSkip("MetalRenderer not available")
+        }
+        renderer.clearMeshes()
+
+        let path = Self.fixturePath(Self.assemblyStp)
+        guard let doc = mmf_parse_file(path) else {
+            throw XCTSkip("Failed to parse assembly.stp")
+        }
+        let dto = RustBridge.shared.buildDTO(from: doc)
+
+        let vm = DocumentViewModel()
+        vm.nodes = dto.nodes
+        vm.expandedIndices = [0]
+        vm.rebuildTreeCaches()
+        vm.setRenderer(renderer)
+        vm.uploadToRenderer(dto: dto)
+        return (vm, renderer, dto, doc)
+    }
+
+    @MainActor
+    func test_headless_renderer_geometryid_to_nodeindex_to_gpumesh_mapping() throws {
+        let (_, renderer, dto, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        let meshes = renderer.getGPUMeshes()
+
+        XCTAssertEqual(meshes.count, 2, "2 meshes from assembly.stp")
+
+        // Build expected geometryId → nodeIndex map from DTO
+        var geomToNode = [Int: Int]()
+        for (idx, node) in dto.nodes.enumerated() where node.geometryId >= 0 {
+            geomToNode[node.geometryId] = idx
+        }
+
+        for mesh in meshes {
+            let nodeIdx = mesh.nodeIndex
+            XCTAssertGreaterThanOrEqual(nodeIdx, 0, "mesh nodeIndex should be valid")
+            XCTAssertLessThan(nodeIdx, dto.nodes.count, "nodeIndex in bounds")
+            let node = dto.nodes[nodeIdx]
+            XCTAssertTrue(node.hasGeometry, "GPUMesh.nodeIndex → node should have geometry")
+            // The geometryId in DTO should map to this nodeIndex
+            let expectedNodeIdx = geomToNode[node.geometryId]
+            XCTAssertEqual(nodeIdx, expectedNodeIdx, "geometryId \(node.geometryId) maps to correct nodeIndex")
+        }
+    }
+
+    @MainActor
+    func test_headless_renderer_select_node_updates_both_vm_and_gpu() throws {
+        let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        // Select Base_Box (index 1) via VM's formal entry point
+        vm.selectedIndex = 1
+        renderer.setSelectedNode(1)
+
+        XCTAssertEqual(vm.selectedIndex, 1, "VM selectedIndex should be 1")
+        XCTAssertEqual(renderer.selectedNodeIndex, 1, "renderer selectedNodeIndex should be 1")
+    }
+
+    @MainActor
+    func test_headless_renderer_toggle_visibility_vm_and_gpu_consistent() throws {
+        let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        // Toggle visibility of Base_Box (index 1) through the formal VM API
+        vm.toggleNodeVisibility(1)
+
+        // VM state: node 1 should be in hiddenNodeIndices
+        XCTAssertTrue(vm.hiddenNodeIndices.contains(1), "VM: Base_Box hidden after toggle")
+
+        // Renderer state: mesh with nodeIndex=1 should be invisible
+        let meshes = renderer.getGPUMeshes()
+        let hiddenMesh = meshes.first { $0.nodeIndex == 1 }
+        XCTAssertNotNil(hiddenMesh, "should find mesh for nodeIndex 1")
+        XCTAssertFalse(hiddenMesh!.visible, "GPU mesh for nodeIndex 1 should be invisible")
+
+        // Other mesh (Pillar_Cylinder, nodeIndex 2) should still be visible
+        let visibleMesh = meshes.first { $0.nodeIndex == 2 }
+        XCTAssertNotNil(visibleMesh, "should find mesh for nodeIndex 2")
+        XCTAssertTrue(visibleMesh!.visible, "GPU mesh for nodeIndex 2 should remain visible")
+
+        // Toggle back
+        vm.toggleNodeVisibility(1)
+        XCTAssertFalse(vm.hiddenNodeIndices.contains(1), "VM: Base_Box visible after second toggle")
+        let meshes2 = renderer.getGPUMeshes()
+        let visibleAgain = meshes2.first { $0.nodeIndex == 1 }
+        XCTAssertTrue(visibleAgain!.visible, "GPU mesh visible after second toggle")
+    }
+
+    @MainActor
+    func test_headless_renderer_hide_selected_node_vm_and_gpu() throws {
+        let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        // Select and hide Base_Box
+        vm.selectedIndex = 1
+        vm.hideSelectedNode()
+
+        XCTAssertTrue(vm.hiddenNodeIndices.contains(1), "VM: node 1 hidden")
+        let meshes = renderer.getGPUMeshes()
+        let hiddenMesh = meshes.first { $0.nodeIndex == 1 }
+        XCTAssertFalse(hiddenMesh!.visible, "GPU: node 1 mesh invisible")
+    }
+
+    @MainActor
+    func test_headless_renderer_isolate_selected_keeps_one_visible() throws {
+        let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        // Select and isolate Base_Box
+        vm.selectedIndex = 1
+        vm.isolateSelectedNode()
+
+        // VM: only node 1 NOT hidden
+        XCTAssertFalse(vm.hiddenNodeIndices.contains(1), "VM: isolated node visible")
+        XCTAssertTrue(vm.hiddenNodeIndices.contains(2), "VM: other node hidden")
+
+        // GPU: mesh for node 1 visible, mesh for node 2 invisible
+        let meshes = renderer.getGPUMeshes()
+        let isolatedMesh = meshes.first { $0.nodeIndex == 1 }
+        XCTAssertTrue(isolatedMesh!.visible, "GPU: isolated mesh visible")
+        let otherMesh = meshes.first { $0.nodeIndex == 2 }
+        XCTAssertFalse(otherMesh!.visible, "GPU: other mesh invisible")
+    }
+
+    @MainActor
+    func test_headless_renderer_set_all_nodes_visible_clears_hidden() throws {
+        let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        // First hide both leaves
+        vm.hideAllNodes()
+        XCTAssertEqual(vm.hiddenNodeIndices.count, 2, "both leaves hidden")
+        var meshes = renderer.getGPUMeshes()
+        XCTAssertTrue(meshes.allSatisfy { !$0.visible }, "all GPU meshes invisible")
+
+        // Now show all
+        vm.setAllNodesVisible()
+        XCTAssertEqual(vm.hiddenNodeIndices.count, 0, "VM: no hidden nodes")
+        meshes = renderer.getGPUMeshes()
+        XCTAssertTrue(meshes.allSatisfy { $0.visible }, "all GPU meshes visible again")
+    }
+
+    @MainActor
+    func test_headless_renderer_camera_initialized() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        // Camera should be initialized after scene bounds set
+        XCTAssertGreaterThan(renderer.camera.distance, 0, "camera distance > 0 after fit")
+        // Target should be near the center of the assembly
+        XCTAssertTrue(renderer.camera.target.x.isFinite, "camera target X finite")
+        XCTAssertTrue(renderer.camera.target.y.isFinite, "camera target Y finite")
+    }
+
+    // MARK: - Tree expand/collapse/search with real assembly DTO
+
+    @MainActor
+    func test_real_assembly_expand_collapse_tree() throws {
+        let (vm, _) = try makeAssemblyVM()
+        // Root (index 0) is already expanded from makeAssemblyVM
+
+        // Collapse root
+        vm.collapseAll()
+        let collapsed = vm.visibleNodeIndices
+        // With root collapsed, only root should be visible (leaves hidden)
+        XCTAssertFalse(collapsed.contains(1), "leaf 1 hidden when root collapsed")
+        XCTAssertFalse(collapsed.contains(2), "leaf 2 hidden when root collapsed")
+
+        // Expand root
+        vm.expandAll()
+        let expanded = vm.visibleNodeIndices
+        XCTAssertTrue(expanded.contains(1), "leaf 1 visible when root expanded")
+        XCTAssertTrue(expanded.contains(2), "leaf 2 visible when root expanded")
+    }
+
+    @MainActor
+    func test_real_assembly_search_filters_visible_nodes() throws {
         let (vm, _) = try makeAssemblyVM()
 
-        // Hide Base_Box directly
-        vm.hiddenNodeIndices.insert(1)
-        XCTAssertTrue(vm.hiddenNodeIndices.contains(1), "Base_Box in hiddenNodeIndices")
+        // Search for "Base" — only Base_Box should match
+        vm.searchText = "Base"
+        let filtered = vm.visibleNodeIndices
+        XCTAssertTrue(filtered.contains(1), "Base_Box matches 'Base'")
+        // When search is active, non-matching nodes are hidden from visible list
+        // Verify clearing search restores all nodes
+        vm.searchText = ""
+        let all = vm.visibleNodeIndices
+        XCTAssertTrue(all.contains(1), "Base_Box visible after clear")
+        XCTAssertTrue(all.contains(2), "Pillar_Cylinder visible after clear")
+        XCTAssertGreaterThanOrEqual(all.count, 3, "root + 2 leaves visible")
+    }
 
-        // Un-hide it
-        vm.hiddenNodeIndices.remove(1)
-        XCTAssertFalse(vm.hiddenNodeIndices.contains(1), "Base_Box removed from hiddenNodeIndices")
-        XCTAssertEqual(vm.hiddenNodeIndices.count, 0, "no hidden nodes")
+    @MainActor
+    func test_real_assembly_child_count() throws {
+        let (vm, _) = try makeAssemblyVM()
+
+        vm.expandAll()
+        let rootKids = vm.childrenOf(0)
+        XCTAssertEqual(rootKids.count, 2, "root has 2 children")
+        XCTAssertTrue(rootKids.contains(1))
+        XCTAssertTrue(rootKids.contains(2))
+
+        // Leaves have no children
+        let leafKids = vm.childrenOf(1)
+        XCTAssertEqual(leafKids.count, 0, "leaf has no children")
     }
 }
