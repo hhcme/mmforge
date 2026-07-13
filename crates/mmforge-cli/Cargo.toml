@@ -23,6 +23,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 glam = { workspace = true }
 
+[features]
+default = []
+occt = ["mmforge-format-step/occt", "mmforge-format-iges/occt", "mmforge-geometry/occt", "mmforge-bridge/occt"]
+
 [dev-dependencies]
 tempfile = { workspace = true }
 serde_json = { workspace = true }

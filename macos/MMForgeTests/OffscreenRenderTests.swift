@@ -229,60 +229,60 @@ final class OffscreenRenderTests: XCTestCase {
     // MARK: Single-resume isolation (structural correctness)
     // ----------------------------------------------------------------
 
-    /// Verify that an NSLock-guarded boolean flag prevents double-resume.
-    /// The real `MetalRenderer.renderOffscreenAsync` uses this same pattern
-    /// to protect its `CheckedContinuation` from being resumed twice
-    /// (once by the GPU completion handler, once by the timeout path).
-    func testSingleResumeLockPattern() {
-        let lock = NSLock()
-        var resumed = false
-        var resumeCount = 0
+    /// Real OffscreenCoordinator single-resume — operation wins, timeout cancelled, no double-resume.
+    func testCoordinatorOperationWinsTimeoutCancelled() async {
+        actor Tracker {
+            var completed = false
+            func markCompleted() { completed = true }
+        }
+        let tracker = Tracker()
 
-        /// Simulates the `safeResume` closure in the real renderer.
-        func finish() {
-            lock.lock()
-            defer { lock.unlock() }
-            guard !resumed else { return }
-            resumed = true
-            resumeCount += 1
+        let image = await OffscreenCoordinator.run(timeout: 5.0) {
+            await tracker.markCompleted()
+            return NSImage(size: NSSize(width: 10, height: 10))
         }
 
-        // Two racing paths both call finish — only one increments resumeCount.
-        finish()
-        finish()
+        XCTAssertNotNil(image)
+        let didComplete = await tracker.completed
+        XCTAssertTrue(didComplete, "operation must have completed")
 
-        XCTAssertEqual(resumeCount, 1,
-                       "second finish() must be a no-op after first sets resolved=true")
+        // Wait to verify no stale timeout fires (would crash on double-resume).
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        // If we're here without a crash, single-resume worked.
     }
 
-    /// A concurrent stress test for the lock pattern: many threads
-    /// racing to call finish() should still result in exactly one resume.
-    func testSingleResumeLockPatternUnderConcurrency() {
-        let lock = NSLock()
-        var resolved = false
-        var resumeCount = 0
-        let iterations = 500
-        let group = DispatchGroup()
+    /// Real OffscreenCoordinator timeout wins, operation result discarded.
+    func testCoordinatorTimeoutWinsOperationDiscarded() async {
+        actor Tracker {
+            var operationFinished = false
+            func markFinished() { operationFinished = true }
+        }
+        let tracker = Tracker()
 
-        /// Simulates the `safeResume` closure.
-        func finish() {
-            lock.lock()
-            defer { lock.unlock() }
-            guard !resolved else { return }
-            resolved = true
-            resumeCount += 1
+        let image = await OffscreenCoordinator.run(timeout: 0.05) {
+            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
+            await tracker.markFinished()
+            return NSImage(size: NSSize(width: 10, height: 10))
         }
 
-        for _ in 0..<iterations {
-            DispatchQueue.global().async(group: group) {
-                finish()
-            }
+        XCTAssertNil(image, "timeout must return nil")
+        // The operation might still be running, but the result was discarded.
+        // No crash = correct single-resume.
+    }
+
+    /// timeout cancelled by operation — verifies Task.isCancelled check works.
+    func testTimeoutCancellationPreventsResume() async {
+        // Fast operation + moderate timeout: operation wins, timeout cancelled.
+        let image = await OffscreenCoordinator.run(timeout: 5.0) {
+            return NSImage(size: NSSize(width: 10, height: 10))
         }
+        XCTAssertNotNil(image)
 
-        group.wait()
-
-	XCTAssertEqual(resumeCount, 1,
-	                       "concurrent finish() calls must resume exactly once")
+        // Wait for the timeout period to pass — if Task.isCancelled check
+        // didn't work, a double-resume crash would occur here.
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        // No crash = timeout was properly cancelled and didn't resume.
+        XCTAssertTrue(true, "survived without double-resume crash")
     }
 
     // ----------------------------------------------------------------
@@ -343,32 +343,16 @@ final class OffscreenRenderTests: XCTestCase {
         // The fact that we're here and the test passes proves correct cancellation.
     }
 
-    /// Timeout Task actually cancelled, not just ignored.
-    func testTimeoutTaskIsCancelled() async {
-        // We use a flag to detect whether the timeout path ran.
-        actor TimeoutDetector {
-            var timedOut = false
-            func set() { timedOut = true }
-            func get() -> Bool { timedOut }
+    /// rapid timeout race — timeout should win with very short timeout.
+    func testRapidTimeoutRace() async {
+        let start = Date()
+        let image = await OffscreenCoordinator.run(timeout: 0.01) {
+            try? await Task.sleep(nanoseconds: 500_000_000) // 500ms — slower than timeout
+            return NSImage(size: NSSize(width: 10, height: 10))
         }
-        let detector = TimeoutDetector()
+        let elapsed = Date().timeIntervalSince(start)
 
-        // A mock that returns quickly but we simulate a long timeout.
-        let mock = MockOffscreenRenderer()
-        mock.result = .success(NSImage(size: NSSize(width: 10, height: 10)))
-
-        // Call with a long timeout — operation should complete quickly.
-        let image = await mock.renderOffscreenImage(
-            size: CGSize(width: 10, height: 10), timeout: 5.0
-        )
-        XCTAssertNotNil(image)
-
-        // Wait for much longer than the operation but shorter than timeout.
-        try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
-
-        // The timeout task should have been cancelled. If it fired, we'd have
-        // a double-resume crash. No crash = correct behavior.
-        let stillAlive = true
-        XCTAssertTrue(stillAlive, "no crash from double-resume proves timeout was cancelled")
+        XCTAssertNil(image, "timeout should win")
+        XCTAssertLessThan(elapsed, 1.0, "should resolve quickly via timeout, not wait for operation")
     }
 }

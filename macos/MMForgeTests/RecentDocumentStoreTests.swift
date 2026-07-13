@@ -1,6 +1,7 @@
 import XCTest
 @testable import MMForge
 
+@MainActor
 final class RecentDocumentStoreTests: XCTestCase {
     private var store: RecentDocumentStore!
     private var suite: UserDefaults!
@@ -91,12 +92,14 @@ final class RecentDocumentStoreTests: XCTestCase {
         store.add(url: real)
         XCTAssertEqual(store.urls.count, 1)
 
-        // Add a stale path — it is stored in urls (in-memory) because add()
-        // does not filter on write. Callers are expected to provide valid URLs.
+        // Adding a stale URL — add() now cleans unreachable entries from the
+        // in-memory list and persistence immediately, so the stale URL should
+        // be removed and only the real URL should remain.
         let stale = URL(fileURLWithPath: "/tmp/definitely_does_not_exist_928374.step")
         store.add(url: stale)
-        XCTAssertGreaterThanOrEqual(store.urls.count, 1)
-        XCTAssertEqual(store.urls.first, stale)
+        XCTAssertEqual(store.urls.count, 1, "stale URL should be cleaned on add")
+        XCTAssertEqual(store.urls.first, real, "only the real URL should remain")
+        XCTAssertFalse(store.urls.contains(stale), "stale URL should not be retained")
     }
 
     func testStalePathsFilteredOnRead() {

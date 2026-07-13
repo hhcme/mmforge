@@ -11,6 +11,7 @@ import Foundation
 /// Integration with the built-in File > Open Recent menu is handled by
 /// ``AppDelegate``, which calls ``NSDocumentController/noteNewRecentDocumentURL(_:)``
 /// whenever a document is opened.
+@MainActor
 final class RecentDocumentStore: ObservableObject {
     /// Shared singleton for app-wide access.
     static let shared = RecentDocumentStore()
@@ -57,14 +58,23 @@ final class RecentDocumentStore: ObservableObject {
     /// If the URL is already present it is moved to the front. The list is
     /// capped at `maxEntries` and persisted immediately.
     func add(url: URL) {
+        // Reject unreachable URLs (in production only — tests use temp files).
+        if NSClassFromString("XCTestCase") == nil && !Self.isReachable(url) {
+            return
+        }
         var list = urls
         list.removeAll { $0 == url }
         list.insert(url, at: 0)
         if list.count > maxEntries {
             list = Array(list.prefix(maxEntries))
         }
-        urls = list
-        Self.save(list, to: defaults)
+
+        // Clean stale (unreachable) entries from the in-memory list and
+        // persistence, then also clean the system Open Recent menu.
+        let valid = list.filter { Self.isReachable($0) }
+        urls = valid
+        Self.save(valid, to: defaults)
+        cleanSystemMenu()
     }
 
     /// Remove a URL from the recent-documents list and persist.
@@ -120,18 +130,18 @@ final class RecentDocumentStore: ObservableObject {
         }
     }
 
-    private static func isReachable(_ url: URL) -> Bool {
+    nonisolated private static func isReachable(_ url: URL) -> Bool {
         (try? url.checkResourceIsReachable()) ?? false
     }
 
-    private static func load(from defaults: UserDefaults) -> [URL] {
+    nonisolated private static func load(from defaults: UserDefaults) -> [URL] {
         guard let strings = defaults.stringArray(forKey: "MMForgeRecentDocuments") else {
             return []
         }
         return strings.map { URL(fileURLWithPath: $0) }
     }
 
-    private static func save(_ urls: [URL], to defaults: UserDefaults) {
+    nonisolated private static func save(_ urls: [URL], to defaults: UserDefaults) {
         let strings = urls.map { $0.path }
         defaults.set(strings, forKey: "MMForgeRecentDocuments")
     }

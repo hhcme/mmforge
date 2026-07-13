@@ -127,11 +127,13 @@ fn cmd_version() {
 }
 
 fn cmd_info(file: &std::path::Path, format: OutputFormat) {
+    let occt = mmforge_geometry::is_occt_available();
     match detect_and_parse(file) {
         Ok(p) => match format {
             OutputFormat::Text => {
                 let bb = p.model.bounds();
                 println!("file    : {}", file.display());
+                println!("occt    : {occt}");
                 if let Some(ref cf) = p.container_format {
                     println!("container: {}", cf);
                 }
@@ -154,6 +156,7 @@ fn cmd_info(file: &std::path::Path, format: OutputFormat) {
             OutputFormat::Json => {
                 let bb = p.model.bounds();
                 let json = serde_json::json!({
+                    "occt_available": occt,
                     "container_format": p.container_format,
                     "source_format": p.model.header.source_format,
                     "source_path": p.model.header.source_path,
@@ -176,10 +179,25 @@ fn cmd_info(file: &std::path::Path, format: OutputFormat) {
                 println!("{}", serde_json::to_string_pretty(&json).unwrap());
             }
         },
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
+        Err(e) => match format {
+            OutputFormat::Json => {
+                // JSON format: emit error as valid JSON on stdout.
+                // Never contaminate stdout with raw error text.
+                let json = serde_json::json!({
+                    "occt_available": occt,
+                    "error": format!("{e}"),
+                    "node_count": 0,
+                    "geometry_count": 0,
+                    "triangle_count": 0,
+                });
+                println!("{}", serde_json::to_string_pretty(&json).unwrap());
+                std::process::exit(1);
+            }
+            OutputFormat::Text => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        },
     }
 }
 
