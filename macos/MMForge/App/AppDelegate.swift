@@ -13,6 +13,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Clean stale entries from system Open Recent menu now that
+        // NSDocumentController is fully initialized.
+        recentDocumentStore.cleanSystemMenuIfNeeded()
+
         // Observe windows becoming main to capture opened documents and
         // register them with NSDocumentController's built-in Open Recent menu.
         NotificationCenter.default.addObserver(

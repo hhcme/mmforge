@@ -815,3 +815,80 @@ fn batch_convert_no_continue_skips_non_conflict_with_skip_status() {
     assert_eq!(v["conflicts"], 2);
     assert_eq!(v["skipped"], 1);
 }
+
+// ----------------------------------------------------------------
+// STEP/IGES JSON — stdout must always be valid JSON
+// ----------------------------------------------------------------
+
+#[test]
+fn step_fixture_json_error_is_valid_json_on_stdout() {
+    let step_fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../mmforge-geometry/testdata/assembly.stp");
+    if !step_fixture.exists() {
+        eprintln!("SKIP: STEP fixture not found");
+        return;
+    }
+    let out = Command::new(mmforge_bin())
+        .args(["info", step_fixture.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout not valid JSON: {e}\nstdout: {stdout}"));
+    assert!(v.get("occt_available").is_some(), "missing occt_available");
+    if let Some(err) = v.get("error") {
+        assert!(!err.as_str().unwrap_or("").is_empty());
+        assert_eq!(v["node_count"], 0);
+        assert_eq!(v["triangle_count"], 0);
+    } else {
+        assert!(v["triangle_count"].as_u64().unwrap_or(0) > 0);
+    }
+}
+
+#[test]
+fn iges_fixture_json_error_is_valid_json_on_stdout() {
+    let iges_fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../mmforge-geometry/testdata/box.igs");
+    if !iges_fixture.exists() {
+        eprintln!("SKIP: IGES fixture not found");
+        return;
+    }
+    let out = Command::new(mmforge_bin())
+        .args(["info", iges_fixture.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout not valid JSON: {e}\nstdout: {stdout}"));
+    assert!(v.get("occt_available").is_some(), "missing occt_available");
+    if let Some(err) = v.get("error") {
+        assert!(!err.as_str().unwrap_or("").is_empty());
+        assert_eq!(v["node_count"], 0);
+        assert_eq!(v["triangle_count"], 0);
+    } else {
+        assert!(v["triangle_count"].as_u64().unwrap_or(0) > 0);
+    }
+}
+
+#[test]
+fn nonexistent_file_json_error_valid_json_on_stdout() {
+    let out = Command::new(mmforge_bin())
+        .args([
+            "info",
+            "/tmp/mmforge_nonexistent_12345.step",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout not valid JSON: {e}\nstdout: {stdout}"));
+    assert!(v.get("error").is_some(), "must have error field");
+    assert_eq!(v["node_count"], 0);
+    assert_eq!(v["triangle_count"], 0);
+    assert!(
+        v.get("occt_available").is_some(),
+        "must have occt_available"
+    );
+}

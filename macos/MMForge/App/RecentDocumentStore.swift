@@ -1,67 +1,96 @@
 import AppKit
 import Foundation
 
+// MARK: - Dependency abstractions
+
+/// Abstract system recent-document menu operations so tests can verify
+/// without probing `NSClassFromString("XCTestCase")`.
+protocol SystemRecentMenu {
+    func recentDocumentURLs() -> [URL]
+    func clearRecentDocuments(_ sender: Any?)
+    func noteNewRecentDocumentURL(_ url: URL)
+}
+
+/// Default implementation backed by NSDocumentController.
+struct NSDocumentControllerMenu: SystemRecentMenu {
+    private var controller: NSDocumentController { NSDocumentController.shared }
+    func recentDocumentURLs() -> [URL] {
+        controller.recentDocumentURLs
+    }
+    func clearRecentDocuments(_ sender: Any?) {
+        controller.clearRecentDocuments(sender)
+    }
+    func noteNewRecentDocumentURL(_ url: URL) {
+        controller.noteNewRecentDocumentURL(url)
+    }
+}
+
+/// No-op menu for testing.
+struct NoOpSystemMenu: SystemRecentMenu {
+    func recentDocumentURLs() -> [URL] { [] }
+    func clearRecentDocuments(_ sender: Any?) {}
+    func noteNewRecentDocumentURL(_ url: URL) {}
+}
+
+// MARK: - Store
+
 /// Stores recently opened document URLs in UserDefaults.
 ///
-/// The in-memory ``urls`` array is the single source of truth for the current
-/// session. It is persisted to `UserDefaults` synchronously on each mutation.
-/// On init, ``urls`` is restored from the persisted list and stale (unreachable)
-/// entries are cleaned from both persistence and the system Open Recent menu.
+/// Dependencies are injected so tests can verify behaviour without
+/// `NSClassFromString("XCTestCase")` probes:
+/// - `userDefaults`: isolated suite for restart-persistence testing.
+/// - `reachability`: `(URL) -> Bool` — tests inject a predictable closure.
+/// - `systemMenu`: `SystemRecentMenu` — tests inject a no-op or spy.
 ///
-/// Integration with the built-in File > Open Recent menu is handled by
-/// ``AppDelegate``, which calls ``NSDocumentController/noteNewRecentDocumentURL(_:)``
-/// whenever a document is opened.
+/// In production, ``shared`` uses `.standard`, `checkResourceIsReachable`,
+/// and `NSDocumentControllerMenu()`.
 @MainActor
 final class RecentDocumentStore: ObservableObject {
-    /// Shared singleton for app-wide access.
     static let shared = RecentDocumentStore()
 
-    /// The current list of recent document URLs, published for SwiftUI observation.
     @Published private(set) var urls: [URL] = []
-
-    // MARK: - Storage constants
 
     private let defaults: UserDefaults
     private let maxEntries = 10
     private let storageKey = "MMForgeRecentDocuments"
+    private let reachability: (URL) -> Bool
+    private let systemMenu: SystemRecentMenu
 
     // MARK: - Lifecycle
 
-    /// Create a store backed by the given `UserDefaults` instance.
-    ///
-    /// - Parameter userDefaults: Defaults to `.standard`. In tests, pass an
-    ///   isolated suite to verify persistence across simulated restarts.
-    init(userDefaults: UserDefaults = .standard) {
+    init(
+        userDefaults: UserDefaults = .standard,
+        reachability: @escaping (URL) -> Bool = { (try? $0.checkResourceIsReachable()) ?? false },
+        systemMenu: SystemRecentMenu = NSDocumentControllerMenu()
+    ) {
         self.defaults = userDefaults
+        self.reachability = reachability
+        self.systemMenu = systemMenu
 
-        // Load persisted URLs and clean stale (unreachable) entries.
         let persisted = Self.load(from: defaults)
-        let valid = persisted.filter { Self.isReachable($0) }
+        let valid = persisted.filter(reachability)
         if valid.count != persisted.count {
-            // Stale entries existed — save the cleaned list back so they don't
-            // survive the next launch.
             Self.save(valid, to: defaults)
         }
         self.urls = valid
 
-        // In app context (not during unit testing), also clean stale entries
-        // from NSDocumentController's built-in Open Recent menu.
-        if NSClassFromString("XCTestCase") == nil {
-            cleanSystemMenu()
-        }
+        // Defer system menu cleaning — NSDocumentController may not be
+        // ready during static initialization. AppDelegate calls
+        // cleanSystemMenuIfNeeded() from applicationDidFinishLaunching.
+    }
+
+    /// Must be called from AppDelegate.applicationDidFinishLaunching
+    /// to clean the system Open Recent menu after the app is fully booted.
+    func cleanSystemMenuIfNeeded() {
+        cleanSystemMenu()
     }
 
     // MARK: - Public API
 
-    /// Add a URL to the front of the recent-documents list.
-    ///
-    /// If the URL is already present it is moved to the front. The list is
-    /// capped at `maxEntries` and persisted immediately.
     func add(url: URL) {
-        // Reject unreachable URLs (in production only — tests use temp files).
-        if NSClassFromString("XCTestCase") == nil && !Self.isReachable(url) {
-            return
-        }
+        // Reject unreachable URLs.
+        guard reachability(url) else { return }
+
         var list = urls
         list.removeAll { $0 == url }
         list.insert(url, at: 0)
@@ -69,15 +98,13 @@ final class RecentDocumentStore: ObservableObject {
             list = Array(list.prefix(maxEntries))
         }
 
-        // Clean stale (unreachable) entries from the in-memory list and
-        // persistence, then also clean the system Open Recent menu.
-        let valid = list.filter { Self.isReachable($0) }
+        // Clean stale entries from memory + persistence + system menu.
+        let valid = list.filter(reachability)
         urls = valid
         Self.save(valid, to: defaults)
         cleanSystemMenu()
     }
 
-    /// Remove a URL from the recent-documents list and persist.
     func remove(url: URL) {
         var list = urls
         list.removeAll { $0 == url }
@@ -85,29 +112,20 @@ final class RecentDocumentStore: ObservableObject {
         Self.save(list, to: defaults)
     }
 
-    /// Return the list of recent document URLs, filtered to only those that
-    /// still exist on disk. Callers that need the complete persisted list
-    /// should use ``urls`` instead.
     func recentURLs() -> [URL] {
-        urls.filter { Self.isReachable($0) }
+        urls.filter(reachability)
     }
 
-    /// Remove all entries from the recent-documents list and persistence.
     func clear() {
         urls = []
         defaults.removeObject(forKey: storageKey)
     }
 
-    /// Sync local `urls` from NSDocumentController's built-in recent documents
-    /// and clean stale entries from the system menu.
     func syncFromSystemMenu() {
-        guard NSClassFromString("XCTestCase") == nil else { return }
-        let systemURLs = NSDocumentController.shared.recentDocumentURLs
-        let valid = systemURLs.filter { Self.isReachable($0) }
+        let systemURLs = systemMenu.recentDocumentURLs()
+        let valid = systemURLs.filter(reachability)
         urls = valid
         Self.save(valid, to: defaults)
-
-        // Clean stale entries from the system Open Recent menu.
         if valid.count != systemURLs.count {
             cleanSystemMenu()
         }
@@ -115,24 +133,18 @@ final class RecentDocumentStore: ObservableObject {
 
     // MARK: - Private
 
-    /// Remove stale entries from NSDocumentController's Open Recent menu.
-    ///
-    /// Clears all entries then re-adds only those that are reachable on disk.
     private func cleanSystemMenu() {
-        guard NSClassFromString("XCTestCase") == nil else { return }
-        let systemURLs = NSDocumentController.shared.recentDocumentURLs
-        let valid = systemURLs.filter { Self.isReachable($0) }
+        let systemURLs = systemMenu.recentDocumentURLs()
+        let valid = systemURLs.filter(reachability)
         if valid.count != systemURLs.count {
-            NSDocumentController.shared.clearRecentDocuments(self)
+            systemMenu.clearRecentDocuments(self)
             for url in valid {
-                NSDocumentController.shared.noteNewRecentDocumentURL(url)
+                systemMenu.noteNewRecentDocumentURL(url)
             }
         }
     }
 
-    nonisolated private static func isReachable(_ url: URL) -> Bool {
-        (try? url.checkResourceIsReachable()) ?? false
-    }
+    // MARK: - Persistence (nonisolated — no mutable instance state)
 
     nonisolated private static func load(from defaults: UserDefaults) -> [URL] {
         guard let strings = defaults.stringArray(forKey: "MMForgeRecentDocuments") else {
