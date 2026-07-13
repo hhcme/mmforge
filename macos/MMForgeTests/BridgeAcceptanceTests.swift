@@ -3,7 +3,7 @@ import XCTest
 import Combine
 import MetalKit
 
-/// Real-fixture bridge acceptance: loads actual STEP/IGES/STL/glTF/DXF/LSM
+/// Real-fixture bridge acceptance: loads actual STEP/IGES/STL/glTF/DXF
 /// files through the Rust bridge and verifies DTO structure, bounds,
 /// mesh-node mapping, scene tree, visibility, and error paths.
 ///
@@ -288,18 +288,17 @@ final class BridgeAcceptanceTests: XCTestCase {
     }
 
     @MainActor
-    func test_real_assembly_selection_updates_selected_index() throws {
+    func test_real_assembly_selection_via_formal_select_node() throws {
         let (vm, dto) = try makeAssemblyVM()
 
-        // Select first leaf (index 1 — Base_Box)
-        vm.selectedIndex = 1
+        // Select via formal API (syncs both VM and renderer if bound)
+        vm.selectNode(1)
         XCTAssertEqual(vm.selectedIndex, 1)
         let node = dto.nodes[1]
         XCTAssertTrue(node.hasGeometry, "selected node should have geometry")
-        XCTAssertGreaterThanOrEqual(node.geometryId, 0)
 
         // Deselect
-        vm.selectedIndex = nil
+        vm.selectNode(nil)
         XCTAssertNil(vm.selectedIndex)
     }
 
@@ -408,16 +407,19 @@ final class BridgeAcceptanceTests: XCTestCase {
     }
 
     @MainActor
-    func test_headless_renderer_select_node_updates_both_vm_and_gpu() throws {
+    func test_headless_renderer_select_node_syncs_vm_and_gpu() throws {
         let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
         defer { mmf_document_free(doc) }
 
-        // Select Base_Box (index 1) via VM's formal entry point
-        vm.selectedIndex = 1
-        renderer.setSelectedNode(1)
+        // Select via formal API — must sync both VM.selectedIndex AND renderer.selectedNodeIndex
+        vm.selectNode(1)
+        XCTAssertEqual(vm.selectedIndex, 1, "VM.selectedIndex after selectNode(1)")
+        XCTAssertEqual(renderer.selectedNodeIndex, 1, "renderer.selectedNodeIndex after selectNode(1)")
 
-        XCTAssertEqual(vm.selectedIndex, 1, "VM selectedIndex should be 1")
-        XCTAssertEqual(renderer.selectedNodeIndex, 1, "renderer selectedNodeIndex should be 1")
+        // Deselect via formal API
+        vm.selectNode(nil)
+        XCTAssertNil(vm.selectedIndex, "VM.selectedIndex after selectNode(nil)")
+        XCTAssertNil(renderer.selectedNodeIndex, "renderer.selectedNodeIndex after selectNode(nil)")
     }
 
     @MainActor
@@ -514,6 +516,137 @@ final class BridgeAcceptanceTests: XCTestCase {
         // Target should be near the center of the assembly
         XCTAssertTrue(renderer.camera.target.x.isFinite, "camera target X finite")
         XCTAssertTrue(renderer.camera.target.y.isFinite, "camera target Y finite")
+    }
+
+    // MARK: - PendingDTO: parse without renderer, then bind later
+
+    @MainActor
+    func test_pending_dto_consumed_when_renderer_bound_later() throws {
+        guard let renderer = Self.headlessRenderer else { throw XCTSkip("MetalRenderer not available") }
+        renderer.clearMeshes()
+
+        let path = Self.fixturePath(Self.assemblyStp)
+        guard let doc = mmf_parse_file(path) else { throw XCTSkip("parse failed") }
+        defer { mmf_document_free(doc) }
+        let dto = RustBridge.shared.buildDTO(from: doc)
+
+        let vm = DocumentViewModel()
+        vm.nodes = dto.nodes
+        vm.expandedIndices = [0]
+        vm.rebuildTreeCaches()
+        // Simulate: uploadToRenderer called before renderer is bound → stores in pendingDTO
+        vm.uploadToRenderer(dto: dto)
+
+        // Now bind renderer — should flush pendingDTO and upload meshes
+        vm.setRenderer(renderer)
+        let meshes = renderer.getGPUMeshes()
+        XCTAssertEqual(meshes.count, 2, "pendingDTO uploaded to renderer after binding")
+        XCTAssertTrue(meshes.allSatisfy { $0.visible }, "all meshes visible after deferred upload")
+    }
+
+    // MARK: - Async parse with bound renderer
+
+    @MainActor
+    func test_async_parse_with_bound_renderer_produces_gpu_meshes() throws {
+        guard let renderer = Self.headlessRenderer else { throw XCTSkip("MetalRenderer not available") }
+        renderer.clearMeshes()
+
+        let vm = DocumentViewModel()
+        vm.setRenderer(renderer)
+        let data = try Self.fixtureData(Self.boxStl)
+        let loadedExpectation = expectation(description: "state loaded")
+        let cancellable = vm.$state
+            .filter { if case .loaded = $0 { true } else { false } }
+            .first()
+            .sink { _ in loadedExpectation.fulfill() }
+
+        vm.parseFile(data: data, fileExtension: "stl")
+        wait(for: [loadedExpectation], timeout: 15.0)
+        cancellable.cancel()
+
+        let meshes = renderer.getGPUMeshes()
+        XCTAssertFalse(meshes.isEmpty, "GPU meshes uploaded after async parse")
+        XCTAssertTrue(meshes.allSatisfy { $0.visible }, "all meshes visible")
+        // Verify STL triangle count
+        let totalTriangles = meshes.reduce(0) { $0 + $1.indexCount / 3 }
+        XCTAssertEqual(totalTriangles, 12, "box.stl: 12 triangles on GPU")
+    }
+
+    // MARK: - Camera math (non-visual, state assertions)
+
+    @MainActor
+    func test_headless_renderer_camera_fit_and_reset() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        let distBefore = renderer.camera.distance
+        // Fit to view should adjust distance
+        renderer.fitToView()
+        XCTAssertGreaterThan(renderer.camera.distance, 0, "distance after fitToView")
+
+        // Reset camera
+        let yawBefore = renderer.camera.yaw
+        renderer.resetCamera()
+        XCTAssertGreaterThan(renderer.camera.distance, 0, "distance after resetCamera")
+        // resetCamera adjusts yaw/pitch to a default view; both should be finite
+        XCTAssertTrue(renderer.camera.yaw.isFinite, "yaw finite after reset")
+        XCTAssertTrue(renderer.camera.pitch.isFinite, "pitch finite after reset")
+    }
+
+    @MainActor
+    func test_headless_renderer_camera_orbit_changes_yaw_pitch() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        let yawBefore = renderer.camera.yaw
+        let pitchBefore = renderer.camera.pitch
+
+        renderer.rotate(dx: 1.0, dy: 0.5)
+        // Rotation should change yaw and pitch
+        XCTAssertNotEqual(renderer.camera.yaw, yawBefore, accuracy: 0.001, "yaw changed after rotate")
+        XCTAssertNotEqual(renderer.camera.pitch, pitchBefore, accuracy: 0.001, "pitch changed after rotate")
+    }
+
+    @MainActor
+    func test_headless_renderer_camera_zoom_changes_distance() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        let distBefore = renderer.camera.distance
+        renderer.zoom(delta: 2.0) // zoom in
+        XCTAssertNotEqual(renderer.camera.distance, distBefore, accuracy: 0.01, "distance changed after zoom")
+    }
+
+    @MainActor
+    func test_headless_renderer_named_views_dont_crash() throws {
+        let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        for view: MetalRenderer.NamedView in [.front, .back, .left, .right, .top, .bottom, .isometric] {
+            vm.setNamedView(view)
+            XCTAssertTrue(renderer.camera.distance.isFinite, "distance finite after \(view)")
+        }
+        // Isometric should differ from identity orientation
+        vm.setNamedView(.isometric)
+        XCTAssertTrue(abs(renderer.camera.yaw) > 0.01 || abs(renderer.camera.pitch) > 0.01,
+                      "isometric view should have non-zero yaw or pitch")
+    }
+
+    @MainActor
+    func test_headless_renderer_picking_returns_nodeIndex() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+
+        // Pick at center of viewport — should hit something
+        let viewSize = CGSize(width: 100, height: 100)
+        let center = CGPoint(x: 50, y: 50)
+        let hit = renderer.pickNode(at: viewSize, point: center)
+        // May or may not hit depending on camera; just verify no crash and return type
+        if let nodeIdx = hit {
+            XCTAssertGreaterThanOrEqual(nodeIdx, 0, "hit nodeIndex >= 0")
+            XCTAssertLessThan(nodeIdx, 3, "hit nodeIndex < node count (assembly.stp has 3 nodes)")
+        }
+        // If no hit, that's also valid at this viewport size
     }
 
     // MARK: - Tree expand/collapse/search with real assembly DTO

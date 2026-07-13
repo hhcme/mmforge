@@ -2,90 +2,77 @@
 
 **Date**: 2026-07-09 (revised 2026-07-13)
 **Agent**: ZCode (deepseek-v4-pro)
-**Status**: NON-GUI VERIFIED — 362+ Rust / 192 Swift (26 acceptance + 166 existing) / headless MetalRenderer all pass
+**Status**: NON-GUI VERIFIED — 362+ Rust / 199 Swift (33 acceptance + 166 existing) / headless MetalRenderer all pass
 
 ---
 
 ## 1. Summary
 
-26 `BridgeAcceptanceTests` load real on-disk fixture files through sync/async
-Rust bridge paths, covering: DTO structure with concrete numeric assertions,
-tree hierarchy, mesh-node mapping, bounds (exact epsilon), headless
-MetalRenderer acceptance (geometryId→nodeIndex→GPUMesh mapping, selectNode,
-toggleNodeVisibility, hideSelectedNode, isolateSelectedNode, setAllNodesVisible,
-camera init), expand/collapse/search tree operations — all using real
-assembly.stp DTO nodes (no mock data). All 192 Swift tests pass.
+33 `BridgeAcceptanceTests` load real on-disk fixtures through sync/async Rust
+bridge paths, covering: DTO structure (concrete numeric + exact-epsilon bounds),
+tree hierarchy, mesh-node mapping, headless MetalRenderer acceptance
+(geometryId→nodeIndex→GPUMesh, selectNode, toggleNodeVisibility,
+hideSelectedNode, isolateSelectedNode, setAllNodesVisible — ALL through formal
+VM API), pendingDTO deferred upload, async parse with bound renderer, camera
+math (fit/reset/orbit/zoom/named-views), picking, expand/collapse/search tree
+operations. All 199 Swift tests pass.
 
 ---
 
-## 2. Test Inventory (26 tests)
+## 2. Test Inventory (33 tests)
 
-### 2.1 Real-Fixture DTO Structure
+### 2.1 Real-Fixture DTO (8 tests)
+| Fixture | Assertions |
+|---------|------------|
+| `assembly.stp` (3) | nodes=3, meshes=2, mesh→node, bounds valid |
+| `box.igs` (1) | meshes=1, triangles>0 |
+| `translated_box.igs` (1) | **6 exact-epsilon bounds**: x∈[19,21]/[29,31], y∈[-1,1]/[9,11], z∈[4,6]/[14,16] |
+| `box.stl` (1) | triangles=12, meshes=1, nodes≥2 |
+| `box.gltf` (1) | triangles=1, meshes=1 |
+| `test.dxf` (1) | `mmf_is_2d_drawing != 0` |
 
-| # | Test | Fixture | Key Assertions |
-|---|------|---------|----------------|
-| 1–3 | STEP assembly (3 tests) | `assembly.stp` | nodes=3, meshes=2, mesh→node mapping, bounds valid |
-| 4–5 | IGES (2 tests) | `box.igs`, `translated_box.igs` | meshes=1; translated: exact epsilon bounds |
-| 6 | STL | `box.stl` | triangles=12, meshes=1, nodes≥2 |
-| 7 | glTF | `box.gltf` | triangles=1, meshes=1 |
-| 8 | DXF | `test.dxf` | `mmf_is_2d_drawing != 0` |
+### 2.2 Tree Consistency (2)
+- parentIndex < child (pre-order), in-bounds
+- meshIndex → valid geometryId
 
-### 2.2 translated_box.igs — exact epsilon bounds
+### 2.3 Real-DTO VM Visibility (4 — formal API)
+| Test | API Used |
+|------|----------|
+| selection | `vm.selectNode(1)` / `vm.selectNode(nil)` |
+| visibleNodeIndices | root expanded → leaves visible |
+| isolate | `vm.isolateNode(1)` → other hidden |
+| hide-all/show-all | `vm.hideAllNodes()` / `vm.setAllNodesVisible()` |
 
-```
-sceneBoundsMin.x == 20.0 ± 1.0, max.x == 30.0 ± 1.0
-sceneBoundsMin.y ==  0.0 ± 1.0, max.y == 10.0 ± 1.0
-sceneBoundsMin.z ==  5.0 ± 1.0, max.z == 15.0 ± 1.0
-```
+### 2.4 Headless MetalRenderer (15 — all formal VM API)
+| # | Test | Key Assertion |
+|---|------|---------------|
+| | geometryId→nodeIndex mapping | 2 meshes, nodeIndex = correct DTO node |
+| | **selectNode sync** | `vm.selectNode(1)` → `vm.selectedIndex==1` AND `renderer.selectedNodeIndex==1`; `selectNode(nil)` clears both |
+| | toggle visibility | `vm.toggleNodeVisibility(1)` → `hiddenNodeIndices` contains 1 AND GPU mesh `.visible==false`; toggle back restores |
+| | hide selected | `vm.hideSelectedNode()` → VM hidden + GPU invisible |
+| | isolate selected | `vm.isolateSelectedNode()` → other hidden + GPU invisible, target visible |
+| | set-all-visible | `vm.setAllNodesVisible()` → 0 hidden + all GPU meshes `.visible==true` |
+| | **pendingDTO** | parse without renderer → setRenderer later → GPU meshes uploaded |
+| | **async+bound renderer** | async STL parse with bound renderer → 12 triangles on GPU |
+| | camera init | distance>0, target finite |
+| | camera fit/reset | fitToView/resetCamera → distance>0, finite yaw/pitch |
+| | camera orbit | rotate(dx,dy) → yaw/pitch change |
+| | camera zoom | zoom(delta) → distance changes |
+| | named views | 7 views all non-crashing; isometric has non-zero yaw/pitch |
+| | picking | pickNode returns optional nodeIndex within bounds |
 
-All 6 bounds asserted with `XCTAssertEqual(_, accuracy: 1.0)`.
+### 2.5 Real-DTO Tree (3)
+| Test | Assertion |
+|------|-----------|
+| expand/collapse | collapseAll → leaves hidden; expandAll → leaves visible |
+| search | "Base" filters; clear restores all |
+| child count | root has 2, leaves have 0 |
 
-### 2.3 Tree Consistency
-
-| # | Test | Assertions |
-|---|------|------------|
-| 9 | `test_parent_index_consistency` | parentIndex < child index, in-bounds |
-| 10 | `test_mesh_indices_are_sequential` | node.meshIndex → valid geometryId |
-
-### 2.4 Real assembly.stp DTO Visibility (no renderer)
-
-| # | Test | Assertions |
-|---|------|------------|
-| 11 | selection | select/deselect leaf, verify hasGeometry |
-| 12 | visibleNodeIndices | both leaves visible with root expanded |
-| 13 | isolate | isolateNode(1) → 2 hidden, 1 visible, selectedIndex=1 |
-| 14 | hide-all/show-all | hideAllNodes → 2 hidden, setAllNodesVisible → 0 hidden |
-
-### 2.5 Headless MetalRenderer Acceptance (real DTO → GPU meshes)
-
-Shared `MTKView`/`MetalRenderer` created once (avoids GPU resource conflicts).
-Each test calls `makeAssemblyWithHeadlessRenderer()` which: clears meshes,
-parses assembly.stp, builds DTO, `vm.setRenderer()` → `vm.uploadToRenderer()`.
-
-| # | Test | VM State | GPU State (via `getGPUMeshes()`) |
-|---|------|----------|----------------------------------|
-| 15 | geometryId→nodeIndex→GPUMesh | — | 2 meshes, nodeIndex maps to correct DTO node |
-| 16 | selectNode | `selectedIndex == 1` | `renderer.selectedNodeIndex == 1` |
-| 17 | toggleNodeVisibility | node 1 in hiddenNodeIndices | mesh for nodeIndex=1 `.visible == false`; toggle back restores |
-| 18 | hideSelectedNode | node 1 hidden | mesh invisible |
-| 19 | isolateSelectedNode | node 2 hidden, 1 not | mesh for 1 visible, mesh for 2 invisible |
-| 20 | setAllNodesVisible | hiddenNodeIndices empty | all meshes `.visible == true` |
-| 21 | camera init | — | camera.distance > 0, target finite |
-
-### 2.6 Real-DTO Tree Operations (no renderer)
-
-| # | Test | Assertions |
-|---|------|------------|
-| 22 | expand/collapse | collapseAll → leaves hidden; expandAll → leaves visible |
-| 23 | search | "Base" filters visible nodes; clearing restores all |
-| 24 | child count | root has 2 children; leaves have 0 |
-
-### 2.7 Async + Error
-
-| # | Test | Assertions |
-|---|------|------------|
-| 25 | async parse progress | STL → `.loaded(tri=12, mesh=1, node≥2)` |
-| 26 | nonexistent file error | nil doc, non-empty error message |
+### 2.6 Error + Async (2)
+| Test | Assertion |
+|------|-----------|
+| async parse progress | `.loaded(tri=12, mesh=1, node≥2)` |
+| nonexistent file | nil doc, non-empty error |
 
 ---
 
@@ -93,16 +80,15 @@ parses assembly.stp, builds DTO, `vm.setRenderer()` → `vm.uploadToRenderer()`.
 
 | Fixture | Format | Tests |
 |---------|--------|:-----:|
-| `assembly.stp` | STEP | 15 (3 DTO + 5 VM visibility + 7 headless renderer) |
+| `assembly.stp` | STEP | 20 (3 DTO + 4 VM vis + 10 headless renderer + 3 tree) |
 | `box.igs` | IGES | 1 |
 | `translated_box.igs` | IGES | 1 |
-| `box.stl` | STL | 1 |
+| `box.stl` | STL | 1 (+ async parse uses STL) |
 | `box.gltf` | glTF | 1 |
 | `test.dxf` | DXF | 1 |
 | Nonexistent | Error | 1 |
 
-**LSM**: fixture present in `testdata/lsm/` but not covered — blocked by binary
-format requiring specific parser setup.
+**LSM**: fixture present in `testdata/lsm/` but not covered — binary format requires specific parser setup.
 
 ---
 
@@ -110,14 +96,10 @@ format requiring specific parser setup.
 
 | Check | Result |
 |-------|--------|
-| cmake shim build | ✅ |
-| `cargo check --workspace --features occt` | ✅ Clean |
 | `cargo test --workspace --features occt` | ✅ **362+** / 0 fail |
 | `cargo clippy --workspace --features occt -- -D warnings` | ✅ Clean |
-| `xcodebuild test` | ✅ **192** / 0 fail (26 acceptance + 166 existing) |
-| CLI `info assembly.stp` | ✅ nodes=3, geoms=2 |
-| CLI `info translated_box.igs` | ✅ bounds=[20,0,5]–[30,10,15] |
-| `git diff --check` (working + range) | ✅ Clean |
+| `xcodebuild test` | ✅ **199** / 0 fail (33 acc + 166 existing) |
+| `git diff --check` (both) | ✅ Clean |
 
 ---
 
@@ -125,20 +107,11 @@ format requiring specific parser setup.
 
 | # | Item | Dependency |
 |---|------|-----------|
-| G1 | Structure sidebar renders assembly tree | Visible GUI |
+| G1 | Structure sidebar visual rendering | GUI |
 | G2 | Viewport picking visual feedback | GUI + Metal drawable |
 | G3 | Camera orbit/pan/zoom gestures | GUI |
-| G4 | 3D Export PNG (`captureImageAsync`) | GUI + Metal drawable |
-| G5 | Inspector shows per-part bounds | GUI |
+| G4 | 3D Export PNG | GUI + Metal drawable |
+| G5 | Inspector per-part bounds | GUI |
 | G6 | Color/material per component | GUI |
-| G7 | Window-scoped GUI acceptance (8 formats) | Dedicated foreground session |
-| G8 | LSM fixture bridge acceptance | Parser format support |
-
----
-
-## 6. Files Changed
-
-| File | Δ | Change |
-|------|---|--------|
-| `macos/MMForgeTests/BridgeAcceptanceTests.swift` | ~580 (new) | 26 real-fixture bridge + headless MetalRenderer acceptance tests |
-| `macos/MMForge.xcodeproj/project.pbxproj` | +4 | Add BridgeAcceptanceTests.swift to MMForgeTests target |
+| G7 | Window-scoped GUI acceptance (8 formats) | Foreground session |
+| G8 | LSM fixture bridge acceptance | Parser support |
