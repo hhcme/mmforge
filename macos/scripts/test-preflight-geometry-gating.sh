@@ -1,23 +1,28 @@
 #!/bin/bash
 # MMForge Preflight Geometry Gating — Real Gate Contract Tests
 #
-# Detects runtime OCCT availability via the CLI's JSON output, then
-# asserts the correct exit code from format-geometry-gate.sh:
-#   WITH OCCT     → exit 0 (PASS — all five fixtures real-geometry)
+# Detects OCCT availability from environment (OCCT_INCLUDE_DIR + OCCT_LIB_DIR),
+# builds the shim + CLI with --features occt when configured, then asserts the
+# correct exit code from format-geometry-gate.sh:
+#   OCCT configured → exit 0 (PASS — all five fixtures real-geometry)
 #   NO OCCT + advisory=1 → exit 3 (ADVISORY)
 #   NO OCCT + advisory=0 → exit 1 (FAIL)
 #
-# Never hardcodes "no OCCT" — adapts to the actual build environment.
+# Hard requirement: when OCCT is configured, STEP/IGES MUST be REAL-GEOMETRY.
+# Silent degradation is forbidden — any OCCT build failure is a hard error.
 #
 # Environment honoured by the gate:
 #   MMFORGE_NO_OCCT_ADVISORY
 #   MMFORGE_CLI
 #   CARGO_TARGET_DIR
+#   OCCT_INCLUDE_DIR
+#   OCCT_LIB_DIR
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 GATE_SCRIPT="$ROOT/docs/scripts/format-geometry-gate.sh"
+BUILD_SHIM_SCRIPT="$ROOT/macos/scripts/build-occt-shim.sh"
 PASS=0
 FAIL=0
 
@@ -30,25 +35,80 @@ echo "Gate script: $GATE_SCRIPT"
 echo ""
 
 # ---------------------------------------------------------------------------
-# 1. Detect runtime OCCT availability via the CLI
+# 1. Detect OCCT configuration
 # ---------------------------------------------------------------------------
-echo "--- Detect OCCT availability ---"
-CLI="${MMFORGE_CLI:-$ROOT/target/release/mmforge}"
+echo "--- Detect OCCT configuration ---"
 
-# Build CLI if needed
-if [ ! -x "$CLI" ]; then
-  info "CLI not found at $CLI — building..."
-  cargo build --release -p mmforge-cli --manifest-path "$ROOT/Cargo.toml" || {
-    red "CLI build failed"
-    exit 1
-  }
-  CLI="$ROOT/target/release/mmforge"
+OCCT_CONFIGURED=0
+if [ -n "${OCCT_INCLUDE_DIR:-}" ] && [ -n "${OCCT_LIB_DIR:-}" ]; then
+  if [ -d "${OCCT_INCLUDE_DIR}" ] && [ -d "${OCCT_LIB_DIR}" ]; then
+    OCCT_CONFIGURED=1
+    info "OCCT IS configured: INCLUDE=${OCCT_INCLUDE_DIR}, LIB=${OCCT_LIB_DIR}"
+  else
+    info "OCCT env vars set but dirs invalid — treating as not configured"
+  fi
+else
+  info "OCCT NOT configured (OCCT_INCLUDE_DIR/OCCT_LIB_DIR not set)"
 fi
 
-# Detect OCCT by querying the CLI on a known fixture
+# ---------------------------------------------------------------------------
+# 2. Build CLI (with OCCT if configured)
+# ---------------------------------------------------------------------------
+CLI="${MMFORGE_CLI:-}"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-}"
+
+if [ -n "$CLI" ]; then
+  info "Using pre-built CLI: $CLI"
+else
+  if [ "$OCCT_CONFIGURED" -eq 1 ]; then
+    echo "--- Build OCCT shim + CLI ---"
+    info "Building OCCT shim via build-occt-shim.sh …"
+    export OCCT_INCLUDE_DIR OCCT_LIB_DIR
+    export CARGO_MANIFEST_DIR="$ROOT/crates/mmforge-geometry"
+
+    SHIM_PATH=""
+    if ! SHIM_PATH=$(bash "$BUILD_SHIM_SCRIPT"); then
+      red "OCCT shim build/verify failed — cannot proceed"
+      exit 1
+    fi
+    if [ -z "$SHIM_PATH" ] || [ ! -f "$SHIM_PATH" ]; then
+      red "build-occt-shim.sh returned invalid path: '${SHIM_PATH}'"
+      exit 1
+    fi
+    export MMFORGE_SHIM_DIR="$(dirname "$SHIM_PATH")"
+    green "Shim ready: ${SHIM_PATH}"
+
+    info "Building CLI with --features occt …"
+    cargo build --release -p mmforge-cli --features occt \
+      --manifest-path "$ROOT/Cargo.toml" \
+      ${CARGO_TARGET_DIR:+--target-dir "$CARGO_TARGET_DIR"} || {
+      red "CLI build with --features occt failed"
+      exit 1
+    }
+    green "CLI built with OCCT support"
+  else
+    info "Building CLI without OCCT …"
+    cargo build --release -p mmforge-cli \
+      --manifest-path "$ROOT/Cargo.toml" \
+      ${CARGO_TARGET_DIR:+--target-dir "$CARGO_TARGET_DIR"} || {
+      red "CLI build failed"
+      exit 1
+    }
+  fi
+
+  CLI="$ROOT/target/release/mmforge"
+  if [ -n "$CARGO_TARGET_DIR" ]; then
+    CLI="$CARGO_TARGET_DIR/release/mmforge"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Detect runtime OCCT via CLI query (ground truth)
+# ---------------------------------------------------------------------------
+echo "--- Runtime OCCT detection ---"
 RUNTIME_OCCT=0
 STL_FIXTURE="$ROOT/testdata/stl/box.stl"
-if [ -f "$STL_FIXTURE" ]; then
+if [ -f "$STL_FIXTURE" ] && [ -x "$CLI" ]; then
   OCCT_RAW=$(set +e; "$CLI" info "$STL_FIXTURE" --format json 2>/dev/null | python3 -c "import sys,json; print(1 if json.load(sys.stdin).get('occt_available') else 0)" 2>/dev/null)
   if [ "$OCCT_RAW" = "1" ]; then
     RUNTIME_OCCT=1
@@ -56,14 +116,14 @@ if [ -f "$STL_FIXTURE" ]; then
 fi
 
 if [ "$RUNTIME_OCCT" -eq 1 ]; then
-  info "OCCT IS available — expecting exit 0 (all five fixtures PASS)"
+  green "Runtime OCCT: YES — expecting exit 0 (all five fixtures PASS)"
 else
-  info "OCCT NOT available — STEP/IGES will be advisory/error"
+  info "Runtime OCCT: NO — STEP/IGES will be advisory/error"
 fi
-	echo ""
+echo ""
 
 # Share CLI and target dir with the gate script.
-export MMFORGE_CLI="${MMFORGE_CLI:-}"
+export MMFORGE_CLI="$CLI"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-}"
 
 # ---------------------------------------------------------------------------

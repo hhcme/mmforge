@@ -30,57 +30,87 @@ ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ADVISORY="${MMFORGE_NO_OCCT_ADVISORY:-0}"
 
 # ---------------------------------------------------------------------------
-# OCCT detection: check if the C ABI shim static library exists.
-# The shim lives at crates/mmforge-geometry/shim/build/libmmforge_occt_shim.a
+# OCCT detection & shim build — unified entry point.
+#
+# Contract:
+#   When OCCT_INCLUDE_DIR + OCCT_LIB_DIR are both set AND valid dirs,
+#   we MUST build the shim, export MMFORGE_SHIM_DIR, and build the CLI
+#   with --features occt.  Silent degradation to NO_OCCT is FORBIDDEN
+#   when OCCT is explicitly configured — any failure is a hard error.
+#
+#   When OCCT is NOT configured, we probe the default shim path and
+#   may fall back gracefully (STEP/IGES advisory).
 # ---------------------------------------------------------------------------
+BUILD_SHIM_SCRIPT="$ROOT/macos/scripts/build-occt-shim.sh"
 SHIM_LIB="$ROOT/crates/mmforge-geometry/shim/build/libmmforge_occt_shim.a"
 TESTDATA="$ROOT/testdata"
 HAVE_OCCT=0
-if [ -f "$SHIM_LIB" ]; then
-  HAVE_OCCT=1
-fi
 
-# Build or reuse CLI.
-# MMFORGE_CLI overrides everything — skip build, use as-is.
-# CARGO_TARGET_DIR overrides the cargo target directory.
-# When OCCT is configured (OCCT_INCLUDE_DIR + OCCT_LIB_DIR set), build
-# with --features occt using a temporary target dir to isolate from
-# the default build cache and guarantee purity.
 TARGET_DIR_FLAG=""
 if [ -n "${CARGO_TARGET_DIR:-}" ]; then
   TARGET_DIR_FLAG="--target-dir $CARGO_TARGET_DIR"
 fi
 
+# ── Resolve CLI ──────────────────────────────────────────────────────────
 if [ -n "${MMFORGE_CLI:-}" ]; then
   CLI="$MMFORGE_CLI"
   echo "# Using MMFORGE_CLI: $CLI (skipping build)" >&2
+  # Detect OCCT from pre-built CLI.
+  RUNTIME_OCCT=$("$CLI" info "$TESTDATA/stl/box.stl" --format json 2>/dev/null | python3 -c "import sys,json; print(1 if json.load(sys.stdin).get('occt_available') else 0)" 2>/dev/null || echo "0")
+  if [ "$RUNTIME_OCCT" = "1" ]; then HAVE_OCCT=1; fi
 else
-  echo "# Building CLI from source (cargo build --release -p mmforge-cli)" >&2
+  # ── Detect OCCT configuration ──────────────────────────────────────────
+  OCCT_CONFIGURED=0
   if [ -n "${OCCT_INCLUDE_DIR:-}" ] && [ -n "${OCCT_LIB_DIR:-}" ]; then
-    echo "# OCCT configured (OCCT_INCLUDE_DIR/OCCT_LIB_DIR) — building with --features occt" >&2
-    cargo build --release -p mmforge-cli --features occt --manifest-path "$ROOT/Cargo.toml" $TARGET_DIR_FLAG || {
-      echo "# WARNING: OCCT build failed, falling back to no-OCCT build" >&2
-      HAVE_OCCT=0
-      cargo build --release -p mmforge-cli --manifest-path "$ROOT/Cargo.toml" $TARGET_DIR_FLAG || {
-        echo "FATAL: cargo build failed" >&2
-        exit 1
-      }
+    if [ -d "${OCCT_INCLUDE_DIR}" ] && [ -d "${OCCT_LIB_DIR}" ]; then
+      OCCT_CONFIGURED=1
+    fi
+  fi
+
+  if [ "$OCCT_CONFIGURED" -eq 1 ]; then
+    # ── OCCT explicitly configured: build shim, then CLI with occt ───────
+    echo "# OCCT configured — building shim via build-occt-shim.sh …" >&2
+    export OCCT_INCLUDE_DIR OCCT_LIB_DIR
+    export CARGO_MANIFEST_DIR="$ROOT/crates/mmforge-geometry"
+
+    SHIM_PATH=""
+    if ! SHIM_PATH=$(bash "$BUILD_SHIM_SCRIPT"); then
+      echo "FATAL: OCCT shim build/verify failed.  Fix OCCT configuration or unset OCCT_INCLUDE_DIR/OCCT_LIB_DIR to build without OCCT." >&2
+      exit 1
+    fi
+    if [ -z "$SHIM_PATH" ] || [ ! -f "$SHIM_PATH" ]; then
+      echo "FATAL: build-occt-shim.sh returned invalid path: '${SHIM_PATH}'" >&2
+      exit 1
+    fi
+    export MMFORGE_SHIM_DIR="$(dirname "$SHIM_PATH")"
+    HAVE_OCCT=1
+
+    echo "# Building CLI with --features occt (shim: ${SHIM_PATH}) …" >&2
+    cargo build --release -p mmforge-cli --features occt \
+      --manifest-path "$ROOT/Cargo.toml" $TARGET_DIR_FLAG || {
+      echo "FATAL: CLI build with --features occt failed.  OCCT is configured — refusing to silently degrade." >&2
+      exit 1
     }
   elif [ -f "$SHIM_LIB" ]; then
-    echo "# OCCT shim detected at $SHIM_LIB — building with --features occt" >&2
-    cargo build --release -p mmforge-cli --features occt --manifest-path "$ROOT/Cargo.toml" $TARGET_DIR_FLAG || {
-      echo "# WARNING: OCCT build failed, falling back to no-OCCT build" >&2
-      HAVE_OCCT=0
-      cargo build --release -p mmforge-cli --manifest-path "$ROOT/Cargo.toml" $TARGET_DIR_FLAG || {
-        echo "FATAL: cargo build failed" >&2
-        exit 1
+    # ── OCCT not configured, but shim exists at default path ─────────────
+    echo "# OCCT shim detected at $SHIM_LIB (env vars not set) — attempting --features occt …" >&2
+    if cargo build --release -p mmforge-cli --features occt \
+      --manifest-path "$ROOT/Cargo.toml" $TARGET_DIR_FLAG 2>/dev/null; then
+      HAVE_OCCT=1
+      echo "# OCCT build succeeded." >&2
+    else
+      echo "# OCCT build failed — falling back to no-OCCT (STEP/IGES will be advisory)." >&2
+      cargo build --release -p mmforge-cli \
+        --manifest-path "$ROOT/Cargo.toml" $TARGET_DIR_FLAG || {
+        echo "FATAL: cargo build failed" >&2; exit 1
       }
-    }
+    fi
   else
-    echo "# No OCCT shim found — building without OCCT (STEP/IGES will be advisory)" >&2
-    cargo build --release -p mmforge-cli --manifest-path "$ROOT/Cargo.toml" $TARGET_DIR_FLAG || {
-      echo "FATAL: cargo build failed" >&2
-      exit 1
+    # ── No OCCT at all — build without ───────────────────────────────────
+    echo "# No OCCT configured — building without OCCT (STEP/IGES will be advisory)." >&2
+    cargo build --release -p mmforge-cli \
+      --manifest-path "$ROOT/Cargo.toml" $TARGET_DIR_FLAG || {
+      echo "FATAL: cargo build failed" >&2; exit 1
     }
   fi
 
@@ -95,15 +125,12 @@ fi
   exit 1
 }
 
-# Verify runtime OCCT availability by querying the CLI directly.
-# The shim library existing doesn't guarantee OCCT was linked —
-# the build may succeed but is_occt_available() returns false if
-# OCCT headers/libraries aren't installed.
-RUNTIME_OCCT=$("$CLI" info "$TESTDATA/stl/box.stl" --format json 2>/dev/null | python3 -c "import sys,json; print(1 if json.load(sys.stdin).get('occt_available') else 0)" 2>/dev/null || echo "0")
-if [ "$RUNTIME_OCCT" = "1" ]; then
-  HAVE_OCCT=1
-else
-  HAVE_OCCT=0
+# Confirm runtime OCCT from the CLI we just built.
+# (Double-check: the build may have succeeded with occt but linked against
+#  a broken shim — the runtime query is the final truth.)
+if [ "$HAVE_OCCT" -eq 0 ]; then
+  RUNTIME_OCCT=$("$CLI" info "$TESTDATA/stl/box.stl" --format json 2>/dev/null | python3 -c "import sys,json; print(1 if json.load(sys.stdin).get('occt_available') else 0)" 2>/dev/null || echo "0")
+  if [ "$RUNTIME_OCCT" = "1" ]; then HAVE_OCCT=1; fi
 fi
 
 # ---------------------------------------------------------------------------

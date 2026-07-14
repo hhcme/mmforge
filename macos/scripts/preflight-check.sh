@@ -246,68 +246,61 @@ else
     RESULT=1
 fi
 
-# ---------------------------------------------------------------------------
-# 10. Format geometry gate (real fixture parsing, no simulation)
-#
-# Calls format-geometry-gate.sh which parses every fixture with the real CLI
-# and produces a structured verdict table with exit codes:
-#   0 = PASS — all formats REAL-GEOMETRY or 2D-ONLY
-#   1 = FAIL — hard ERROR (any format)
-#   2 = FAIL — PLACEHOLDER (empty model)
-#   3 = ADVISORY — STEP/IGES no-OCCT downgraded (MMFORGE_NO_OCCT_ADVISORY=1)
-#
-# MMFORGE_ALLOW_NO_OCCT=1 enables advisory downgrade for STEP/IGES only.
-# STL/glTF/DXF ERROR or any PLACEHOLDER always hard-fails (exit 1/2).
-# ---------------------------------------------------------------------------
-bold "10. CLI format geometry gate (real fixtures)"
+	# ---------------------------------------------------------------------------
+	# 10. CLI format geometry gate (real fixtures)
+	#
+	# Two-tier strategy:
+	#   a. If OCCT is configured (OCCT_INCLUDE_DIR + OCCT_LIB_DIR valid),
+	#      run the git-archive clean-room test which builds the shim from
+	#      scratch and verifies STEP/IGES REAL-GEOMETRY — this is the
+	#      definitive OCCT gate.
+	#   b. Always run test-preflight-geometry-gating.sh for contract
+	#      assertions (table format, STL/glTF REAL-GEOMETRY, etc.).
+	# ---------------------------------------------------------------------------
+	bold "10. CLI format geometry gate (real fixtures)"
 
-ADVISORY_NO_OCCT="${MMFORGE_ALLOW_NO_OCCT:-0}"
-GATE_OUTPUT="$ROOT/macos/build/.preflight-geometry-gate.log"
-mkdir -p "$(dirname "$GATE_OUTPUT")"
-GEOMETRY_ADVISORY=0
+	OCCT_CONFIGURED=0
+	if [ -n "${OCCT_INCLUDE_DIR:-}" ] && [ -n "${OCCT_LIB_DIR:-}" ]; then
+	    if [ -d "${OCCT_INCLUDE_DIR}" ] && [ -d "${OCCT_LIB_DIR}" ]; then
+	        OCCT_CONFIGURED=1
+	    fi
+	fi
 
-echo -n "  format-geometry-gate.sh ... "
-set +e
-MMFORGE_NO_OCCT_ADVISORY="$ADVISORY_NO_OCCT" \
-  bash "$ROOT/docs/scripts/format-geometry-gate.sh" >"$GATE_OUTPUT" 2>&1
-GATE_RC=$?
-set -e
+	GEOMETRY_ADVISORY=0
 
-# Parse error/placeholder formats from table
-GATE_ERROR_FORMATS=$(awk -F'|' '/^[|] (STEP|IGES|STL|glTF|DXF)/ && /ERROR/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); printf " %s", $2}' "$GATE_OUTPUT" 2>/dev/null || true)
-GATE_PLACEHOLDER_FORMATS=$(awk -F'|' '/^[|] (STEP|IGES|STL|glTF|DXF)/ && /PLACEHOLDER/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); printf " %s", $2}' "$GATE_OUTPUT" 2>/dev/null || true)
-GATE_FIXTURE_MISSING=$(awk -F'|' '/^[|] (STEP|IGES|STL|glTF|DXF)/ && /FIXTURE_MISSING/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); printf " %s", $2}' "$GATE_OUTPUT" 2>/dev/null || true)
+	# ── 10a. Git archive OCCT gate (only when OCCT is configured) ──────────
+	if [ "$OCCT_CONFIGURED" -eq 1 ]; then
+	    echo -n "  git-archive-occt-gate.sh (clean-room, requires OCCT) ... "
+	    set +e
+	    OCCT_INCLUDE_DIR="${OCCT_INCLUDE_DIR}" OCCT_LIB_DIR="${OCCT_LIB_DIR}" \
+	      bash "$ROOT/macos/scripts/test-git-archive-occt-gate.sh" >"$ROOT/macos/build/.git-archive-gate.log" 2>&1
+	    ARCHIVE_RC=$?
+	    set -e
+	    if [ "$ARCHIVE_RC" -eq 0 ]; then
+	        green "PASS (clean-room: STEP/IGES REAL-GEOMETRY)"
+	    else
+	        red "FAIL (clean-room git archive OCCT gate failed — see macos/build/.git-archive-gate.log)"
+	        RESULT=1
+	    fi
+	else
+	    echo "  git-archive-occt-gate.sh ... SKIP (OCCT not configured)"
+	fi
 
-case "$GATE_RC" in
-  0)
-    green "PASS (all formats REAL-GEOMETRY or 2D-ONLY)"
-    ;;
-  1)
-    if [ -n "$GATE_FIXTURE_MISSING" ]; then
-      red "FAIL — fixture missing:${GATE_FIXTURE_MISSING}"
-      echo "    (Test fixtures not found — check testdata/ and crates/*/testdata/)"
-    else
-      red "FAIL — geometry ERROR:${GATE_ERROR_FORMATS}"
-      echo "    (Set MMFORGE_ALLOW_NO_OCCT=1 to accept STEP/IGES no-OCCT as advisory)"
-    fi
-    RESULT=1
-    ;;
-  2)
-    red "FAIL — geometry PLACEHOLDER:${GATE_PLACEHOLDER_FORMATS}"
-    echo "    (Parser returned empty model — format not wired or feature missing)"
-    RESULT=1
-    ;;
-  3)
-    yellow "ADVISORY — STEP/IGES geometry NOT verified (no OpenCASCADE)"
-    echo "    Only STL, glTF, and DXF geometry is fully verified."
-    echo "    STEP and IGES require OpenCASCADE for complete geometry verification."
-    GEOMETRY_ADVISORY=1
-    ;;
-  *)
-    red "FAIL — format-geometry-gate.sh exited $GATE_RC"
-    RESULT=1
-    ;;
-esac
+	# ── 10b. Contract-level gating tests (always run) ──────────────────────
+	echo -n "  test-preflight-geometry-gating.sh ... "
+	set +e
+	GATE_OUTPUT=$(bash "$ROOT/macos/scripts/test-preflight-geometry-gating.sh" 2>&1)
+	GATE_RC=$?
+	set -e
+	mkdir -p "$ROOT/macos/build"
+	echo "$GATE_OUTPUT" > "$ROOT/macos/build/.preflight-geometry-gating.log"
+
+	if [ "$GATE_RC" -eq 0 ]; then
+	    green "PASS"
+	else
+	    red "FAIL (exit $GATE_RC)"
+	    RESULT=1
+	fi
 
 # ---------------------------------------------------------------------------
 # 11. Performance baseline (large model benchmark, separate from geometry gate)

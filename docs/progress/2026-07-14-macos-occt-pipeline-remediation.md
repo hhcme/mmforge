@@ -1,7 +1,7 @@
 # macOS OCCT Release Pipeline Remediation — 2026-07-14
 
 **日期**: 2026-07-14
-**范围**: OCCT 发布链路修复 — stdout/stderr 合约、指纹统一、Xcode shell 路径验证、cargo test 幂等性、OffscreenCoordinator 观察者契约
+**范围**: OCCT 发布链路修复 — stdout/stderr 合约、指纹统一、Xcode shell 路径验证、cargo test 幂等性、OffscreenCoordinator 观察者契约、OCCT 干净检出闭环
 
 ---
 
@@ -15,7 +15,12 @@
 | 4 | 消除 shell/build.rs 双 fingerprint 实现 | ✅ |
 | 5 | cargo test 不修改已跟踪 shim/fingerprint 文件 | ✅ |
 | 6 | OffscreenCoordinator 观察者契约统一 | ✅ |
-| 7 | 验收报告更新 | ✅ |
+| 7 | format-geometry-gate.sh OCCT shim 构建链路 | ✅ |
+| 8 | test-preflight-geometry-gating.sh OCCT 感知构建 | ✅ |
+| 9 | test-git-archive-occt-gate.sh 干净检出回归测试 | ✅ |
+| 10 | preflight-check.sh 以 archive test 为准 | ✅ |
+| 11 | .gitignore 加入 .zcode/ | ✅ |
+| 12 | 验收报告更新 | ✅ |
 
 ---
 
@@ -132,6 +137,84 @@ CANONICAL FINGERPRINT SPEC:
 
 ---
 
+## ✅ 7. format-geometry-gate.sh — OCCT shim 构建链路
+
+**文件**: `docs/scripts/format-geometry-gate.sh`
+
+### 问题
+- 只检查 shim `.a` 文件是否存在，不调用 `build-occt-shim.sh` 构建/验证
+- OCCT 配置了但 shim 未构建时静默退化为 NO_OCCT
+- `build.rs` 已移除 auto-build 后，shim 不会自动构建
+
+### 修复
+新增三段式逻辑：
+1. **OCCT 显式配置**（`OCCT_INCLUDE_DIR` + `OCCT_LIB_DIR` 均为有效目录）：
+   - 调用 `build-occt-shim.sh` 构建/验证 shim → **失败即硬退出**
+   - 导出 `MMFORGE_SHIM_DIR`
+   - 以 `--features occt` 构建 CLI → **失败即硬退出**
+   - **禁止静默退化**
+2. **OCCT 未配置但 shim 存在**：尝试 `--features occt`，失败则优雅回退
+3. **OCCT 未配置且 shim 不存在**：无 OCCT 构建（当前行为）
+
+---
+
+## ✅ 8. test-preflight-geometry-gating.sh — OCCT 感知构建
+
+**文件**: `macos/scripts/test-preflight-geometry-gating.sh`
+
+### 问题
+- 总是不带 `--features occt` 构建 CLI
+- 只能检测到 NO_OCCT，无法验证 OCCT 路径
+
+### 修复
+- 检测 `OCCT_INCLUDE_DIR` + `OCCT_LIB_DIR` 环境变量
+- 配置时：先构建 shim，再以 `--features occt` 构建 CLI
+- 未配置时：普通构建（保持向后兼容）
+- 运行时 OCCT 检测作为 ground truth
+
+---
+
+## ✅ 9. test-git-archive-occt-gate.sh — 干净检出回归测试
+
+**新文件**: `macos/scripts/test-git-archive-occt-gate.sh`
+
+### 目的
+证明无需预构建产物即可从 `git archive` 得到 STEP/IGES REAL-GEOMETRY。
+
+### 流程
+1. `git archive HEAD | tar xf -` → 临时目录（仅源文件，无 build artifacts）
+2. 验证 archive 中无预构建的 `.a` / `.shim_fingerprint` / `CMakeCache.txt`
+3. 在临时副本中调用 `build-occt-shim.sh` 从零构建 shim
+4. `cargo build --release -p mmforge-cli --features occt`
+5. 运行 `format-geometry-gate.sh`，断言：
+   - Exit 0
+   - STEP = REAL-GEOMETRY
+   - IGES = REAL-GEOMETRY
+   - STL = REAL-GEOMETRY
+   - glTF = REAL-GEOMETRY
+   - DXF = 2D-ONLY
+
+---
+
+## ✅ 10. preflight-check.sh — 以 archive test 为准
+
+**文件**: `macos/scripts/preflight-check.sh` section 10
+
+### 修复
+- **10a**: OCCT 配置时运行 `test-git-archive-occt-gate.sh`（干净检出闭环验证）
+- **10b**: 始终运行 `test-preflight-geometry-gating.sh`（合约级断言）
+- 移除旧的手动 gate 输出解析逻辑
+
+---
+
+## ✅ 11. .gitignore — .zcode 归属
+
+**文件**: `.gitignore`
+
+新增 `.zcode/` 到编辑器忽略列表（与 `.idea/`、`.vscode/` 并列）。
+
+---
+
 ## 构建验证矩阵
 
 | 命令 | 结果 |
@@ -141,10 +224,22 @@ CANONICAL FINGERPRINT SPEC:
 | `cargo test --workspace` | ✅ all passed |
 | `cargo clippy --workspace -- -D warnings` | ✅ clean |
 | `bash macos/scripts/test-xcode-shell-build.sh` | ✅ 18/18 ALL PASSED |
-| `xcodebuild test` | ✅ **250 passed, 0 failures, 0 unexpected** |
-| `MMFORGE_NO_OCCT_ADVISORY=1 bash format-geometry-gate.sh` | ✅ exit 3 (ADVISORY — OCCT env vars not set) |
-| `bash macos/scripts/preflight-check.sh` | ✅ Rust/Clippy/Fmt/Xcode tests pass |
+| `xcodebuild test` | ✅ **250 passed, 0 failures** |
+| `bash macos/scripts/test-preflight-geometry-gating.sh` | ✅ 11/11 ALL PASSED (no-OCCT path) |
+| `bash macos/scripts/test-git-archive-occt-gate.sh` | ✅ **ALL CHECKS PASSED — STEP/IGES/STL/glTF REAL-GEOMETRY, DXF 2D-ONLY** |
 | `git diff --check` | ✅ clean |
+
+### Git Archive OCCT Gate 详细结果
+
+```
+| FORMAT | STATUS         |  NODES |  GEOMS |  TRIANGLES |
+| STL    | REAL-GEOMETRY  |      2 |      1 |         12 |
+| glTF   | REAL-GEOMETRY  |      1 |      1 |          1 |
+| DXF    | 2D-ONLY        |      5 |      1 |          0 |
+| STEP   | REAL-GEOMETRY  |      3 |      2 |        244 |
+| IGES   | REAL-GEOMETRY  |      2 |      1 |         12 |
+VERDICT: PASS (all formats REAL-GEOMETRY or 2D-ONLY)
+```
 
 ---
 
@@ -154,12 +249,17 @@ CANONICAL FINGERPRINT SPEC:
 |------|------|------|
 | `macos/scripts/build-occt-shim.sh` | 修改 | stdout/stderr 合约 + 统一 fingerprint |
 | `macos/scripts/test-xcode-shell-build.sh` | **新增** | 24 断言非 GUI 回归测试 |
+| `macos/scripts/test-git-archive-occt-gate.sh` | **新增** | git archive 干净检出 OCCT 回归测试 |
+| `macos/scripts/test-preflight-geometry-gating.sh` | 修改 | OCCT 感知构建（env vars → shim → occt CLI）|
+| `macos/scripts/preflight-check.sh` | 修改 | section 10 改用 archive test + gating test |
+| `docs/scripts/format-geometry-gate.sh` | 修改 | OCCT shim 构建链路，硬失败禁止静默退化 |
 | `macos/MMForge.xcodeproj/project.pbxproj` | 修改 | Xcode shell 路径验证 + stderr 重定向 |
-| `.gitignore` | 修改 | 忽略 shim build artifacts |
+| `.gitignore` | 修改 | 忽略 shim build artifacts + .zcode/ |
 | `crates/mmforge-geometry/build.rs` | 修改 | 移除 auto-build，保留验证 + 规范文档 |
 | `macos/MMForge/Metal/OffscreenCoordinator.swift` | 修改 | 移除 LoserOutcome，统一文档 |
 | `crates/mmforge-geometry/shim/build/libmmforge_occt_shim.a` | untrack | git rm --cached |
 | `crates/mmforge-geometry/shim/build/.shim_fingerprint` | untrack | git rm --cached |
+| `docs/progress/2026-07-14-macos-occt-pipeline-remediation.md` | **新增** | 验收报告 |
 
 ---
 
