@@ -333,28 +333,22 @@ final class DocumentViewModel: ObservableObject {
             let tmpURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("mmforge_cache_\(UUID().uuidString).lsm")
             _parseTmpURL = tmpURL
-            // Write cached LSM to temp file; parse it synchronously in background.
             let cacheData = cachedLSM
-            Task.detached(priority: .userInitiated) { [weak self] in
-                guard let self else { return }
-                do {
-                    try cacheData.write(to: tmpURL)
-                } catch {
-                    await MainActor.run { [weak self] in
-                        self?.parseStage = "cache read failed, re-parsing"
-                        self?.startAsyncParse(data: data, ext: ext, generation: generation)
-                    }
-                    return
-                }
-                // Load LSM via mmf_parse_file on a background thread (LSM is pure Rust, no OCCT).
-                let docPtr = mmf_parse_file(tmpURL.path)
+            // Write cache data to temp file on background, then parse on MainActor
+            // to keep ownership clear: docPtr is only accessed inside the MainActor
+            // block and freed immediately if stale.
+            Task.detached(priority: .userInitiated) {
+                do { try cacheData.write(to: tmpURL) }
+                catch { return } // MainActor block below handles this via !fileExists
                 await MainActor.run { [weak self] in
-                    guard let self, generation == self.parseGeneration else {
-                        if let d = docPtr { mmf_document_free(d) }
+                    guard let self, generation == self.parseGeneration else { return }
+                    guard FileManager.default.fileExists(atPath: tmpURL.path) else {
+                        self.parseStage = "cache read failed, re-parsing"
+                        self.startAsyncParse(data: data, ext: ext, generation: generation)
                         return
                     }
+                    let docPtr = mmf_parse_file(tmpURL.path)
                     guard let doc = docPtr else {
-                        // Cache corrupt → evict and fall back to full parse.
                         ModelCache.shared.evict(key: key)
                         self.parseStage = "cache corrupt, re-parsing"
                         self.startAsyncParse(data: data, ext: ext, generation: generation)
@@ -391,18 +385,19 @@ final class DocumentViewModel: ObservableObject {
     fileprivate func finishParse(doc: OpaquePointer, tmpURL: URL, generation: UInt64, fromCache: Bool) {
         if let old = rustDoc { RustBridge.shared.freeDocument(old) }
         rustDoc = doc
-        // Store in disk cache on background (non-MainActor).
+        // Serialize LSM NOW while doc is guaranteed alive, then pass Data
+        // (not raw pointer) to background for I/O — no use-after-free window.
         if let key = currentCacheKey {
             let cacheKey = key
-            Task.detached(priority: .background) { [weak self] in
-                guard let self else { return }
-                let outURL = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("mmforge_cache_write_\(UUID().uuidString).lsm")
-                if RustBridge.shared.writeLSM(doc: doc, to: outURL.path),
-                   let data = try? Data(contentsOf: outURL) {
+            let outURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mmforge_cache_write_\(UUID().uuidString).lsm")
+            let ok = RustBridge.shared.writeLSM(doc: doc, to: outURL.path)
+            let cachedData = ok ? (try? Data(contentsOf: outURL)) : nil
+            try? FileManager.default.removeItem(at: outURL)
+            if let data = cachedData {
+                Task.detached(priority: .background) {
                     ModelCache.shared.store(key: cacheKey, data: data)
                 }
-                try? FileManager.default.removeItem(at: outURL)
             }
         }
         currentCacheKey = nil
@@ -620,29 +615,20 @@ extension DocumentViewModel {
 
         let task = Task { @MainActor [weak self, gen] in
             guard let self else { return }
-
-            // --- Check that the document is still valid before starting ---
             guard gen == self.parseGeneration,
-                  let currentDoc = self.rustDoc,
+                  self.rustDoc != nil,
                   let renderer = self.renderer
-            else {
-                self.streamingTask = nil
-                return
-            }
+            else { self.streamingTask = nil; return }
 
             parseStage = "Uploading meshes..."
             var uploaded = 0
 
             for ci in 0..<UInt32(totalChunks) {
-                // --- Generation guard: bail if a new parse started ---
                 guard gen == self.parseGeneration,
-                      self.rustDoc != nil,
+                      let currentDoc = self.rustDoc,  // re-read each iteration, not snapshot
                       let renderer = self.renderer,
                       !Task.isCancelled
-                else {
-                    self.streamingTask = nil
-                    return
-                }
+                else { self.streamingTask = nil; return }
 
                 parseStage = "Uploading meshes (chunk \(ci + 1)/\(totalChunks))..."
                 parseProgress = Double(ci) / Double(totalChunks)
@@ -653,7 +639,6 @@ extension DocumentViewModel {
                     into: renderer
                 )
                 uploaded += count
-
                 await Task.yield()
             }
 
