@@ -523,4 +523,99 @@ extension RustBridge {
         mmf_reset_streaming_packet(docPtr)
         return mmf_build_streaming_packet(docPtr, budgetBytes)
     }
+
+    // MARK: - LSM cache serialization
+
+    /// Write the document's internal LSM model to a file for caching.
+    /// Returns true on success.
+    func writeLSM(doc: OpaquePointer, to path: String) -> Bool {
+        mmf_document_write_lsm(UnsafeMutableRawPointer(doc), path) == 0
+    }
+}
+
+// MARK: - ModelCache
+
+import CryptoKit
+
+/// Disk cache for parsed LSM models in Application Support.
+///
+/// Composite cache key: source file path + size + mtime + content sample
+/// (SHA256 of first+last 4KB) + extension + parser version + OCCT version.
+///
+/// Storage: `~/Library/Application Support/MMForge/ModelCache/<hex>.lsmc`
+/// Atomic writes via .tmp rename.  LRU eviction at 512 MB capacity.
+final class ModelCache: @unchecked Sendable {
+    static let shared = ModelCache()
+    private let lock = NSLock()
+    private let cacheDir: URL
+    private let maxCapacity: Int
+    private var accessLog: [(key: String, timestamp: Date)] = []
+
+    init(capacityMB: Int = 512) {
+        maxCapacity = capacityMB * 1024 * 1024
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        cacheDir = dir.appendingPathComponent("MMForge/ModelCache")
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+    }
+
+    func cacheKey(for url: URL, parserVersion: String = "1.0", occtVersion: String? = nil) -> String? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? Int64,
+              let mtime = attrs[.modificationDate] as? Date,
+              let fh = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? fh.close() }
+        let head = (try? fh.read(upToCount: 4096)) ?? Data()
+        var tail = Data()
+        if size > 8192 { try? fh.seek(toOffset: UInt64(size) - 4096); tail = (try? fh.read(upToCount: 4096)) ?? Data() }
+        let sample = head + tail
+        let occtTag = occtVersion ?? "no-occt"
+        let base = "\(url.path)|\(size)|\(Int(mtime.timeIntervalSince1970))|\(url.pathExtension)|\(parserVersion)|\(occtTag)"
+        let hash = SHA256.hash(data: sample).compactMap { String(format: "%02x", $0) }.joined()
+        return SHA256.hash(data: Data((base + "|" + hash).utf8)).compactMap { String(format: "%02x", $0) }.joined()
+    }
+
+    func load(key: String) -> Data? {
+        let url = cacheDir.appendingPathComponent(key + ".lsmc")
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+            try? FileManager.default.removeItem(at: url); return nil
+        }
+        touch(key); return data
+    }
+
+    func store(key: String, data: Data) {
+        let url = cacheDir.appendingPathComponent(key + ".lsmc")
+        let tmp = cacheDir.appendingPathComponent(key + ".lsmc.tmp")
+        try? FileManager.default.removeItem(at: tmp)
+        guard (try? data.write(to: tmp, options: .atomic)) != nil else { return }
+        try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.moveItem(at: tmp, to: url)
+        touch(key); evictIfNeeded()
+    }
+
+    func clear() {
+        lock.lock(); defer { lock.unlock() }
+        accessLog.removeAll()
+        try? FileManager.default.removeItem(at: cacheDir)
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+    }
+
+    private func touch(_ key: String) {
+        lock.lock(); defer { lock.unlock() }
+        accessLog.removeAll { $0.key == key }; accessLog.append((key, Date()))
+    }
+
+    private func evictIfNeeded() {
+        lock.lock(); defer { lock.unlock() }
+        var sz: Int64 = 0
+        if let files = try? FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: [.fileSizeKey]) {
+            sz = files.reduce(0) { $0 + Int64((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
+        }
+        accessLog.sort { $0.timestamp < $1.timestamp }
+        while sz > maxCapacity, let oldest = accessLog.first {
+            let u = cacheDir.appendingPathComponent(oldest.key + ".lsmc")
+            let s = (try? u.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            try? FileManager.default.removeItem(at: u)
+            sz -= Int64(s); accessLog.removeFirst()
+        }
+    }
 }

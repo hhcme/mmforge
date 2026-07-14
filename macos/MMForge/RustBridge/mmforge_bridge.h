@@ -445,6 +445,13 @@ int mmf_frustum_aabb_visible(const float* bounds_min, const float* bounds_max,
                               float cam_fov_y, float cam_near, float cam_far,
                               float aspect);
 
+/**
+ * Serialize the document's LSM model to the given file path.
+ * Returns 0 on success, -1 on error.
+ * The resulting file can be re-parsed via mmf_parse_file() for fast cache loads.
+ */
+int mmf_document_write_lsm(void* doc, const char* path);
+
 #ifdef __cplusplus
 }
 #endif

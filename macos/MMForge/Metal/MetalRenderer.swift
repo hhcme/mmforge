@@ -449,12 +449,23 @@ struct OverlayUniforms {
 
     // MARK: - Mesh upload
 
-    /// Grow a Metal buffer if needed, returning a (possibly new) buffer
-    /// with at least `requiredCapacity` bytes.
-    private func ensureBuffer(_ existing: MTLBuffer?, capacity: Int) -> MTLBuffer? {
-        if let buf = existing, buf.length >= capacity { return buf }
-        return device.makeBuffer(length: max(capacity, Self.initialBufferSize),
-                                  options: .storageModeShared)
+    /// Grow-or-allocate a Metal buffer, preserving existing content.
+    ///
+    /// Exponential growth (2×) with 4 MB minimum ensures amortized O(1)
+    /// copies.  The old buffer's content is copied into the new buffer
+    /// before the old buffer is released — safe for in-flight command
+    /// buffers because Metal retains buffers referenced by committed
+    /// command buffers until they complete.
+    private func ensureBuffer(_ existing: MTLBuffer?, requiredCapacity: Int) -> MTLBuffer? {
+        if let buf = existing, buf.length >= requiredCapacity { return buf }
+        let newSize = max(requiredCapacity, (existing?.length ?? 0) * 2, Self.initialBufferSize)
+        guard let newBuf = device.makeBuffer(length: newSize, options: .storageModeShared) else {
+            return nil
+        }
+        if let old = existing, old.length > 0 {
+            newBuf.contents().copyMemory(from: old.contents(), byteCount: old.length)
+        }
+        return newBuf
     }
 
     /// Upload interleaved vertex data + index data into shared GPU buffers.
@@ -475,10 +486,10 @@ struct OverlayUniforms {
         let vbNeeded = vertexBufferOffset + vbBytes
         let ibNeeded = indexBufferOffset + ibBytes
         if sharedVertexBuffer == nil || sharedVertexBuffer!.length < vbNeeded {
-            sharedVertexBuffer = ensureBuffer(sharedVertexBuffer, capacity: vbNeeded)
+            sharedVertexBuffer = ensureBuffer(sharedVertexBuffer, requiredCapacity: vbNeeded)
         }
         if sharedIndexBuffer == nil || sharedIndexBuffer!.length < ibNeeded {
-            sharedIndexBuffer = ensureBuffer(sharedIndexBuffer, capacity: ibNeeded)
+            sharedIndexBuffer = ensureBuffer(sharedIndexBuffer, requiredCapacity: ibNeeded)
         }
         guard let vb = sharedVertexBuffer, let ib = sharedIndexBuffer else { return }
 

@@ -147,6 +147,10 @@ final class DocumentViewModel: ObservableObject {
     @Published var parseProgress: Double = 0  // 0..1
     /// File extension being loaded (for format-aware UI during loading).
     @Published var loadingFileExtension: String = ""
+    /// Source URL of the file being parsed (for cache key computation).
+    var parseSourceURL: URL?
+    /// Cache key for the current parse (nil if cache not applicable).
+    fileprivate var currentCacheKey: String?
 
     // Color override state
     @Published var nodeColorOverrides: [Int: simd_float4] = [:]
@@ -320,8 +324,11 @@ final class DocumentViewModel: ObservableObject {
         }
 
         state = .loading
-        parseStage = ""
+        parseStage = "detecting format"
         parseProgress = 0
+
+        // Compute disk cache key if we have a source URL.
+        currentCacheKey = parseSourceURL.flatMap { ModelCache.shared.cacheKey(for: $0) }
 
         // Write to temp file with the ORIGINAL extension so Rust format
         // detection works correctly (STL requires .stl, etc.).
@@ -434,6 +441,18 @@ private func parseCompletionCallback(
         if let doc = doc {
             if let oldDoc = vm.rustDoc { RustBridge.shared.freeDocument(oldDoc) }
             vm.rustDoc = doc
+            // Store LSM in disk cache for fast reload on next open.
+            if let cacheKey = vm.currentCacheKey {
+                let cacheURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("mmforge_cache_\(cacheKey).lsm")
+                if RustBridge.shared.writeLSM(doc: doc, to: cacheURL.path) {
+                    if let data = try? Data(contentsOf: cacheURL) {
+                        ModelCache.shared.store(key: cacheKey, data: data)
+                    }
+                    try? FileManager.default.removeItem(at: cacheURL)
+                }
+                vm.currentCacheKey = nil
+            }
             let dto = RustBridge.shared.buildDTO(from: doc)
             vm.nodeNames = dto.nodeNames
             vm.nodes = dto.nodes

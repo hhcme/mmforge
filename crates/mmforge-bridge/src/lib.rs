@@ -1676,3 +1676,26 @@ pub extern "C" fn mmf_frustum_aabb_visible(
     f.normalise();
     if f.intersects_aabb(&bb) { 1 } else { 0 }
 }
+
+// ── LSM cache serialization ─────────────────────────────────────────────
+
+/// Serialize the document's LSM model to the given file path.
+/// Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_document_write_lsm(doc: *mut MmfDocument, path: *const c_char) -> i32 {
+    if doc.is_null() || path.is_null() {
+        return -1;
+    }
+    let doc = unsafe { &*doc };
+    let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+    match std::fs::File::create(path.as_ref()) {
+        Ok(f) => {
+            let mut w = std::io::BufWriter::new(f);
+            match mmforge_core::lsm::write_lsm(&doc.model, &mut w) {
+                Ok(_) => 0,
+                Err(_) => -1,
+            }
+        }
+        Err(_) => -1,
+    }
+}
