@@ -681,6 +681,7 @@ final class BridgeAcceptanceTests: XCTestCase {
     func test_headless_renderer_camera_zoom_changes_distance() throws {
         let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
         defer { mmf_document_free(doc) }
+        renderer.toggleProjection() // switch to perspective for distance zoom
 
         let distBefore = renderer.camera.distance
         renderer.zoom(delta: 3.0)
@@ -1036,14 +1037,15 @@ final class BridgeAcceptanceTests: XCTestCase {
         XCTAssertGreaterThan(renderer.camera.distance, 0, "distance valid after reset")
         XCTAssertTrue(renderer.camera.yaw.isFinite, "yaw finite after reset")
         XCTAssertTrue(renderer.camera.pitch.isFinite, "pitch finite after reset")
-        // resetCamera restores perspective projection
-        XCTAssertFalse(renderer.isOrthographic, "resetCamera restores perspective projection")
+        // resetCamera restores orthographic projection (industrial CAD default)
+        XCTAssertTrue(renderer.isOrthographic, "resetCamera restores orthographic projection")
     }
 
     @MainActor
     func test_camera_zoom_in_decreases_distance() throws {
         let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
         defer { mmf_document_free(doc) }
+        renderer.toggleProjection() // switch to perspective for distance zoom
         let d1 = renderer.camera.distance
         renderer.zoom(delta: 5)
         XCTAssertLessThan(renderer.camera.distance, d1, "zoom in (positive delta) decreases distance")
@@ -1100,5 +1102,113 @@ final class BridgeAcceptanceTests: XCTestCase {
         // Leaves have no children
         let leafKids = vm.childrenOf(1)
         XCTAssertEqual(leafKids.count, 0, "leaf has no children")
+    }
+
+    // MARK: - Camera: deterministic grab-model rotate direction
+
+    /// Drag right → model moves right → yaw decreases.
+    @MainActor
+    func test_rotate_drag_right_yaw_decreases() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.resetCamera() // known state
+
+        let yawBefore = renderer.camera.yaw
+        renderer.rotate(dx: 100, dy: 0)  // drag right
+        // Grab-model: drag right → yaw decreases → model moves right
+        XCTAssertLessThan(renderer.camera.yaw, yawBefore,
+                          "drag right must decrease yaw (grab-model semantic)")
+    }
+
+    /// Drag up → model moves up → pitch decreases.
+    @MainActor
+    func test_rotate_drag_up_pitch_decreases() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.resetCamera() // sets pitch = pi/9, non-extreme value
+
+        let pitchBefore = renderer.camera.pitch
+        renderer.rotate(dx: 0, dy: 100)  // drag up
+        // Grab-model: drag up → pitch decreases → model moves up
+        XCTAssertLessThan(renderer.camera.pitch, pitchBefore,
+                          "drag up must decrease pitch (grab-model semantic)")
+    }
+
+    /// Drag left → yaw increases (opposite of right).
+    @MainActor
+    func test_rotate_drag_left_yaw_increases() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.resetCamera()
+
+        let yawBefore = renderer.camera.yaw
+        renderer.rotate(dx: -100, dy: 0)  // drag left
+        XCTAssertGreaterThan(renderer.camera.yaw, yawBefore,
+                             "drag left must increase yaw (grab-model semantic)")
+    }
+
+    // MARK: - Camera: projection matrix Metal NDC [0,1]
+
+    /// Verify perspectiveFovY maps near clip plane to NDC depth 0.
+    func test_perspective_near_maps_to_zero() {
+        let proj = simd_float4x4(perspectiveFovY: Float.pi/4, aspect: 1.0,
+                                  near: 0.1, far: 100.0)
+        // Transform a point at the near plane (in right-handed view space,
+        // the near plane is at z = -near).
+        let pNear = simd_float4(0, 0, -0.1, 1)
+        let clipNear = proj * pNear
+        let ndcZ = clipNear.z / clipNear.w
+        XCTAssertEqual(ndcZ, 0.0, accuracy: 0.001,
+                       "near clip plane must map to NDC depth 0 (Metal [0,1])")
+    }
+
+    /// Verify perspectiveFovY maps far clip plane to NDC depth 1.
+    func test_perspective_far_maps_to_one() {
+        let proj = simd_float4x4(perspectiveFovY: Float.pi/4, aspect: 1.0,
+                                  near: 0.1, far: 100.0)
+        let pFar = simd_float4(0, 0, -100.0, 1)
+        let clipFar = proj * pFar
+        let ndcZ = clipFar.z / clipFar.w
+        XCTAssertEqual(ndcZ, 1.0, accuracy: 0.001,
+                       "far clip plane must map to NDC depth 1 (Metal [0,1])")
+    }
+
+    /// Verify orthographic projection maps near/far to Metal [0,1].
+    func test_orthographic_depth_is_metal_ndc() {
+        let ortho = simd_float4x4(orthoLeft: -5, right: 5,
+                                   bottom: -5, top: 5,
+                                   near: 0.1, far: 100.0)
+        let pNear = simd_float4(0, 0, -0.1, 1)
+        let clipNear = ortho * pNear
+        XCTAssertEqual(clipNear.z / clipNear.w, 0.0, accuracy: 0.001,
+                       "ortho near → NDC 0")
+        let pFar = simd_float4(0, 0, -100.0, 1)
+        let clipFar = ortho * pFar
+        XCTAssertEqual(clipFar.z / clipFar.w, 1.0, accuracy: 0.001,
+                       "ortho far → NDC 1")
+    }
+
+    // MARK: - Camera: default projection is orthographic (industrial CAD)
+
+    @MainActor
+    func test_default_projection_is_orthographic() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.resetCamera()
+        XCTAssertTrue(renderer.isOrthographic,
+                      "default projection after resetCamera must be orthographic")
+    }
+
+    /// toggleProjection still works — perspective is one toggle away.
+    @MainActor
+    func test_toggle_from_ortho_goes_to_perspective() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.resetCamera()
+        XCTAssertTrue(renderer.isOrthographic, "resetCamera → orthographic")
+        renderer.toggleProjection()
+        XCTAssertFalse(renderer.isOrthographic, "one toggle → perspective")
+        renderer.toggleProjection()
+        XCTAssertTrue(renderer.isOrthographic, "second toggle → back to orthographic")
     }
 }

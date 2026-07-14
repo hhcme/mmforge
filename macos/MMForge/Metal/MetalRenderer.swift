@@ -17,12 +17,18 @@ extension simd_float4x4 {
         ))
     }
 
+    /// Perspective projection matrix with Metal NDC depth [0,1].
+    ///
+    /// Metal convention: near clip plane maps to depth 0, far to depth 1.
+    /// This differs from OpenGL's [-1,1] — using the OpenGL formula would
+    /// place near at -1 and far at 1, wasting half the depth range and
+    /// causing incorrect clipping on Metal.
     init(perspectiveFovY fovY: Float, aspect: Float, near: Float, far: Float) {
         let yScale = 1 / tan(fovY * 0.5)
         let xScale = yScale / aspect
         let zRange = far - near
-        let zScale = -(far + near) / zRange
-        let wzScale = -2 * far * near / zRange
+        let zScale = -far / zRange          // Metal: near→0, far→1
+        let wzScale = -(far * near) / zRange
         self.init(columns: (
             simd_float4(xScale, 0, 0, 0),
             simd_float4(0, yScale, 0, 0),
@@ -267,7 +273,7 @@ struct OverlayUniforms {
         var fovY: Float = Float.pi / 4
         var near: Float = 0.01
         var far: Float = 1000.0
-        var isOrthographic: Bool = false
+        var isOrthographic: Bool = true   // industrial CAD: orthographic default
         var orthoScale: Float = 5.0
 
         var eye: simd_float3 {
@@ -848,9 +854,16 @@ struct OverlayUniforms {
 
     // MARK: - Camera controls
 
+    /// Orbit the camera around the target point.
+    ///
+    /// Grab-model semantic: dragging right moves the model right on screen
+    /// (camera orbits left, yaw decreases); dragging up moves the model up
+    /// (camera orbits down, pitch decreases).  This is the inverse of
+    /// "orbiting around" — it makes the user feel like they are grabbing
+    /// and moving the model directly.
     func rotate(dx: Float, dy: Float) {
-        camera.yaw += dx * 0.005
-        camera.pitch = max(-Float.pi/2 * 0.99, min(Float.pi/2 * 0.99, camera.pitch + dy * 0.005))
+        camera.yaw -= dx * 0.005
+        camera.pitch = max(-Float.pi/2 * 0.99, min(Float.pi/2 * 0.99, camera.pitch - dy * 0.005))
     }
 
     func zoom(delta: Float) {
@@ -888,11 +901,15 @@ struct OverlayUniforms {
         camera.isOrthographic
     }
 
+    /// Reset camera to default state: orthographic projection, fit to
+    /// scene bounds, default yaw/pitch.  Industrial CAD favours orthographic
+    /// to eliminate perspective distortion; toggleProjection() switches to
+    /// perspective for inspection when needed.
     func resetCamera() {
         fitToView()
         camera.yaw = 0
         camera.pitch = Float.pi / 9
-        camera.isOrthographic = false
+        camera.isOrthographic = true
     }
 
     // MARK: - Screenshot capture
