@@ -6,7 +6,7 @@ struct MMForgeApp: App {
 
     var body: some Scene {
         DocumentGroup(newDocument: MMForgeDocument()) { file in
-            ContentView(document: file.$document)
+            ContentView(document: file.$document, fileURL: file.fileURL)
         }
         .commands {
             // Hide the standard New menu item — DocumentGroup already provides

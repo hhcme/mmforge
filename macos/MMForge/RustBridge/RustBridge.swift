@@ -599,6 +599,14 @@ final class ModelCache: @unchecked Sendable {
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
     }
 
+    /// Immediately evict a specific cache entry (e.g. corrupt data).
+    func evict(key: String) {
+        let url = cacheDir.appendingPathComponent(key + ".lsmc")
+        try? FileManager.default.removeItem(at: url)
+        lock.lock(); defer { lock.unlock() }
+        accessLog.removeAll { $0.key == key }
+    }
+
     private func touch(_ key: String) {
         lock.lock(); defer { lock.unlock() }
         accessLog.removeAll { $0.key == key }; accessLog.append((key, Date()))

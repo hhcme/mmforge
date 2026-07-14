@@ -61,9 +61,10 @@ struct MMForgeDocument: FileDocument {
     var fileData: Data
 
     /// Original file extension (e.g. "step", "stl", "glb").
-    /// Used to create temp files with the correct extension so Rust
-    /// format detection works properly.
     var fileExtension: String
+
+    /// File URL (for cache key computation).  Set by DocumentGroup or drag-drop.
+    var fileURL: URL?
 
     init(fileData: Data = Data(), fileExtension: String = "step") {
         self.fileData = fileData
@@ -310,55 +311,116 @@ final class DocumentViewModel: ObservableObject {
     }
 
     func parseFile(data: Data, fileExtension: String = "step") {
-        // Increment generation — stale results are discarded.
         parseGeneration += 1
         let generation = parseGeneration
-
-        // Clean up previous state first (cancels streaming task, frees Rust doc, clears caches).
-        // The generation bump above ensures stale callbacks are discarded.
         freeCurrentDocument()
 
-        guard !data.isEmpty else {
-            state = .empty
-            return
-        }
+        guard !data.isEmpty else { state = .empty; return }
 
         state = .loading
         parseStage = "detecting format"
         parseProgress = 0
 
-        // Compute disk cache key if we have a source URL.
+        // Compute cache key from the now-wired source URL.
         currentCacheKey = parseSourceURL.flatMap { ModelCache.shared.cacheKey(for: $0) }
-
-        // Write to temp file with the ORIGINAL extension so Rust format
-        // detection works correctly (STL requires .stl, etc.).
+        let cacheKey = currentCacheKey
         let ext = fileExtension.isEmpty ? "step" : fileExtension
         loadingFileExtension = ext
-        let tmpURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mmforge_\(UUID().uuidString).\(ext)")
-        _parseTmpURL = tmpURL
-        do {
-            try data.write(to: tmpURL)
-        } catch {
-            state = .error("Failed to write temp file: \(error.localizedDescription)")
+
+        // ── Fast path: cache hit → load LSM directly, skip OCCT parse ──
+        if let key = cacheKey, let cachedLSM = ModelCache.shared.load(key: key) {
+            parseStage = "loading from cache"
+            let tmpURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mmforge_cache_\(UUID().uuidString).lsm")
+            _parseTmpURL = tmpURL
+            // Write cached LSM to temp file; parse it synchronously in background.
+            let cacheData = cachedLSM
+            Task.detached(priority: .userInitiated) { [weak self] in
+                guard let self else { return }
+                do {
+                    try cacheData.write(to: tmpURL)
+                } catch {
+                    await MainActor.run { [weak self] in
+                        self?.parseStage = "cache read failed, re-parsing"
+                        self?.startAsyncParse(data: data, ext: ext, generation: generation)
+                    }
+                    return
+                }
+                // Load LSM via mmf_parse_file on a background thread (LSM is pure Rust, no OCCT).
+                let docPtr = mmf_parse_file(tmpURL.path)
+                await MainActor.run { [weak self] in
+                    guard let self, generation == self.parseGeneration else {
+                        if let d = docPtr { mmf_document_free(d) }
+                        return
+                    }
+                    guard let doc = docPtr else {
+                        // Cache corrupt → evict and fall back to full parse.
+                        ModelCache.shared.evict(key: key)
+                        self.parseStage = "cache corrupt, re-parsing"
+                        self.startAsyncParse(data: data, ext: ext, generation: generation)
+                        return
+                    }
+                    self.finishParse(doc: doc, tmpURL: tmpURL, generation: generation, fromCache: true)
+                }
+            }
             return
         }
 
-        let path = tmpURL.path
+        // ── Slow path: full async parse ──
+        startAsyncParse(data: data, ext: ext, generation: generation)
+    }
 
-        // Create cancellation token for this parse.
+    /// Start full async parse (writes temp file, creates job).
+    fileprivate func startAsyncParse(data: Data, ext: String, generation: UInt64) {
+        let tmpURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mmforge_\(UUID().uuidString).\(ext)")
+        _parseTmpURL = tmpURL
+        do { try data.write(to: tmpURL) }
+        catch { state = .error("Failed to write temp file: \(error.localizedDescription)"); return }
+
+        let path = tmpURL.path
         let cancelToken: UnsafeMutableRawPointer? = mmf_cancel_token_new()
         currentCancelToken = cancelToken
-
-        // Build a context object that the C callbacks can access via user_data.
-        // Uses Unmanaged to pass a reference through C void*.
         let ctx = ParseCallbackContext(viewModel: self, generation: generation, tmpURL: tmpURL)
         let ctxPtr = Unmanaged.passRetained(ctx).toOpaque()
+        currentJob = mmf_open_async(path, UnsafeRawPointer(cancelToken),
+                                     parseProgressCallback, parseCompletionCallback, ctxPtr)
+    }
 
-        let job = mmf_open_async(path, UnsafeRawPointer(cancelToken),
-                                 parseProgressCallback, parseCompletionCallback, ctxPtr)
+    /// Called from both cache-hit (fast) and async-parse (slow) paths.
+    fileprivate func finishParse(doc: OpaquePointer, tmpURL: URL, generation: UInt64, fromCache: Bool) {
+        if let old = rustDoc { RustBridge.shared.freeDocument(old) }
+        rustDoc = doc
+        // Store in disk cache on background (non-MainActor).
+        if let key = currentCacheKey {
+            let cacheKey = key
+            Task.detached(priority: .background) { [weak self] in
+                guard let self else { return }
+                let outURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("mmforge_cache_write_\(UUID().uuidString).lsm")
+                if RustBridge.shared.writeLSM(doc: doc, to: outURL.path),
+                   let data = try? Data(contentsOf: outURL) {
+                    ModelCache.shared.store(key: cacheKey, data: data)
+                }
+                try? FileManager.default.removeItem(at: outURL)
+            }
+        }
+        currentCacheKey = nil
 
-        currentJob = job
+        let dto = RustBridge.shared.buildDTO(from: doc)
+        nodeNames = dto.nodeNames; nodes = dto.nodes; stats = dto.stats
+        initLayerState(); expandedIndices = [0]; rebuildTreeCaches()
+
+        if shouldStream(dto) {
+            uploadStreaming(dto: dto)
+        } else {
+            uploadToRenderer(dto: dto)
+            parseStage = ""
+            parseProgress = 1
+            state = .loaded(triangleCount: dto.triangleCount, meshCount: dto.meshes.count,
+                            nodeCount: dto.nodeNames.count)
+        }
+        try? FileManager.default.removeItem(at: tmpURL)
     }
 
     deinit {
@@ -439,38 +501,7 @@ private func parseCompletionCallback(
             vm.currentCancelToken = nil
         }
         if let doc = doc {
-            if let oldDoc = vm.rustDoc { RustBridge.shared.freeDocument(oldDoc) }
-            vm.rustDoc = doc
-            // Store LSM in disk cache for fast reload on next open.
-            if let cacheKey = vm.currentCacheKey {
-                let cacheURL = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("mmforge_cache_\(cacheKey).lsm")
-                if RustBridge.shared.writeLSM(doc: doc, to: cacheURL.path) {
-                    if let data = try? Data(contentsOf: cacheURL) {
-                        ModelCache.shared.store(key: cacheKey, data: data)
-                    }
-                    try? FileManager.default.removeItem(at: cacheURL)
-                }
-                vm.currentCacheKey = nil
-            }
-            let dto = RustBridge.shared.buildDTO(from: doc)
-            vm.nodeNames = dto.nodeNames
-            vm.nodes = dto.nodes
-            vm.stats = dto.stats
-            vm.initLayerState()
-            vm.expandedIndices = [0]
-            vm.rebuildTreeCaches()
-
-            if vm.shouldStream(dto) {
-                vm.uploadStreaming(dto: dto)
-            } else {
-                vm.uploadToRenderer(dto: dto)
-                vm.parseStage = ""
-                vm.parseProgress = 1
-                vm.state = .loaded(
-                    triangleCount: dto.triangleCount, meshCount: dto.meshes.count,
-                    nodeCount: dto.nodeNames.count)
-            }
+            vm.finishParse(doc: doc, tmpURL: ctx.tmpURL, generation: ctx.generation, fromCache: false)
         } else {
             let enriched = DocumentViewModel.enrichErrorMessage(errorCopy ?? "unknown error",
                                                                 fileExtension: vm.loadingFileExtension)

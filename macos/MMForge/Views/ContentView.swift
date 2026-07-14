@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 /// The main document window content: sidebar + viewport + inspector.
 struct ContentView: View {
     @Binding var document: MMForgeDocument
+    let fileURL: URL?
     @StateObject private var viewModel = DocumentViewModel()
     @State private var sidebarVisible = true
     @State private var inspectorVisible = true
@@ -141,9 +142,11 @@ struct ContentView: View {
             Text(viewModel.exportError ?? "")
         }
         .onAppear {
+            viewModel.parseSourceURL = fileURL
             viewModel.parseFile(data: document.fileData, fileExtension: document.fileExtension)
         }
         .onChange(of: document.fileData) { _, newData in
+            viewModel.parseSourceURL = fileURL
             viewModel.parseFile(data: newData, fileExtension: document.fileExtension)
         }
     }
@@ -155,6 +158,7 @@ struct ContentView: View {
                   let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
             DispatchQueue.main.async {
                 if let fileData = try? Data(contentsOf: url) {
+                    document.fileURL = url
                     document.fileData = fileData
                     let ext = url.pathExtension.lowercased()
                     if !ext.isEmpty {
