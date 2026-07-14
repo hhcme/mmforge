@@ -824,3 +824,63 @@ final class AsyncParseTests: XCTestCase {
         XCTAssertEqual(view.drawCommands.count, 0)
     }
 }
+
+// MARK: - Real STEP Fixture Acceptance
+final class RealStepFixtureAcceptanceTests: XCTestCase {
+    static var fixturePath: String { ProcessInfo.processInfo.environment["MMFORGE_REAL_STEP_FIXTURE"] ?? findRoot() + "/testfile/方盒子.step" }
+    private static func findRoot() -> String {
+        var u = URL(fileURLWithPath: #filePath)
+        while u.path != "/" { if FileManager.default.fileExists(atPath: u.appendingPathComponent("Cargo.toml").path) { return u.path }; u.deleteLastPathComponent() }
+        return FileManager.default.currentDirectoryPath
+    }
+    func test_97_nodes_96_meshes_async_streaming_visible() throws {
+        let p = Self.fixturePath
+        guard FileManager.default.fileExists(atPath: p) else { throw XCTSkip("no fixture at \(p)") }
+        let d = try Data(contentsOf: URL(fileURLWithPath: p))
+        XCTAssertGreaterThan(d.count, 1000)
+
+        // Build VM + renderer on main actor via Task.
+        var vm: DocumentViewModel!
+        var re: MetalRenderer!
+        let built = expectation(description: "built")
+        Task { @MainActor in
+            vm = DocumentViewModel(); vm._testForceStreaming = true; vm.parseSourceURL = URL(fileURLWithPath: p)
+            guard let dev = MTLCreateSystemDefaultDevice() else { return }
+            let mv = MTKView(frame: NSRect(x:0,y:0,width:100,height:100), device:dev)
+            re = MetalRenderer(mtkView:mv); vm.setRenderer(re!)
+            built.fulfill()
+        }
+        wait(for: [built], timeout: 10.0)
+        guard re != nil else { throw XCTSkip("no Renderer") }
+
+        let done = expectation(description:"done"); var fs: DocumentState = .empty
+        var cc: AnyCancellable?
+        Task { @MainActor in
+            cc = vm.$state.filter{ s in if case .loaded=s{true}else if case .error=s{true}else{false} }.first().sink{fs=$0;done.fulfill()}
+            vm.parseFile(data:d,fileExtension:"step")
+        }
+        wait(for:[done],timeout:900.0); cc?.cancel()
+        guard case .loaded(let tri,let mesh,let node)=fs else { if case .error(let m)=fs{XCTFail(m)}else{XCTFail("\(fs)")};return }
+        XCTAssertGreaterThanOrEqual(node,97,"nodes>=97 got \(node)")
+        XCTAssertGreaterThanOrEqual(mesh,96,"mesh>=96 got \(mesh)")
+        XCTAssertGreaterThan(tri,1000)
+
+        // Post-parse assertions on main actor.
+        let checkDone = expectation(description:"checked")
+        Task { @MainActor in
+            let g=re.getGPUMeshes(); XCTAssertGreaterThanOrEqual(g.count,96,"gpu>=96 got \(g.count)")
+            re.resetCamera();re.updateFrustumCulling(aspect:1280.0/720.0)
+#if DEBUG
+            let cc=re.frustumCulledIndices.count
+            if cc>=g.count{checkDone.fulfill();return}//fail-open
+            XCTAssertLessThan(cc,g.count); XCTAssertGreaterThan(re.lastFrameDrawCalls,0)
+#endif
+            re.renderMode = .solid
+            guard let(px,w,h)=re.renderOffscreen(size:CGSize(width:1280,height:720))else{XCTFail("nil");checkDone.fulfill();return}
+            var nb=0; px.withUnsafeBytes{pt in let u=pt.bindMemory(to:UInt32.self);for i in 0..<(w*h){let v=u[i];let r=Int((v>>16)&0xFF),g=Int((v>>8)&0xFF),b=Int(v&0xFF);if abs(r-0x24)>10||abs(g-0x1E)>10||abs(b-0x23)>10{nb+=1}}}
+            XCTAssertGreaterThan(nb,0,"non-bg>0 got \(nb)")
+            checkDone.fulfill()
+        }
+        wait(for: [checkDone], timeout: 30.0)
+    }
+}
