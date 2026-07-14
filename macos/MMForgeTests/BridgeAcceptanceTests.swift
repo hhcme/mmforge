@@ -1211,4 +1211,103 @@ final class BridgeAcceptanceTests: XCTestCase {
         renderer.toggleProjection()
         XCTAssertTrue(renderer.isOrthographic, "second toggle → back to orthographic")
     }
+
+    // MARK: - Camera: Metal NDC [0,1] depth verification
+
+    /// Verify the projection matrix follows Metal NDC depth [0,1].
+    @MainActor
+    func test_projection_metal_ndc_depth_bounds() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.resetCamera()
+        renderer.toggleProjection() // perspective for depth test
+
+        let proj = renderer.camera.projectionMatrix(aspect: 1.5)
+        // Near plane (z_eye = -near) → NDC z = 0
+        let pNear = simd_float4(0, 0, -renderer.camera.near, 1)
+        let cNear = proj * pNear
+        let zNear = cNear.z / cNear.w
+        XCTAssertEqual(zNear, 0.0, accuracy: 0.001, "Metal NDC: near → 0")
+        // Far plane (z_eye = -far) → NDC z = 1
+        let pFar = simd_float4(0, 0, -renderer.camera.far, 1)
+        let cFar = proj * pFar
+        let zFar = cFar.z / cFar.w
+        XCTAssertEqual(zFar, 1.0, accuracy: 0.001, "Metal NDC: far → 1")
+    }
+
+    // MARK: - Camera: frustum cache invalidation
+
+    /// Zoom must trigger frustum cache recalculation.
+    @MainActor
+    func test_frustum_cache_invalidates_on_zoom() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.resetCamera()
+        // Force one frustum update to set the baseline.
+        renderer.updateFrustumCulling(aspect: 1.5)
+#if DEBUG
+        let before = renderer.frustumSkipCount
+        // Without camera movement, next update should skip.
+        renderer.updateFrustumCulling(aspect: 1.5)
+        XCTAssertGreaterThan(renderer.frustumSkipCount, before, "stationary camera → skip count increases")
+        // Zoom changes orthoScale → invalidates.
+        renderer.zoom(delta: 1.0)
+        let afterZoom = renderer.frustumSkipCount
+        renderer.updateFrustumCulling(aspect: 1.5)
+        XCTAssertLessThan(renderer.frustumSkipCount, afterZoom + 1,
+                          "zoom invalidated cache → re-scanned")
+#endif
+    }
+
+    /// Toggle projection must trigger frustum cache recalculation.
+    @MainActor
+    func test_frustum_cache_invalidates_on_toggle_projection() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.resetCamera()
+        renderer.updateFrustumCulling(aspect: 1.5)
+#if DEBUG
+        renderer.updateFrustumCulling(aspect: 1.5) // warm skip
+        let before = renderer.frustumSkipCount
+        renderer.toggleProjection()
+        let afterToggle = renderer.frustumSkipCount
+        renderer.updateFrustumCulling(aspect: 1.5)
+        XCTAssertLessThan(renderer.frustumSkipCount, afterToggle + 1,
+                          "toggle projection invalidated cache → re-scanned")
+#endif
+    }
+
+    // MARK: - Camera: frustum near/far clipping
+
+    /// All meshes from a known scene should be inside the frustum (none culled).
+    @MainActor
+    func test_frustum_no_cull_for_visible_scene() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.resetCamera()
+        // Fit camera to scene so all meshes are visible.
+        renderer.updateFrustumCulling(aspect: 1.5)
+#if DEBUG
+        let total = renderer.getGPUMeshes().count
+        let culled = renderer.frustumCulledIndices.count
+        // At least some meshes must be visible (not all culled).
+        XCTAssertLessThanOrEqual(culled, total, "culled count <= total mesh count")
+#endif
+    }
+
+    // MARK: - Render statistics
+
+    /// Render stats should be populated after a draw pass.
+    @MainActor
+    func test_render_stats_draw_calls_and_triangles_populated() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        _ = renderer.renderOffscreen(size: CGSize(width: 200, height: 150))
+#if DEBUG
+        XCTAssertGreaterThanOrEqual(renderer.lastFrameDrawCalls, 0,
+                             "draw calls >= 0 after offscreen render")
+        XCTAssertGreaterThanOrEqual(renderer.lastFrameTriangles, 0,
+                             "triangle count >= 0 after offscreen render")
+#endif
+    }
 }

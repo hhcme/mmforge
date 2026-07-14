@@ -655,8 +655,11 @@ final class ProductizationTests: XCTestCase {
         // first mesh's vertex buffer (storageModeShared → CPU-readable).
         let meshes = renderer.getGPUMeshes()
         guard !meshes.isEmpty else { return }
-        let vb = meshes[0].vertexBuffer
-        let raw = vb.contents().bindMemory(to: Float.self, capacity: vb.length / 4)
+        // Shared buffer: use renderer's shared vertex buffer at mesh offset.
+        guard let vb = renderer.sharedVertexBufferForTesting else { return }
+        let mesh = meshes[0]
+        let raw = vb.contents().advanced(by: mesh.vertexOffset)
+            .bindMemory(to: Float.self, capacity: vb.length / 4)
 
         // Expected interleaved layout: [p0, p0, p0, n0, n0, n0,  p1, p1, p1, n1, n1, n1, ...]
         XCTAssertEqual(raw[0], 0, accuracy: 1e-6, "v0 pos.x")

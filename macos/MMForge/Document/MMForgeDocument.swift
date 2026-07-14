@@ -177,13 +177,13 @@ final class DocumentViewModel: ObservableObject {
 
     // MARK: - Structure tree acceleration
 
-    /// Pre-built children lookup: parentNodeIndex -> [childIndices].  Built once
-    /// after nodes are populated; O(1) lookup replaces O(n) scans in
-    /// hasChildren/childrenOf/collectDescendants.
+    /// Pre-built children lookup: parentNodeIndex -> [childIndices].
     fileprivate var _childrenMap: [Int: [Int]] = [:]
-    /// Pre-built node depth cache: nodeIndex -> tree depth.  Built once
-    /// after nodes are populated.
+    /// Pre-built node depth cache: nodeIndex -> tree depth.
     fileprivate var _nodeDepth: [Int: Int] = [:]
+    /// Pre-built ancestor chain cache: nodeIndex -> [ancestor indices] (root-first).
+    /// Eliminates O(depth) parent walks during search expansion and visibility checks.
+    fileprivate var _ancestors: [Int: [Int]] = [:]
     /// Published snapshot of visible indices.  Rebuilt only when nodes,
     /// expandedIndices, or searchText change.
     @Published var _cachedVisibleIndices: [Int] = []
@@ -1310,6 +1310,20 @@ extension DocumentViewModel {
         }
         _childrenMap = cmap
         _nodeDepth = depth
+        // Build ancestor chain cache: one BFS pass, O(n).
+        var ancestors: [Int: [Int]] = [:]
+        for root in nodes.indices where nodes[root].parentIndex < 0 {
+            ancestors[root] = []
+        }
+        head = 0
+        while head < queue.count {
+            let cur = queue[head]; head += 1
+            let parentChain = ancestors[cur] ?? []
+            for child in cmap[cur] ?? [] {
+                ancestors[child] = parentChain + [cur]
+            }
+        }
+        _ancestors = ancestors
         _lastNodeCount = nodes.count
         _descendantVisibilityGeneration &+= 1
         refreshVisibleIndices()
@@ -1340,10 +1354,8 @@ extension DocumentViewModel {
             var visible = Set<Int>()
             for i in nodes.indices where matchesSearch(i) {
                 visible.insert(i)
-                var p = nodes[i].parentIndex
-                while p >= 0 {
-                    visible.insert(p)
-                    p = nodes[p].parentIndex
+                if let chain = _ancestors[i] {
+                    visible.formUnion(chain)
                 }
             }
             _cachedVisibleIndices = nodes.indices.filter { visible.contains($0) }
@@ -1351,15 +1363,11 @@ extension DocumentViewModel {
     }
 
     /// Whether a node's children should be visible in the tree.
-    /// Uses cached depth: a node is visible (outside search mode) if its
-    /// ancestor chain is all expanded up to root.
+    /// Uses cached ancestor chain — O(ancestors) instead of O(depth) parent walk.
     func isNodeVisibleInTree(_ index: Int) -> Bool {
-        let node = nodes[index]
-        guard node.parentIndex >= 0 else { return true }
-        var cur = node.parentIndex
-        while cur >= 0 {
-            if !expandedIndices.contains(cur) { return false }
-            cur = nodes[cur].parentIndex
+        guard let chain = _ancestors[index] else { return nodes[index].parentIndex < 0 }
+        for a in chain {
+            if !expandedIndices.contains(a) { return false }
         }
         return true
     }

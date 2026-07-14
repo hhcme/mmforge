@@ -125,8 +125,10 @@ struct Uniforms {
 }
 
 struct GPUMesh {
-    let vertexBuffer: MTLBuffer
-    let indexBuffer: MTLBuffer
+    /// Offset (in bytes) into the shared vertex buffer.
+    let vertexOffset: Int
+    /// Offset (in bytes) into the shared index buffer.
+    let indexOffset: Int
     let indexCount: Int
     var visible: Bool = true
     let nodeIndex: Int
@@ -141,18 +143,21 @@ struct GPUMesh {
 struct FrustumPlanes {
     private let planes: [simd_float4] // left, right, bottom, top, near, far
 
-    /// Extract frustum planes from a view-projection matrix (OpenGL convention).
+    /// Extract frustum planes from a view-projection matrix.
+    ///
+    /// Metal NDC convention: near z=0, far z=1.
+    /// Gribb/Hartmann clip-space boundaries for Metal:
+    ///   left = row4+row1 (x+w=0),  right = row4-row1 (-x+w=0)
+    ///   bottom = row4+row2 (y+w=0), top = row4-row2 (-y+w=0)
+    ///   near = row2 (z=0),          far = row2-row3 (-z+w=0)
     init(from vp: simd_float4x4) {
-        // Column-major: m[col][row_component]
-        // Row R = (m[0][R], m[1][R], m[2][R], m[3][R])
         let m = vp
-        // Extract six planes using Gribb/Hartmann (OpenGL: near=row3+row2)
         let left   = simd_float4(m[0][3] + m[0][0], m[1][3] + m[1][0], m[2][3] + m[2][0], m[3][3] + m[3][0])
         let right  = simd_float4(m[0][3] - m[0][0], m[1][3] - m[1][0], m[2][3] - m[2][0], m[3][3] - m[3][0])
         let bottom = simd_float4(m[0][3] + m[0][1], m[1][3] + m[1][1], m[2][3] + m[2][1], m[3][3] + m[3][1])
         let top    = simd_float4(m[0][3] - m[0][1], m[1][3] - m[1][1], m[2][3] - m[2][1], m[3][3] - m[3][1])
-        let near   = simd_float4(m[0][3] + m[0][2], m[1][3] + m[1][2], m[2][3] + m[2][2], m[3][3] + m[3][2])
-        let far    = simd_float4(m[0][3] - m[0][2], m[1][3] - m[1][2], m[2][3] - m[2][2], m[3][3] - m[3][2])
+        let near   = simd_float4(m[0][2], m[1][2], m[2][2], m[3][2])                       // z=0
+        let far    = simd_float4(m[0][2] - m[0][3], m[1][2] - m[1][3], m[2][2] - m[2][3], m[3][2] - m[3][3]) // z=w
         // Normalize
         planes = [left, right, bottom, top, near, far].map { p in
             let len = sqrt(p.x * p.x + p.y * p.y + p.z * p.z)
@@ -227,19 +232,42 @@ struct OverlayUniforms {
     private var sceneBounds: (min: simd_float3, max: simd_float3) = (.zero, .zero)
     private(set) var camera = CameraState()
 
+    // ── Shared GPU buffers (batch allocation) ──────────────────────────
+    private static let initialBufferSize = 4 * 1024 * 1024   // 4 MB each
+    private var sharedVertexBuffer: MTLBuffer?
+    private var sharedIndexBuffer: MTLBuffer?
+    private var vertexBufferOffset: Int = 0
+    private var indexBufferOffset: Int = 0
+
+    // ── Render statistics (DEBUG-only) ─────────────────────────────────
+    #if DEBUG
+    /// Per-frame draw-call and triangle counters.
+    private(set) var lastFrameDrawCalls: Int = 0
+    private(set) var lastFrameTriangles: Int = 0
+    #endif
+
     var selectedNodeIndex: Int?
     var hiddenNodeIndices: Set<Int> = []
     /// Frame-local frustum cull mask (rebuilt each frame, never persists).
+#if DEBUG
+    private(set) var frustumSkipCount: Int = 0
+    /// Read-only access to frustum culled indices (DEBUG only, for testing).
+    private(set) var frustumCulledIndices: Set<Int> = []
+#else
     private var frustumCulledIndices: Set<Int> = []
+#endif
     /// Cached camera state for frustum skip when stationary.
     /// Values are quantized to prevent O(n) re-scans from trackpad micro-jitter.
+    /// Includes projection parameters (isOrthographic, orthoScale, near, far, fovY)
+    /// so zoom/projection-toggle always trigger frustum recalculation.
     private struct CamHash: Equatable {
         var aspect: Float; var yaw: Float; var pitch: Float
         var dist: Float; var tx: Float; var ty: Float; var tz: Float
+        var isOrtho: Bool; var orthoScale: Float; var near: Float; var far: Float
 
         init(aspect: Float, yaw: Float, pitch: Float, dist: Float,
-             tx: Float, ty: Float, tz: Float) {
-            // Quantize to ~0.5° angular, ~0.01 linear to absorb micro-movements.
+             tx: Float, ty: Float, tz: Float,
+             isOrtho: Bool, orthoScale: Float, near: Float, far: Float) {
             self.aspect = (aspect * 100).rounded() / 100
             self.yaw = (yaw * 2).rounded() / 2
             self.pitch = (pitch * 2).rounded() / 2
@@ -247,13 +275,15 @@ struct OverlayUniforms {
             self.tx = (tx * 100).rounded() / 100
             self.ty = (ty * 100).rounded() / 100
             self.tz = (tz * 100).rounded() / 100
+            self.isOrtho = isOrtho
+            self.orthoScale = (orthoScale * 100).rounded() / 100
+            self.near = (near * 1000).rounded() / 1000
+            self.far = (far * 10).rounded() / 10
         }
     }
-    private var lastFrustumCamHash = CamHash(aspect: -1, yaw: 0, pitch: 0, dist: 0, tx: -1, ty: -1, tz: -1)
-    /// Count of frustum-cull skips since last cache invalidation (DEBUG-only).
-#if DEBUG
-    private(set) var frustumSkipCount: Int = 0
-#endif
+    private var lastFrustumCamHash = CamHash(aspect: -1, yaw: 0, pitch: 0, dist: 0,
+                                              tx: -1, ty: -1, tz: -1,
+                                              isOrtho: false, orthoScale: 0, near: 0, far: 0)
     var renderMode: RenderMode = .solid
     var clipPlane: simd_float4 = simd_float4(0, 0, 0, -999999)
 
@@ -419,24 +449,52 @@ struct OverlayUniforms {
 
     // MARK: - Mesh upload
 
+    /// Grow a Metal buffer if needed, returning a (possibly new) buffer
+    /// with at least `requiredCapacity` bytes.
+    private func ensureBuffer(_ existing: MTLBuffer?, capacity: Int) -> MTLBuffer? {
+        if let buf = existing, buf.length >= capacity { return buf }
+        return device.makeBuffer(length: max(capacity, Self.initialBufferSize),
+                                  options: .storageModeShared)
+    }
+
+    /// Upload interleaved vertex data + index data into shared GPU buffers.
+    /// Each mesh is allocated a contiguous region; the shared buffers grow
+    /// automatically.  All semantics (selection, highlight, visibility,
+    /// color override, clipping, transparent sort, BVH picking) are
+    /// preserved through the GPUMesh record and draw-time uniforms.
     func upload(positions: UnsafePointer<Float>, normals: UnsafePointer<Float>,
                 vertexCount: Int, indices: UnsafePointer<UInt32>, indexCount: Int,
                 nodeIndex: Int, boundsMin: simd_float3, boundsMax: simd_float3,
                 materialColor: simd_float4 = simd_float4(0.7, 0.7, 0.72, 1.0)) {
-        let posBytes = vertexCount * 3 * MemoryLayout<Float>.size
-        let totalBytes = posBytes * 2
-        guard let vb = device.makeBuffer(length: totalBytes, options: .storageModeShared) else { return }
-        // Interleave positions and normals in 12-byte chunks per vertex,
-        // matching the vertexDescriptor stroke=24, offset(normal)=12 layout.
-        let stride = 6 * MemoryLayout<Float>.size  // 24 bytes per vertex
-        let chunk  = 3 * MemoryLayout<Float>.size  // 12 bytes per pos/normal triplet
-        let dst = vb.contents()
+        let stride = 6 * MemoryLayout<Float>.size   // 24 bytes per vertex
+        let chunk  = 3 * MemoryLayout<Float>.size   // 12 bytes per pos/normal triplet
+        let vbBytes = vertexCount * stride
+        let ibBytes = indexCount * MemoryLayout<UInt32>.size
+
+        // Grow shared buffers if needed.
+        let vbNeeded = vertexBufferOffset + vbBytes
+        let ibNeeded = indexBufferOffset + ibBytes
+        if sharedVertexBuffer == nil || sharedVertexBuffer!.length < vbNeeded {
+            sharedVertexBuffer = ensureBuffer(sharedVertexBuffer, capacity: vbNeeded)
+        }
+        if sharedIndexBuffer == nil || sharedIndexBuffer!.length < ibNeeded {
+            sharedIndexBuffer = ensureBuffer(sharedIndexBuffer, capacity: ibNeeded)
+        }
+        guard let vb = sharedVertexBuffer, let ib = sharedIndexBuffer else { return }
+
+        // Write interleaved vertex data at current offset.
+        let dst = vb.contents().advanced(by: vertexBufferOffset)
         for i in 0..<vertexCount {
             dst.advanced(by: i * stride).copyMemory(from: positions.advanced(by: i * 3), byteCount: chunk)
             dst.advanced(by: i * stride + chunk).copyMemory(from: normals.advanced(by: i * 3), byteCount: chunk)
         }
-        let ibSize = indexCount * MemoryLayout<UInt32>.size
-        guard let ib = device.makeBuffer(bytes: indices, length: ibSize, options: .storageModeShared) else { return }
+
+        // Write index data at current offset.
+        ib.contents().advanced(by: indexBufferOffset)
+          .copyMemory(from: indices, byteCount: ibBytes)
+
+        let voff = vertexBufferOffset; let ioff = indexBufferOffset
+        vertexBufferOffset += vbBytes; indexBufferOffset += ibBytes
 
         invalidateFrustumCache()
 
@@ -447,7 +505,7 @@ struct OverlayUniforms {
         )
 
         gpuMeshes.append(GPUMesh(
-            vertexBuffer: vb, indexBuffer: ib, indexCount: indexCount,
+            vertexOffset: voff, indexOffset: ioff, indexCount: indexCount,
             visible: !hiddenNodeIndices.contains(nodeIndex),
             nodeIndex: nodeIndex, boundsMin: boundsMin, boundsMax: boundsMax,
             materialColor: materialColor,
@@ -465,6 +523,8 @@ struct OverlayUniforms {
     func clearMeshes() {
         gpuMeshes.removeAll()
         _nodeToMeshIndices.removeAll()
+        vertexBufferOffset = 0
+        indexBufferOffset = 0
         selectedNodeIndex = nil
         hiddenNodeIndices = []
         invalidateFrustumCache()
@@ -472,11 +532,16 @@ struct OverlayUniforms {
 
     /// Read-only access to GPU mesh list (DEBUG-only, for testing vertex layout).
 #if DEBUG
+    /// Read-only access to GPU mesh list (DEBUG-only, for testing vertex layout).
     func getGPUMeshes() -> [GPUMesh] { gpuMeshes }
+    /// Shared vertex buffer for testing vertex data access.
+    var sharedVertexBufferForTesting: MTLBuffer? { sharedVertexBuffer }
 #endif
 
     private func invalidateFrustumCache() {
-        lastFrustumCamHash = CamHash(aspect: -1, yaw: 0, pitch: 0, dist: 0, tx: 0, ty: 0, tz: 0)
+        lastFrustumCamHash = CamHash(aspect: -1, yaw: 0, pitch: 0, dist: 0,
+                                      tx: 0, ty: 0, tz: 0,
+                                      isOrtho: false, orthoScale: 0, near: 0, far: 0)
 #if DEBUG
         frustumSkipCount = 0
 #endif
@@ -538,14 +603,20 @@ struct OverlayUniforms {
 
         let capColor = simd_float4(0.8, 0.3, 0.1, 0.6)
 
-        // Collect mesh data for visible meshes.
+        // Collect visible mesh data from shared buffers.
         var meshData: [(positions: UnsafePointer<Float>, indices: UnsafePointer<UInt32>,
                         vertexCount: Int, indexCount: Int)] = []
-        for mesh in gpuMeshes where mesh.visible {
-            let posPtr = UnsafePointer(mesh.vertexBuffer.contents().assumingMemoryBound(to: Float.self))
-            let idxPtr = UnsafePointer(mesh.indexBuffer.contents().assumingMemoryBound(to: UInt32.self))
-            let vertCount = mesh.vertexBuffer.length / (6 * MemoryLayout<Float>.size)
-            meshData.append((posPtr, idxPtr, vertCount, mesh.indexCount))
+        guard let svb = sharedVertexBuffer, let sib = sharedIndexBuffer else { return }
+        let vbBase = svb.contents().assumingMemoryBound(to: Float.self)
+        let ibBase = sib.contents().assumingMemoryBound(to: UInt32.self)
+        for i in 0..<gpuMeshes.count where gpuMeshes[i].visible {
+            let mesh = gpuMeshes[i]
+            let nextVbOff = (i + 1 < gpuMeshes.count) ? gpuMeshes[i + 1].vertexOffset : vertexBufferOffset
+            let vbBytes = nextVbOff - mesh.vertexOffset
+            let vertCount = vbBytes / (6 * MemoryLayout<Float>.size)
+            let posPtr = vbBase.advanced(by: mesh.vertexOffset / MemoryLayout<Float>.size)
+            let idxPtr = ibBase.advanced(by: mesh.indexOffset / MemoryLayout<UInt32>.size)
+            meshData.append((UnsafePointer(posPtr), UnsafePointer(idxPtr), vertCount, mesh.indexCount))
         }
 
         let verts = computeSectionFillVertices(
@@ -596,7 +667,9 @@ struct OverlayUniforms {
     func updateFrustumCulling(aspect: Float) {
         let cam = camera
         let h = CamHash(aspect: aspect, yaw: cam.yaw, pitch: cam.pitch,
-                        dist: cam.distance, tx: cam.target.x, ty: cam.target.y, tz: cam.target.z)
+                        dist: cam.distance, tx: cam.target.x, ty: cam.target.y, tz: cam.target.z,
+                        isOrtho: cam.isOrthographic, orthoScale: cam.orthoScale,
+                        near: cam.near, far: cam.far)
         if h == lastFrustumCamHash {
 #if DEBUG
             frustumSkipCount += 1
@@ -608,10 +681,14 @@ struct OverlayUniforms {
         let vp = cam.projectionMatrix(aspect: aspect) * cam.viewMatrix
         let frustum = FrustumPlanes(from: vp)
         var culled = Set<Int>()
-        culled.reserveCapacity(gpuMeshes.count / 4)
-        for (i, mesh) in gpuMeshes.enumerated() {
-            if !frustum.intersects(min: mesh.boundsMin, max: mesh.boundsMax) {
-                culled.insert(i)
+        // Skip culling for tiny scenes (≤4 meshes) — overhead not worth it
+        // and avoids false positives from near/far plane edge cases.
+        if gpuMeshes.count > 4 {
+            culled.reserveCapacity(gpuMeshes.count / 4)
+            for (i, mesh) in gpuMeshes.enumerated() {
+                if !frustum.intersects(min: mesh.boundsMin, max: mesh.boundsMax) {
+                    culled.insert(i)
+                }
             }
         }
         frustumCulledIndices = culled
@@ -641,13 +718,14 @@ struct OverlayUniforms {
     // MARK: - Picking
 
     /// Unproject a screen point to a world-space ray.
-    private func screenToRay(at viewSize: CGSize, point: CGPoint) -> Ray {
+    /// Uses Metal NDC convention: near clip plane = 0, far = 1.
+    func screenToRay(at viewSize: CGSize, point: CGPoint) -> Ray {
         let aspect = Float(viewSize.width / max(viewSize.height, 1))
         let invVP = (camera.projectionMatrix(aspect: aspect) * camera.viewMatrix).inverse
         let ndcX = Float(point.x / viewSize.width) * 2 - 1
         let ndcY = Float(1 - point.y / viewSize.height) * 2 - 1
-        let near4 = invVP * simd_float4(ndcX, ndcY, -1, 1)
-        let far4 = invVP * simd_float4(ndcX, ndcY, 1, 1)
+        let near4 = invVP * simd_float4(ndcX, ndcY, 0, 1)   // Metal: near=0
+        let far4  = invVP * simd_float4(ndcX, ndcY, 1, 1)   // Metal: far=1
         let origin = simd_float3(near4.x, near4.y, near4.z) / near4.w
         let dir = normalize(simd_float3(far4.x, far4.y, far4.z) / far4.w - origin)
         return Ray(origin: origin, dir: dir)
@@ -822,8 +900,13 @@ struct OverlayUniforms {
         encoder.setDepthStencilState(depthWrite ? depthStencilState : depthStencilStateNoWrite)
         encoder.setTriangleFillMode(fillMode)
 
+        guard let svb = sharedVertexBuffer, let sib = sharedIndexBuffer else { return }
         let indices = meshOrder ?? Array(gpuMeshes.indices)
         let defaultAlpha: Float = mode == 3 ? 0.6 : 1.0
+#if DEBUG
+        var frameCalls = 0
+        var frameTris = 0
+#endif
         for idx in indices {
             let mesh = gpuMeshes[idx]
             guard mesh.visible, !frustumCulledIndices.contains(idx) else { continue }
@@ -833,7 +916,6 @@ struct OverlayUniforms {
                 baseColor = simd_float4(override.x, override.y, override.z, defaultAlpha)
             } else {
                 baseColor = mesh.materialColor
-                // Apply transparent alpha only when in transparent mode and no override.
                 if mode == 3 { baseColor.w = defaultAlpha }
             }
             var uniforms = Uniforms(
@@ -842,14 +924,24 @@ struct OverlayUniforms {
                 highlightColor: isHighlighted ? highlightTint : simd_float4(0, 0, 0, 0),
                 clipPlane: clipPlane, renderMode: mode
             )
-            encoder.setVertexBuffer(mesh.vertexBuffer, offset: 0, index: 0)
+            // Shared vertex buffer at per-mesh offset.
+            encoder.setVertexBuffer(svb, offset: mesh.vertexOffset, index: 0)
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 2)
             encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 2)
+            // Shared index buffer at per-mesh offset.
             encoder.drawIndexedPrimitives(
                 type: .triangle, indexCount: mesh.indexCount,
-                indexType: .uint32, indexBuffer: mesh.indexBuffer, indexBufferOffset: 0
+                indexType: .uint32, indexBuffer: sib, indexBufferOffset: mesh.indexOffset
             )
+#if DEBUG
+            frameCalls += 1
+            frameTris += mesh.indexCount / 3
+#endif
         }
+#if DEBUG
+        lastFrameDrawCalls = frameCalls
+        lastFrameTriangles = frameTris
+#endif
     }
 
     // MARK: - Camera controls
@@ -874,6 +966,7 @@ struct OverlayUniforms {
             camera.distance *= exp(-delta * 0.1)
             camera.distance = max(0.01, min(10000, camera.distance))
         }
+        invalidateFrustumCache() // orthoScale or distance changed
     }
 
     func pan(dx: Float, dy: Float) {
@@ -895,6 +988,7 @@ struct OverlayUniforms {
 
     func toggleProjection() {
         camera.isOrthographic.toggle()
+        invalidateFrustumCache() // projection matrix changed
     }
 
     var isOrthographic: Bool {
