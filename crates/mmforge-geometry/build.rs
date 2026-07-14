@@ -271,9 +271,14 @@ fn try_pkg_config() -> Option<OcctInfo> {
 // Shim auto-detection
 // ---------------------------------------------------------------------------
 
-/// Search common paths for `libmmforge_occt_shim.a`, auto-building from
-/// source if the library is missing or any shim source file is newer.
-/// Returns the parent directory if found/built, `None` otherwise.
+/// Search common paths for `libmmforge_occt_shim.a`.
+/// Returns the parent directory if found, `None` otherwise.
+///
+/// NOTE: This function does NOT auto-build the shim.  Auto-build is the
+/// responsibility of `macos/scripts/build-occt-shim.sh` (called by the
+/// Xcode shell script and `package.sh`).  build.rs only DETECTS and
+/// VALIDATES the shim — it never writes to `shim/build/`.  This ensures
+/// `cargo test` is idempotent and does not modify tracked files.
 #[cfg(feature = "occt")]
 fn find_shim_library() -> Option<std::path::PathBuf> {
     let manifest_dir =
@@ -282,27 +287,9 @@ fn find_shim_library() -> Option<std::path::PathBuf> {
     let shim_build_dir = shim_src_dir.join("build");
     let shim_lib = shim_build_dir.join("libmmforge_occt_shim.a");
 
-    // Try auto-build if OCCT is configured.
-    if let Ok(inc) = std::env::var("OCCT_INCLUDE_DIR") {
-        if let Ok(lib) = std::env::var("OCCT_LIB_DIR") {
-            let needs_build =
-                !shim_lib.is_file() || shim_fingerprint_changed(&shim_src_dir, &shim_build_dir);
-            if needs_build {
-                println!(
-                    "cargo:warning=Building OCCT shim (fingerprint changed or library missing)..."
-                );
-                if let Err(e) = build_shim_with_cmake(&shim_src_dir, &shim_build_dir, &inc, &lib) {
-                    println!("cargo:warning=OCCT shim build failed: {e}");
-                    return None;
-                }
-                // Write fingerprint after successful build.
-                let _ = write_shim_fingerprint(&shim_src_dir, &shim_build_dir);
-                println!(
-                    "cargo:warning=OCCT shim built successfully at {}",
-                    shim_build_dir.display()
-                );
-            }
-        }
+    // Short-circuit: canonical path exists.
+    if shim_lib.is_file() {
+        return Some(shim_build_dir);
     }
 
     let candidates = vec![
@@ -325,18 +312,33 @@ fn find_shim_library() -> Option<std::path::PathBuf> {
 /// Check if the shim source fingerprint differs from the stored one.
 /// Uses content hash (sha256) — NOT mtime — for reliability across
 /// git checkout, CI cache, and network filesystems.
+///
+/// NOTE: This function is diagnostic-only.  build.rs does NOT auto-build
+/// the shim.  Callers should use build-occt-shim.sh for that.
 #[cfg(feature = "occt")]
+#[allow(dead_code)]
 fn shim_fingerprint_changed(src_dir: &std::path::Path, build_dir: &std::path::Path) -> bool {
     let current = compute_shim_fingerprint(src_dir);
     let fp_file = build_dir.join(".shim_fingerprint");
     match std::fs::read_to_string(&fp_file) {
         Ok(stored) => stored.trim() != current.trim(),
-        Err(_) => true, // no fingerprint file — build needed
+        Err(_) => true, // no fingerprint file
     }
 }
 
-/// Compute content fingerprint of shim sources (sha256 of concatenated content).
+/// Compute content fingerprint of shim sources.
+///
+/// CANONICAL FINGERPRINT SPEC (must match compute_fingerprint in build-occt-shim.sh):
+///   SHA256 of the concatenated raw bytes of (in order):
+///     1. mmforge_occt_shim.cpp
+///     2. mmforge_occt_shim.h
+///     3. CMakeLists.txt
+///   Produces a 64-char lowercase hex string.
+///
+/// Kept as the canonical Rust reference even though build.rs no longer
+/// auto-builds the shim (that is build-occt-shim.sh's responsibility).
 #[cfg(feature = "occt")]
+#[allow(dead_code)]
 fn compute_shim_fingerprint(src_dir: &std::path::Path) -> String {
     use sha2::Digest;
     use std::io::Read;
@@ -356,62 +358,6 @@ fn compute_shim_fingerprint(src_dir: &std::path::Path) -> String {
     }
     format!("{:x}", hasher.finalize())
 }
-
-/// Write fingerprint to .shim_fingerprint after a successful build.
-#[cfg(feature = "occt")]
-fn write_shim_fingerprint(
-    src_dir: &std::path::Path,
-    build_dir: &std::path::Path,
-) -> std::io::Result<()> {
-    let fp = compute_shim_fingerprint(src_dir);
-    std::fs::write(build_dir.join(".shim_fingerprint"), fp)
-}
-
-/// Run CMake configure + build for the OCCT shim.
-#[cfg(feature = "occt")]
-fn build_shim_with_cmake(
-    src_dir: &std::path::Path,
-    build_dir: &std::path::Path,
-    occt_inc: &str,
-    occt_lib: &str,
-) -> Result<(), String> {
-    // Create build directory.
-    std::fs::create_dir_all(build_dir)
-        .map_err(|e| format!("mkdir {}: {e}", build_dir.display()))?;
-
-    // CMake configure — pass OCCT include/lib dirs.
-    let configure = std::process::Command::new("cmake")
-        .arg(src_dir)
-        .arg(format!("-DOpenCASCADE_INCLUDE_DIR={occt_inc}"))
-        .arg(format!("-DOpenCASCADE_LIBRARY_DIR={occt_lib}"))
-        .arg("-DCMAKE_BUILD_TYPE=Release")
-        .current_dir(build_dir)
-        .output()
-        .map_err(|e| format!("cmake configure: {e}"))?;
-
-    if !configure.status.success() {
-        let stderr = String::from_utf8_lossy(&configure.stderr);
-        return Err(format!("cmake configure failed: {stderr}"));
-    }
-
-    // CMake build.
-    let build = std::process::Command::new("cmake")
-        .args(["--build", "."])
-        .current_dir(build_dir)
-        .output()
-        .map_err(|e| format!("cmake build: {e}"))?;
-
-    if !build.status.success() {
-        let stderr = String::from_utf8_lossy(&build.stderr);
-        return Err(format!("cmake build failed: {stderr}"));
-    }
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Shim archive validation
-// ---------------------------------------------------------------------------
 
 /// Symbols that **must** be exported by `libmmforge_occt_shim.a`.
 ///

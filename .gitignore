@@ -23,6 +23,12 @@ crates/mmforge-geometry/shim/build/CMakeFiles/
 crates/mmforge-geometry/shim/build/CMakeCache.txt
 crates/mmforge-geometry/shim/build/Makefile
 crates/mmforge-geometry/shim/build/cmake_install.cmake
+
+# OCCT shim build artifacts (generated — not tracked)
+crates/mmforge-geometry/shim/build/libmmforge_occt_shim.a
+crates/mmforge-geometry/shim/build/.shim_fingerprint
+crates/mmforge-geometry/shim/build/.cmake_configure.log
+crates/mmforge-geometry/shim/build/.cmake_build.log
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt

@@ -34,19 +34,22 @@ SHIM_BUILD_DIR="${MMFORGE_SHIM_DIR:-${SHIM_SRC_DIR}/build}"
 SHIM_LIB="${SHIM_BUILD_DIR}/libmmforge_occt_shim.a"
 
 # ── Content fingerprint ──────────────────────────────────────────────────
-# Hash all shim source files.  mtime alone is unreliable across git checkout,
-# CI cache, and network filesystems.  sha256 gives a deterministic fingerprint.
+#
+# CANONICAL FINGERPRINT SPEC (must match compute_shim_fingerprint in build.rs):
+#   SHA256 of the concatenated raw bytes of (in order):
+#     1. mmforge_occt_shim.cpp
+#     2. mmforge_occt_shim.h
+#     3. CMakeLists.txt
+#   Produces a 64-char lowercase hex string.
+#
+# mtime alone is unreliable across git checkout, CI cache, and network
+# filesystems.  This content-hash fingerprint is deterministic and
+# byte-identical to the Rust build.rs implementation.
 compute_fingerprint() {
-    local fp=""
-    for f in \
-        "${SHIM_SRC_DIR}/mmforge_occt_shim.cpp" \
+    cat "${SHIM_SRC_DIR}/mmforge_occt_shim.cpp" \
         "${SHIM_SRC_DIR}/mmforge_occt_shim.h" \
-        "${SHIM_SRC_DIR}/CMakeLists.txt"; do
-        if [ -f "$f" ]; then
-            fp="${fp}$(sha256sum "$f" 2>/dev/null || shasum -a 256 "$f" 2>/dev/null || echo "0000-${f}")"
-        fi
-    done
-    echo "$fp" | sha256sum 2>/dev/null | cut -d' ' -f1 || echo "$fp" | shasum -a 256 | cut -d' ' -f1
+        "${SHIM_SRC_DIR}/CMakeLists.txt" 2>/dev/null \
+        | shasum -a 256 | cut -d' ' -f1
 }
 
 # ── Main entry point ─────────────────────────────────────────────────────
@@ -120,12 +123,15 @@ ensure_occt_shim() {
 
 # ── Direct execution ─────────────────────────────────────────────────────
 # When run as `bash build-occt-shim.sh`, call ensure_occt_shim and exit
-# with its return code.  Also export MMFORGE_SHIM_DIR for callers.
+# with its return code.
+#
+# stdout: exactly ONE line — absolute path to libmmforge_occt_shim.a
+# stderr: all diagnostics, progress, errors
+# exit:   0=ready, 1=no-OCCT, 2=build-failed
+#
+# Callers compute MMFORGE_SHIM_DIR from the path themselves, e.g.:
+#   SHIM_PATH=$(bash build-occt-shim.sh) && export MMFORGE_SHIM_DIR="$(dirname "$SHIM_PATH")"
 if [[ "${BASH_SOURCE[0]:-}" == "$0" ]]; then
     ensure_occt_shim
-    rc=$?
-    if [ $rc -eq 0 ]; then
-        echo "MMFORGE_SHIM_DIR=$(dirname "$SHIM_LIB")"
-    fi
-    exit $rc
+    exit $?
 fi
