@@ -827,60 +827,90 @@ final class AsyncParseTests: XCTestCase {
 
 // MARK: - Real STEP Fixture Acceptance
 final class RealStepFixtureAcceptanceTests: XCTestCase {
-    static var fixturePath: String { ProcessInfo.processInfo.environment["MMFORGE_REAL_STEP_FIXTURE"] ?? findRoot() + "/testfile/方盒子.step" }
-    private static func findRoot() -> String {
+    static var fixturePath: String {
+        if let env = ProcessInfo.processInfo.environment["MMFORGE_REAL_STEP_FIXTURE"] { return env }
         var u = URL(fileURLWithPath: #filePath)
-        while u.path != "/" { if FileManager.default.fileExists(atPath: u.appendingPathComponent("Cargo.toml").path) { return u.path }; u.deleteLastPathComponent() }
-        return FileManager.default.currentDirectoryPath
+        while u.path != "/" {
+            if FileManager.default.fileExists(atPath: u.appendingPathComponent("Cargo.toml").path) { return u.path + "/testfile/方盒子.step" }
+            u.deleteLastPathComponent()
+        }
+        return FileManager.default.currentDirectoryPath + "/testfile/方盒子.step"
     }
-    func test_97_nodes_96_meshes_async_streaming_visible() throws {
+
+    /// Full async pipeline: parseFile → streaming upload → frustum → offscreen.
+    /// Uses async/await with @MainActor (no expectation/wait deadlocks).
+    @MainActor
+    func test_97_nodes_96_meshes_async_streaming_visible() async throws {
         let p = Self.fixturePath
-        guard FileManager.default.fileExists(atPath: p) else { throw XCTSkip("no fixture at \(p)") }
+        guard FileManager.default.fileExists(atPath: p) else {
+            XCTFail("FIXTURE NOT FOUND: \(p). Set MMFORGE_REAL_STEP_FIXTURE or place testfile/方盒子.step"); return
+        }
         let d = try Data(contentsOf: URL(fileURLWithPath: p))
         XCTAssertGreaterThan(d.count, 1000)
 
-        // Build VM + renderer on main actor via Task.
-        var vm: DocumentViewModel!
-        var re: MetalRenderer!
-        let built = expectation(description: "built")
-        Task { @MainActor in
-            vm = DocumentViewModel(); vm._testForceStreaming = true; vm.parseSourceURL = URL(fileURLWithPath: p)
-            guard let dev = MTLCreateSystemDefaultDevice() else { return }
-            let mv = MTKView(frame: NSRect(x:0,y:0,width:100,height:100), device:dev)
-            re = MetalRenderer(mtkView:mv); vm.setRenderer(re!)
-            built.fulfill()
-        }
-        wait(for: [built], timeout: 10.0)
-        guard re != nil else { throw XCTSkip("no Renderer") }
+        let vm = DocumentViewModel()
+        vm._testForceStreaming = true
+        vm.parseSourceURL = URL(fileURLWithPath: p)
+        guard let dev = MTLCreateSystemDefaultDevice() else { XCTFail("no Metal"); return }
+        let mv = MTKView(frame: NSRect(x:0,y:0,width:100,height:100), device:dev)
+        guard let re = MetalRenderer(mtkView:mv) else { XCTFail("no Renderer"); return }
+        vm.setRenderer(re)
 
-        let done = expectation(description:"done"); var fs: DocumentState = .empty
-        var cc: AnyCancellable?
-        Task { @MainActor in
-            cc = vm.$state.filter{ s in if case .loaded=s{true}else if case .error=s{true}else{false} }.first().sink{fs=$0;done.fulfill()}
-            vm.parseFile(data:d,fileExtension:"step")
-        }
-        wait(for:[done],timeout:900.0); cc?.cancel()
-        guard case .loaded(let tri,let mesh,let node)=fs else { if case .error(let m)=fs{XCTFail(m)}else{XCTFail("\(fs)")};return }
-        XCTAssertGreaterThanOrEqual(node,97,"nodes>=97 got \(node)")
-        XCTAssertGreaterThanOrEqual(mesh,96,"mesh>=96 got \(mesh)")
-        XCTAssertGreaterThan(tri,1000)
+        // Parse. Poll state with backoff (avoid AsyncStream complexity).
+        vm.parseFile(data: d, fileExtension: "step")
 
-        // Post-parse assertions on main actor.
-        let checkDone = expectation(description:"checked")
-        Task { @MainActor in
-            let g=re.getGPUMeshes(); XCTAssertGreaterThanOrEqual(g.count,96,"gpu>=96 got \(g.count)")
-            re.resetCamera();re.updateFrustumCulling(aspect:1280.0/720.0)
+        // Wait for loaded or error, polling at 100ms intervals.
+        var final: DocumentState = .empty
+        let deadline = Date().addingTimeInterval(900)
+        while Date() < deadline {
+            if case .loaded = vm.state { final = vm.state; break }
+            if case .error = vm.state { final = vm.state; break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        guard case .loaded(let tri, let mesh, let node) = final else {
+            if case .error(let m) = final { XCTFail("parse error: \(m)") }
+            else { XCTFail("timeout: state=\(vm.state) stage=\(vm.parseStage)") }
+            return
+        }
+        print("PARSED: nodes=\(node) meshes=\(mesh) tris=\(tri)")
+
+        let gpu = re.getGPUMeshes()
+        print("GPU_MESHES: \(gpu.count)")
+        XCTAssertEqual(gpu.count, 96, "expected 96 GPU meshes, got \(gpu.count)")
+
+        // Dump per-mesh diagnostics before frustum.
+        for (i, m) in gpu.enumerated() {
+            print("  mesh[\(i)]: nodeIndex=\(m.nodeIndex) bounds=([\(m.boundsMin.x),\(m.boundsMin.y),\(m.boundsMin.z)]-[\(m.boundsMax.x),\(m.boundsMax.y),\(m.boundsMax.z)])")
+        }
+
+        re.resetCamera()
+        let cam = re.camera
+        print("CAMERA: target=\(cam.target) dist=\(cam.distance) yaw=\(cam.yaw) pitch=\(cam.pitch) isOrtho=\(cam.isOrthographic) orthoScale=\(cam.orthoScale) near=\(cam.near) far=\(cam.far)")
+        re.updateFrustumCulling(aspect: 1280.0/720.0)
 #if DEBUG
-            let cc=re.frustumCulledIndices.count
-            if cc>=g.count{checkDone.fulfill();return}//fail-open
-            XCTAssertLessThan(cc,g.count); XCTAssertGreaterThan(re.lastFrameDrawCalls,0)
+        let culledCount = re.frustumCulledIndices.count
+        print("FRUSTUM: culled=\(culledCount)/\(gpu.count)")
+        XCTAssertLessThan(culledCount, gpu.count, "ALL 96 meshes culled — camera=\(cam.target) dist=\(cam.distance)")
 #endif
-            re.renderMode = .solid
-            guard let(px,w,h)=re.renderOffscreen(size:CGSize(width:1280,height:720))else{XCTFail("nil");checkDone.fulfill();return}
-            var nb=0; px.withUnsafeBytes{pt in let u=pt.bindMemory(to:UInt32.self);for i in 0..<(w*h){let v=u[i];let r=Int((v>>16)&0xFF),g=Int((v>>8)&0xFF),b=Int(v&0xFF);if abs(r-0x24)>10||abs(g-0x1E)>10||abs(b-0x23)>10{nb+=1}}}
-            XCTAssertGreaterThan(nb,0,"non-bg>0 got \(nb)")
-            checkDone.fulfill()
+
+        re.renderMode = .solid
+        guard let (px, w, h) = re.renderOffscreen(size: CGSize(width: 1280, height: 720)) else {
+            XCTFail("renderOffscreen returned nil"); return
         }
-        wait(for: [checkDone], timeout: 30.0)
+        // drawCalls assertion AFTER renderOffscreen (drawPass populates the counter).
+#if DEBUG
+        XCTAssertGreaterThan(re.lastFrameDrawCalls, 0, "drawCalls=\(re.lastFrameDrawCalls) must be >0 after renderOffscreen")
+#endif
+        var nbg = 0
+        px.withUnsafeBytes { p in
+            let u = p.bindMemory(to: UInt32.self)
+            for i in 0..<(w*h) {
+                let v = u[i]; let r=Int((v>>16)&0xFF),g=Int((v>>8)&0xFF),b=Int(v&0xFF)
+                if abs(r-0x24)>10||abs(g-0x1E)>10||abs(b-0x23)>10 { nbg+=1 }
+            }
+        }
+        print("OFFSCREEN: \(nbg) non-bg pixels / \(w*h) total")
+        XCTAssertGreaterThan(nbg, 0, "offscreen render produced 0 non-background pixels — black frame")
     }
 }

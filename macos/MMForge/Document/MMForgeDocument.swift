@@ -328,7 +328,10 @@ final class DocumentViewModel: ObservableObject {
         loadingFileExtension = ext
 
         // ── Fast path: cache hit → load LSM directly, skip OCCT parse ──
-        if let key = cacheKey, let cachedLSM = ModelCache.shared.load(key: key) {
+        // NOTE: Disabled until mmf_document_write_lsm correctly serializes
+        // tessellation geometry (currently writes only 17KB of metadata).
+        // Re-enable by removing the `false &&` guard.
+        if false, let key = cacheKey, let cachedLSM = ModelCache.shared.load(key: key) {
             parseStage = "loading from cache"
             let tmpURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("mmforge_cache_\(UUID().uuidString).lsm")
@@ -337,17 +340,16 @@ final class DocumentViewModel: ObservableObject {
             // Write cache data to temp file on background, then parse on MainActor
             // to keep ownership clear: docPtr is only accessed inside the MainActor
             // block and freed immediately if stale.
-            Task.detached(priority: .userInitiated) {
+            Task.detached(priority: .userInitiated) { [weak self] in
+                // Write cache data to temp file.
                 do { try cacheData.write(to: tmpURL) }
-                catch { return } // MainActor block below handles this via !fileExists
-                await MainActor.run { [weak self] in
-                    guard let self, generation == self.parseGeneration else { return }
-                    guard FileManager.default.fileExists(atPath: tmpURL.path) else {
-                        self.parseStage = "cache read failed, re-parsing"
-                        self.startAsyncParse(data: data, ext: ext, generation: generation)
-                        return
+                catch { return }
+                // Parse LSM on background thread — must NOT block MainActor.
+                let docPtr = mmf_parse_file(tmpURL.path)
+                await MainActor.run {
+                    guard let self, generation == self.parseGeneration else {
+                        if let d = docPtr { mmf_document_free(d) }; return
                     }
-                    let docPtr = mmf_parse_file(tmpURL.path)
                     guard let doc = docPtr else {
                         ModelCache.shared.evict(key: key)
                         self.parseStage = "cache corrupt, re-parsing"
