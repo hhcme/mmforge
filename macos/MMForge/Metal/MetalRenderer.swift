@@ -145,19 +145,20 @@ struct FrustumPlanes {
 
     /// Extract frustum planes from a view-projection matrix.
     ///
-    /// Metal NDC convention: near z=0, far z=1.
-    /// Gribb/Hartmann clip-space boundaries for Metal:
-    ///   left = row4+row1 (x+w=0),  right = row4-row1 (-x+w=0)
-    ///   bottom = row4+row2 (y+w=0), top = row4-row2 (-y+w=0)
-    ///   near = row2 (z=0),          far = row2-row3 (-z+w=0)
+    /// Metal NDC convention: near clip z=0, far clip z=1.
+    /// Gribb/Hartmann outward-pointing planes:
+    ///   left = row4+row1,  right = row4-row1
+    ///   bottom = row4+row2, top = row4-row2
+    ///   near = row2          (z>=0 inside → outward normal: row2)
+    ///   far  = row3-row2     (z<=w inside → outward normal: w-z = row3-row2)
     init(from vp: simd_float4x4) {
         let m = vp
         let left   = simd_float4(m[0][3] + m[0][0], m[1][3] + m[1][0], m[2][3] + m[2][0], m[3][3] + m[3][0])
         let right  = simd_float4(m[0][3] - m[0][0], m[1][3] - m[1][0], m[2][3] - m[2][0], m[3][3] - m[3][0])
         let bottom = simd_float4(m[0][3] + m[0][1], m[1][3] + m[1][1], m[2][3] + m[2][1], m[3][3] + m[3][1])
         let top    = simd_float4(m[0][3] - m[0][1], m[1][3] - m[1][1], m[2][3] - m[2][1], m[3][3] - m[3][1])
-        let near   = simd_float4(m[0][2], m[1][2], m[2][2], m[3][2])                       // z=0
-        let far    = simd_float4(m[0][2] - m[0][3], m[1][2] - m[1][3], m[2][2] - m[2][3], m[3][2] - m[3][3]) // z=w
+        let near   = simd_float4(m[0][2], m[1][2], m[2][2], m[3][2])
+        let far    = simd_float4(m[0][3] - m[0][2], m[1][3] - m[1][2], m[2][3] - m[2][2], m[3][3] - m[3][2])
         // Normalize
         planes = [left, right, bottom, top, near, far].map { p in
             let len = sqrt(p.x * p.x + p.y * p.y + p.z * p.z)
@@ -692,14 +693,10 @@ struct OverlayUniforms {
         let vp = cam.projectionMatrix(aspect: aspect) * cam.viewMatrix
         let frustum = FrustumPlanes(from: vp)
         var culled = Set<Int>()
-        // Skip culling for tiny scenes (≤4 meshes) — overhead not worth it
-        // and avoids false positives from near/far plane edge cases.
-        if gpuMeshes.count > 4 {
-            culled.reserveCapacity(gpuMeshes.count / 4)
-            for (i, mesh) in gpuMeshes.enumerated() {
-                if !frustum.intersects(min: mesh.boundsMin, max: mesh.boundsMax) {
-                    culled.insert(i)
-                }
+        culled.reserveCapacity(gpuMeshes.count / 4)
+        for (i, mesh) in gpuMeshes.enumerated() {
+            if !frustum.intersects(min: mesh.boundsMin, max: mesh.boundsMax) {
+                culled.insert(i)
             }
         }
         frustumCulledIndices = culled

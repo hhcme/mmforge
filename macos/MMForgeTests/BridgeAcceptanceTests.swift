@@ -1310,4 +1310,151 @@ final class BridgeAcceptanceTests: XCTestCase {
                              "triangle count >= 0 after offscreen render")
 #endif
     }
+
+    // MARK: - Frustum culling correctness (Metal NDC [0,1])
+
+    /// Scene with 5+ meshes: not all should be culled, offscreen must be non-empty.
+    @MainActor
+    func test_frustum_multi_mesh_not_all_culled_and_renders() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        // Upload 5 copies of a simple triangle at different positions.
+        // Use a visible triangle facing the camera.
+        let triVerts: [Float] = [
+            -0.5, -0.5, 0,  0,0,1,
+             0.5, -0.5, 0,  0,0,1,
+             0.0,  0.5, 0,  0,0,1
+        ]
+        let triIdx: [UInt32] = [0, 1, 2]
+        for i in 0..<5 {
+            let ox = Float(i) * 3
+            var pos: [Float] = []
+            var nrm: [Float] = []
+            for v in 0..<3 {
+                pos.append(triVerts[v*6] + ox)
+                pos.append(triVerts[v*6+1])
+                pos.append(triVerts[v*6+2])
+                nrm.append(triVerts[v*6+3])
+                nrm.append(triVerts[v*6+4])
+                nrm.append(triVerts[v*6+5])
+            }
+            pos.withUnsafeBufferPointer { p in
+                nrm.withUnsafeBufferPointer { n in
+                    renderer.upload(positions: p.baseAddress!, normals: n.baseAddress!,
+                                    vertexCount: 3, indices: triIdx, indexCount: 3,
+                                    nodeIndex: i,
+                                    boundsMin: simd_float3(ox-1, -1, -1),
+                                    boundsMax: simd_float3(ox+1, 1, 1))
+                }
+            }
+        }
+        renderer.setSceneBounds(min: simd_float3(-2,-2,-2), max: simd_float3(14,2,2))
+        renderer.resetCamera()
+        renderer.updateFrustumCulling(aspect: 1.5)
+
+        let total = renderer.getGPUMeshes().count
+        XCTAssertGreaterThanOrEqual(total, 5, "at least 5 meshes uploaded")
+#if DEBUG
+        let culled = renderer.frustumCulledIndices.count
+        XCTAssertLessThan(culled, total, "not all meshes culled: \(culled)/\(total)")
+#endif
+        renderer.renderMode = .solid
+        guard let (data, w, h) = renderer.renderOffscreen(size: CGSize(width: 200, height: 150)) else {
+            XCTFail("renderOffscreen returned nil"); return
+        }
+        let nonBg = countNonBackgroundPixels(data, width: w, height: h)
+        XCTAssertGreaterThan(nonBg, 5, "solid offscreen: >5 non-bg pixels (got \(nonBg))")
+#if DEBUG
+        XCTAssertGreaterThan(renderer.lastFrameDrawCalls, 0, "drawCalls > 0")
+#endif
+    }
+
+    /// Multi-mesh scene (6+): frustum culling leaves some visible, renders correctly.
+    @MainActor
+    func test_deep_assembly_frustum_and_render() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        // We already have 2 meshes from assembly.stp. Upload 4 more triangles.
+        let triVerts: [Float] = [-0.5,-0.5,0, 0,0,1, 0.5,-0.5,0, 0,0,1, 0,0.5,0, 0,0,1]
+        let triIdx: [UInt32] = [0,1,2]
+        for i in 0..<4 {
+            let ox = Float(i) * 3
+            var p: [Float] = []; var n: [Float] = []
+            for v in 0..<3 { p.append(triVerts[v*6]+ox); p.append(triVerts[v*6+1]); p.append(triVerts[v*6+2]); n.append(triVerts[v*6+3]); n.append(triVerts[v*6+4]); n.append(triVerts[v*6+5]) }
+            p.withUnsafeBufferPointer { pp in n.withUnsafeBufferPointer { nn in
+                renderer.upload(positions: pp.baseAddress!, normals: nn.baseAddress!, vertexCount: 3, indices: triIdx, indexCount: 3, nodeIndex: 100+i, boundsMin: simd_float3(ox-1,-1,-1), boundsMax: simd_float3(ox+1,1,1))
+            }}
+        }
+        renderer.setSceneBounds(min: simd_float3(-2,-2,-2), max: simd_float3(14,2,2))
+        renderer.resetCamera()
+        renderer.updateFrustumCulling(aspect: 1.5)
+        let total = renderer.getGPUMeshes().count
+        XCTAssertGreaterThanOrEqual(total, 6, "≥6 meshes total")
+#if DEBUG
+        let culled = renderer.frustumCulledIndices.count
+        XCTAssertLessThan(culled, total, "culled (\(culled)) < total (\(total))")
+        XCTAssertGreaterThan(renderer.lastFrameDrawCalls, 0, "drawCalls > 0 after update")
+#endif
+        renderer.renderMode = .solid
+        guard let (data, w, h) = renderer.renderOffscreen(size: CGSize(width: 200, height: 150)) else {
+            XCTFail("renderOffscreen nil"); return
+        }
+        XCTAssertGreaterThan(countNonBackgroundPixels(data, width: w, height: h), 5, "solid: >5 pixels")
+    }
+
+    /// Far plane: mesh beyond `camera.far` must be culled.
+    @MainActor
+    func test_far_plane_culls_distant_mesh() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.resetCamera()
+        renderer.toggleProjection() // perspective for meaningful far plane
+        // Place a mesh far beyond the far plane.
+        let farDist = renderer.camera.far + 100
+        let farPos: [Float] = [farDist, 0, 0, 0,1,0, 0,0,1, 0,1,0, 0,0,1, 0,0,0, 0,0,1]
+        let idx: [UInt32] = [0,1,2, 3,4,5]
+        let farMeshIdx = renderer.getGPUMeshes().count
+        renderer.upload(positions: farPos, normals: farPos, vertexCount: 6,
+                        indices: idx, indexCount: 6, nodeIndex: 999,
+                        boundsMin: simd_float3(farDist-1, -1, -1),
+                        boundsMax: simd_float3(farDist+1, 1, 1))
+        renderer.updateFrustumCulling(aspect: 1.5)
+#if DEBUG
+        XCTAssertTrue(renderer.frustumCulledIndices.contains(farMeshIdx),
+                      "mesh beyond far plane must be culled")
+#endif
+    }
+
+    /// All render modes (solid, wireframe, transparent) produce non-empty offscreen.
+    @MainActor
+    func test_all_render_modes_produce_pixels_with_frustum() throws {
+        let (_, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.resetCamera()
+        renderer.updateFrustumCulling(aspect: 1.5)
+        for mode: RenderMode in [.solid, .wireframe, .transparent] {
+            renderer.renderMode = mode
+            guard let (data, w, h) = renderer.renderOffscreen(size: CGSize(width: 200, height: 150)) else {
+                XCTFail("renderOffscreen nil for \(mode)"); continue
+            }
+            let px = countNonBackgroundPixels(data, width: w, height: h)
+            XCTAssertGreaterThan(px, 5, "mode \(mode): >5 non-bg pixels (got \(px))")
+        }
+    }
+
+    /// Node selection is visible in offscreen render after frustum culling.
+    @MainActor
+    func test_node_selection_visible_with_frustum_culling() throws {
+        let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
+        defer { mmf_document_free(doc) }
+        renderer.resetCamera()
+        renderer.updateFrustumCulling(aspect: 1.5)
+        renderer.renderMode = .solid
+        vm.selectNode(1) // select first leaf
+        guard let (data, w, h) = renderer.renderOffscreen(size: CGSize(width: 200, height: 150)) else {
+            XCTFail("renderOffscreen nil"); return
+        }
+        XCTAssertGreaterThan(countNonBackgroundPixels(data, width: w, height: h), 10,
+                             "selection render: >10 non-bg pixels")
+    }
 }
