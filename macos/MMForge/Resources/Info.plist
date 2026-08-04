@@ -27,8 +27,13 @@
             <string>3D Model File</string>
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
+            <!-- Default rank: launching `open MMForge.app <file>` must route
+                 the file to MMForge itself.  Alternate caused LaunchServices
+                 to hand the file to the system default handler (another CAD
+                 viewer) and spawn it.  Other apps remain available via
+                 "Open With". -->
             <key>LSHandlerRank</key>
-            <string>Alternate</string>
+            <string>Default</string>
             <key>LSItemContentTypes</key>
             <array>
                 <string>com.mmforge.step</string>

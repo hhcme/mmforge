@@ -14,7 +14,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr;
 
-use mmforge_core::model::{Geometry, ParseOutput};
+use mmforge_core::model::{Geometry, MeshGeometry, ParseOutput};
 use mmforge_geometry::tessellation::TessellationRegistry;
 use mmforge_render::Frustum;
 use mmforge_render::memory::MemoryBudget;
@@ -343,6 +343,19 @@ const VERSION_CSTR: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 #[unsafe(no_mangle)]
 pub extern "C" fn mmf_version() -> *const c_char {
     VERSION_CSTR.as_ptr() as *const c_char
+}
+
+/// Cache format/parser version — part of the disk cache key.
+///
+/// Bump this constant whenever the parse pipeline or the LSM cache
+/// serialization changes in a way that makes old cache entries stale:
+/// the macOS app embeds this value in every cache key, so all existing
+/// entries become misses and are re-parsed automatically.
+const CACHE_VERSION_CSTR: &str = concat!("cache-v", env!("CARGO_PKG_VERSION"), "\0");
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_cache_version() -> *const c_char {
+    CACHE_VERSION_CSTR.as_ptr() as *const c_char
 }
 
 // --- Mesh data ---
@@ -1679,8 +1692,90 @@ pub extern "C" fn mmf_frustum_aabb_visible(
 
 // ── LSM cache serialization ─────────────────────────────────────────────
 
-/// Serialize the document's LSM model to the given file path.
-/// Returns 0 on success, -1 on error.
+/// Build a copy of `doc.model` whose geometry entries carry the full
+/// tessellation mesh data from the render packet.
+///
+/// STEP/IGES documents keep only `BRepHandleRef` labels in `doc.model`;
+/// the actual triangles live in `doc.packet.meshes`.  Merging them here
+/// makes the serialized .lsm cache self-contained — re-parsing it yields
+/// a complete RenderPacket instead of an empty shell.
+fn model_with_mesh_data(doc: &MmfDocument) -> mmforge_core::model::LsmModel {
+    let mut model = doc.model.clone();
+    let mut by_gid: std::collections::HashMap<u32, &mmforge_render::packet::RenderMesh> =
+        std::collections::HashMap::with_capacity(doc.packet.meshes.len());
+    for m in &doc.packet.meshes {
+        by_gid.insert(m.geometry_id, m);
+    }
+    for g in &mut model.geometries {
+        if let Geometry::BRepHandleRef { id, .. } = g {
+            if let Some(m) = by_gid.get(&id.get()) {
+                *g = Geometry::Mesh(MeshGeometry {
+                    id: *id,
+                    positions: m.positions.clone(),
+                    normals: m.normals.clone(),
+                    uvs: m.uvs.clone(),
+                    indices: m.indices.clone(),
+                    bounds: m.bounds,
+                });
+            }
+        }
+    }
+    model
+}
+
+/// Opaque byte buffer returned to Swift (owned by Rust).
+#[repr(C)]
+pub struct MmfByteBuffer {
+    pub ptr: *mut u8,
+    pub len: usize,
+}
+
+/// Serialize the document (with full mesh data merged in) to an in-memory
+/// buffer.  Returns a buffer with `ptr == null` on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_document_lsm_bytes(doc: *const MmfDocument) -> MmfByteBuffer {
+    if doc.is_null() {
+        return MmfByteBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+    }
+    let doc = unsafe { &*doc };
+    let model = model_with_mesh_data(doc);
+    let mut buf: Vec<u8> = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut buf);
+    match mmforge_core::lsm::write_lsm(&model, &mut cursor) {
+        Ok(_) => {
+            let mut boxed = buf.into_boxed_slice();
+            let ptr = boxed.as_mut_ptr();
+            let len = boxed.len();
+            std::mem::forget(boxed); // ownership moves to the caller
+            MmfByteBuffer { ptr, len }
+        }
+        Err(_) => {
+            set_last_error("LSM serialization failed");
+            MmfByteBuffer {
+                ptr: ptr::null_mut(),
+                len: 0,
+            }
+        }
+    }
+}
+
+/// Free a buffer previously returned by `mmf_document_lsm_bytes`.
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_bytes_free(buf: MmfByteBuffer) {
+    if !buf.ptr.is_null() {
+        unsafe {
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                buf.ptr, buf.len,
+            )));
+        }
+    }
+}
+
+/// Serialize the document's LSM model (with mesh data merged) to the given
+/// file path.  Returns 0 on success, -1 on error.
 #[unsafe(no_mangle)]
 pub extern "C" fn mmf_document_write_lsm(doc: *mut MmfDocument, path: *const c_char) -> i32 {
     if doc.is_null() || path.is_null() {
@@ -1691,11 +1786,280 @@ pub extern "C" fn mmf_document_write_lsm(doc: *mut MmfDocument, path: *const c_c
     match std::fs::File::create(path.as_ref()) {
         Ok(f) => {
             let mut w = std::io::BufWriter::new(f);
-            match mmforge_core::lsm::write_lsm(&doc.model, &mut w) {
+            let model = model_with_mesh_data(doc);
+            match mmforge_core::lsm::write_lsm(&model, &mut w) {
                 Ok(_) => 0,
                 Err(_) => -1,
             }
         }
         Err(_) => -1,
+    }
+}
+
+// ── Interleaved vertex copy ──────────────────────────────────────────────
+
+/// Copy mesh `index`'s positions+normals interleaved (24 bytes per vertex)
+/// into `dst`.  Returns the number of vertices copied, or 0 when the mesh
+/// is invalid, `dst` is null, `capacity_bytes` is too small, or the mesh
+/// has no normals (caller falls back to the per-vertex Swift path).
+#[unsafe(no_mangle)]
+pub extern "C" fn mmf_mesh_copy_interleaved(
+    doc: *const MmfDocument,
+    index: u32,
+    dst: *mut u8,
+    capacity_bytes: usize,
+) -> u32 {
+    if doc.is_null() || dst.is_null() {
+        return 0;
+    }
+    let doc = unsafe { &*doc };
+    let Some(m) = doc.packet.meshes.get(index as usize) else {
+        return 0;
+    };
+    let vcount = m.positions.len();
+    if vcount == 0 || m.normals.len() < vcount {
+        return 0;
+    }
+    let need = vcount.saturating_mul(24);
+    if need > capacity_bytes {
+        return 0;
+    }
+    let out = unsafe { std::slice::from_raw_parts_mut(dst as *mut f32, vcount * 6) };
+    for (i, p) in m.positions.iter().enumerate() {
+        let n = &m.normals[i];
+        let base = i * 6;
+        out[base] = p[0];
+        out[base + 1] = p[1];
+        out[base + 2] = p[2];
+        out[base + 3] = n[0];
+        out[base + 4] = n[1];
+        out[base + 5] = n[2];
+    }
+    vcount as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mmforge_core::ids::GeometryId;
+    use mmforge_core::math::BoundingBox;
+    use mmforge_core::model::{LsmModel, ModelHeader, Node, SceneTree};
+    use mmforge_render::packet::{RenderMesh, RenderPacket};
+
+    /// Build a minimal MmfDocument whose model has a BRepHandleRef without
+    /// mesh data, while the packet carries the real triangles — the exact
+    /// STEP/IGES shape that must round-trip through the cache.
+    fn doc_with_brep_and_packet_mesh() -> MmfDocument {
+        let model = LsmModel {
+            header: ModelHeader {
+                source_format: "STEP".into(),
+                source_path: None,
+                parser_version: "test".into(),
+            },
+            scene: SceneTree {
+                nodes: vec![Node {
+                    id: mmforge_core::ids::NodeId(1),
+                    name: "Root".into(),
+                    parent: None,
+                    children: vec![],
+                    geometry: Some(GeometryId(7)),
+                    material: None,
+                    visible: true,
+                    local_transform: glam::Mat4::IDENTITY,
+                    bounds: BoundingBox {
+                        min: glam::Vec3::new(0.0, 0.0, 0.0),
+                        max: glam::Vec3::new(1.0, 1.0, 1.0),
+                    },
+                }],
+                root: mmforge_core::ids::NodeId(1),
+            },
+            geometries: vec![Geometry::BRepHandleRef {
+                id: GeometryId(7),
+                bounds: BoundingBox {
+                    min: glam::Vec3::new(0.0, 0.0, 0.0),
+                    max: glam::Vec3::new(1.0, 1.0, 1.0),
+                },
+                label: "part".into(),
+            }],
+            materials: vec![],
+            metadata: Default::default(),
+        };
+        let packet = RenderPacket {
+            meshes: vec![RenderMesh {
+                mesh_id: 0,
+                geometry_id: 7,
+                positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                normals: vec![[0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+                uvs: vec![],
+                indices: vec![0, 1, 2],
+                bounds: BoundingBox {
+                    min: glam::Vec3::new(0.0, 0.0, 0.0),
+                    max: glam::Vec3::new(1.0, 1.0, 1.0),
+                },
+            }],
+            ..Default::default()
+        };
+        MmfDocument {
+            packet,
+            model,
+            node_names: vec![],
+            geometry_labels: vec![],
+            mesh_base_colors: std::collections::HashMap::new(),
+            draw_list: mmforge_render::draw2d::DrawingDrawList {
+                layers: vec![],
+                bounds: mmforge_core::drawing::BBox2D::EMPTY,
+                flat_commands: vec![],
+            },
+            draw_text_cstrings: vec![],
+            draw_layer_cstrings: vec![],
+            draw_linetype_cstrings: vec![],
+            layer_line_type_cstrings: vec![],
+            spatial_index: None,
+            streaming_packet: None,
+        }
+    }
+
+    #[test]
+    fn lsm_bytes_merges_packet_mesh_into_brep_model() {
+        let doc = doc_with_brep_and_packet_mesh();
+        let model = model_with_mesh_data(&doc);
+        assert_eq!(model.geometries.len(), 1);
+        match &model.geometries[0] {
+            Geometry::Mesh(m) => {
+                assert_eq!(m.positions.len(), 3);
+                assert_eq!(m.positions[1], [1.0, 0.0, 0.0]);
+                assert_eq!(m.indices, vec![0, 1, 2]);
+            }
+            other => panic!("expected Mesh, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lsm_bytes_roundtrip_recovers_full_mesh_values() {
+        let doc = doc_with_brep_and_packet_mesh();
+        let buf = mmf_document_lsm_bytes(&doc as *const MmfDocument);
+        assert!(!buf.ptr.is_null() && buf.len > 0);
+
+        // Re-parse the serialized bytes as a standalone LSM document.
+        let bytes = unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) };
+        let model =
+            mmforge_core::lsm::read_lsm(&mut std::io::Cursor::new(bytes)).expect("lsm must parse");
+        mmf_bytes_free(buf);
+
+        assert_eq!(model.geometries.len(), 1);
+        match &model.geometries[0] {
+            Geometry::Mesh(m) => {
+                assert_eq!(
+                    m.positions,
+                    vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+                );
+                assert_eq!(
+                    m.normals,
+                    vec![[0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]]
+                );
+                assert_eq!(m.indices, vec![0, 1, 2]);
+            }
+            other => panic!("expected Mesh, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interleaved_copy_writes_24_bytes_per_vertex() {
+        let doc = doc_with_brep_and_packet_mesh();
+        let mut out = [0u8; 72];
+        let copied =
+            mmf_mesh_copy_interleaved(&doc as *const MmfDocument, 0, out.as_mut_ptr(), out.len());
+        assert_eq!(copied, 3);
+        let floats = unsafe { std::slice::from_raw_parts(out.as_ptr() as *const f32, 18) };
+        assert_eq!(floats[0], 0.0);
+        assert_eq!(floats[5], 1.0); // first vertex normal z
+        assert_eq!(floats[6], 1.0); // second vertex x
+    }
+
+    #[test]
+    fn cache_version_is_nonempty_string() {
+        let v = unsafe { std::ffi::CStr::from_ptr(mmf_cache_version()) }
+            .to_str()
+            .unwrap();
+        assert!(!v.is_empty(), "cache version must not be empty");
+        assert!(
+            v.starts_with("cache-v"),
+            "unexpected cache version tag: {v}"
+        );
+    }
+
+    #[test]
+    fn interleaved_copy_rejects_small_buffer() {
+        let doc = doc_with_brep_and_packet_mesh();
+        let mut out = [0u8; 24]; // capacity for 1 vertex, mesh has 3
+        let copied =
+            mmf_mesh_copy_interleaved(&doc as *const MmfDocument, 0, out.as_mut_ptr(), out.len());
+        assert_eq!(copied, 0);
+    }
+
+    /// End-to-end: parse a real file → serialize cache bytes → re-parse the
+    /// LSM → vertex/index data must be numerically identical.
+    #[test]
+    fn e2e_cache_roundtrip_preserves_mesh_data() {
+        // 1. Parse the STL box fixture.
+        let src = tempfile::Builder::new().suffix(".stl").tempfile().unwrap();
+        std::fs::write(src.path(), include_bytes!("../../../testdata/stl/box.stl")).unwrap();
+        let src_c = std::ffi::CString::new(src.path().to_str().unwrap()).unwrap();
+        let doc = mmf_parse_file(src_c.as_ptr());
+        assert!(!doc.is_null(), "STL parse must succeed");
+        let original_mesh_count = unsafe { mmf_mesh_count(doc) };
+        let original_vc = unsafe { mmf_mesh_vertex_count(doc, 0) };
+        let original_ic = unsafe { mmf_mesh_index_count(doc, 0) };
+        assert!(original_mesh_count >= 1 && original_vc > 0 && original_ic > 0);
+
+        // 2. Serialize cache bytes.
+        let buf = mmf_document_lsm_bytes(doc);
+        assert!(
+            !buf.ptr.is_null() && buf.len > 0,
+            "lsm_bytes must produce data"
+        );
+
+        // 3. Write bytes to a .lsm temp file and re-parse.
+        let cache_path = tempfile::Builder::new().suffix(".lsm").tempfile().unwrap();
+        let cache_bytes = unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) };
+        std::fs::write(cache_path.path(), cache_bytes).unwrap();
+        mmf_bytes_free(buf);
+        mmf_document_free(doc);
+
+        let cache_c = std::ffi::CString::new(cache_path.path().to_str().unwrap()).unwrap();
+        let doc2 = mmf_parse_file(cache_c.as_ptr());
+        assert!(!doc2.is_null(), "cached LSM must re-parse");
+        assert_eq!(
+            unsafe { mmf_mesh_count(doc2) },
+            original_mesh_count,
+            "mesh count must survive the cache round-trip"
+        );
+        assert_eq!(
+            unsafe { mmf_mesh_vertex_count(doc2, 0) },
+            original_vc,
+            "vertex count must survive the cache round-trip"
+        );
+        assert_eq!(
+            unsafe { mmf_mesh_index_count(doc2, 0) },
+            original_ic,
+            "index count must survive the cache round-trip"
+        );
+
+        // 4. Numeric comparison of the first mesh's positions.
+        let vc = original_vc as usize;
+        let pos_ptr = unsafe { mmf_mesh_positions(doc2, 0) };
+        assert!(!pos_ptr.is_null());
+        let cached_positions = unsafe { std::slice::from_raw_parts(pos_ptr, vc * 3) };
+        // Re-parse the source to compare against.
+        let doc_again = mmf_parse_file(src_c.as_ptr());
+        let orig_positions =
+            unsafe { std::slice::from_raw_parts(mmf_mesh_positions(doc_again, 0), vc * 3) };
+        assert_eq!(
+            cached_positions, orig_positions,
+            "positions must match exactly"
+        );
+
+        mmf_document_free(doc2);
+        mmf_document_free(doc_again);
     }
 }

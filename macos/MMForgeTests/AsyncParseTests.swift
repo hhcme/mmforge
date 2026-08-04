@@ -914,3 +914,76 @@ final class RealStepFixtureAcceptanceTests: XCTestCase {
         XCTAssertGreaterThan(nbg, 0, "offscreen render produced 0 non-background pixels — black frame")
     }
 }
+
+// MARK: - Re-parse regression (load → force re-parse → must still render)
+
+extension RealStepFixtureAcceptanceTests {
+    /// Reproduces the user-visible bug: after a successful load, Re-parse
+    /// Document (force) must re-render the model, not leave a blank viewport.
+    @MainActor
+    func test_reparse_after_load_still_renders() async throws {
+        let p = Self.fixturePath
+        guard FileManager.default.fileExists(atPath: p) else {
+            XCTFail("FIXTURE NOT FOUND: \(p)"); return
+        }
+        let d = try Data(contentsOf: URL(fileURLWithPath: p))
+
+        let vm = DocumentViewModel()
+        vm.parseSourceURL = URL(fileURLWithPath: p)
+        guard let dev = MTLCreateSystemDefaultDevice() else { XCTFail("no Metal"); return }
+        let mv = MTKView(frame: NSRect(x: 0, y: 0, width: 100, height: 100), device: dev)
+        guard let re = MetalRenderer(mtkView: mv) else { XCTFail("no Renderer"); return }
+        vm.setRenderer(re)
+
+        func waitLoaded(_ label: String) async -> Bool {
+            let deadline = Date().addingTimeInterval(900)
+            while Date() < deadline {
+                if case .loaded = vm.state { return true }
+                if case .error(let m) = vm.state { XCTFail("\(label) error: \(m)"); return false }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            XCTFail("\(label) timeout: stage=\(vm.parseStage)")
+            return false
+        }
+
+        // 1. Initial load (full parse or cache hit).
+        vm.parseFile(data: d, fileExtension: "step")
+        guard await waitLoaded("initial") else { return }
+        let gpu1 = re.getGPUMeshes().count
+        print("INITIAL: gpuMeshes=\(gpu1)")
+
+        // 2. Force re-parse (Re-parse Document path).
+        vm.reparseDocument()
+        guard await waitLoaded("reparse") else { return }
+        _ = await re.waitForPendingBVHBuilds()
+        let gpu2 = re.getGPUMeshes().count
+        print("REPARSE: gpuMeshes=\(gpu2)")
+        XCTAssertEqual(gpu2, gpu1, "re-parse must upload the same mesh count")
+
+        // 3. Simulate the view being recreated after re-parse: the loading
+        // state tears the Metal view down and makeNSView re-attaches the
+        // document's renderer (setRenderer with the SAME instance).  The
+        // uploaded meshes must survive this.
+        vm.setRenderer(re)
+        _ = await re.waitForPendingBVHBuilds()
+        XCTAssertEqual(re.getGPUMeshes().count, gpu1,
+                       "re-attached renderer must keep the uploaded meshes")
+
+        // 4. Render must produce non-background pixels.
+        re.resetCamera()
+        re.renderMode = .solid
+        guard let (px, w, h) = re.renderOffscreen(size: CGSize(width: 1280, height: 720)) else {
+            XCTFail("renderOffscreen returned nil"); return
+        }
+        var nbg = 0
+        px.withUnsafeBytes { p in
+            let u = p.bindMemory(to: UInt32.self)
+            for i in 0..<(w * h) {
+                let v = u[i]; let r = Int((v >> 16) & 0xFF), g = Int((v >> 8) & 0xFF), b = Int(v & 0xFF)
+                if abs(r - 0x24) > 10 || abs(g - 0x1E) > 10 || abs(b - 0x23) > 10 { nbg += 1 }
+            }
+        }
+        print("REPARSE OFFSCREEN: \(nbg) non-bg pixels / \(w*h) total")
+        XCTAssertGreaterThan(nbg, 0, "re-parse render produced 0 non-background pixels — blank viewport")
+    }
+}

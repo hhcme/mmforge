@@ -145,6 +145,11 @@ struct ContentView: View {
             viewModel.parseSourceURL = fileURL
             viewModel.parseFile(data: document.fileData, fileExtension: document.fileExtension)
         }
+        // File > "Re-parse Document" (⌘⇧R) — posted from the menu bar,
+        // which can't reach the document view model via @FocusedObject.
+        .onReceive(NotificationCenter.default.publisher(for: .mmforgeRequestReParse)) { _ in
+            viewModel.reparseDocument()
+        }
         .onChange(of: document.fileData) { _, newData in
             viewModel.parseSourceURL = fileURL
             viewModel.parseFile(data: newData, fileExtension: document.fileExtension)

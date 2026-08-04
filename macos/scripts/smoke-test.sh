@@ -1,13 +1,20 @@
 #!/bin/bash
 # smoke-test.sh — Launch-smoke a built MMForge.app against test fixtures.
 #
+# SILENT TEST MODE: the app is launched in the background (`open -g`,
+# never brought to the foreground) and every launched instance is killed
+# after the check, so running this script never steals focus or leaves
+# windows behind.  An MMForge instance that was ALREADY running before the
+# script started is left untouched (it belongs to the user).
+#
 # Usage:
 #   bash macos/scripts/smoke-test.sh [path/to/MMForge.app]
 #
-# For each supported format, runs `open -a <app> <file>` and checks
-# whether the app process is still alive after a brief wait.  This is a
+# For each supported format, launches the app against the file and checks
+# whether the process is still alive after a brief wait.  This is a
 # LAUNCH SMOKE test only — it does NOT verify rendering, export, or
-# interactive features.  Use manual GUI inspection for those.
+# interactive features.  Use the offscreen acceptance tests
+# (`xcodebuild test`) for render verification.
 #
 # Exit code 0 = all launchable, 1 = at least one failure.
 
@@ -52,7 +59,15 @@ check() {
         return 0
     fi
 
-    if open -a "$APP" "$file" 2>/dev/null; then
+    # Was an MMForge already running before us?  If so, don't kill it.
+    # (`|| true`: pgrep exits 1 when nothing matches, which under
+    # `set -euo pipefail` would abort the script.)
+    local already_running
+    already_running=$(pgrep -f "$APP/Contents/MacOS/MMForge" | wc -l | tr -d ' ' || true)
+
+    # `-g` launches without activating the app — no focus steal, no
+    # window raise.  Windows may briefly appear but never take focus.
+    if open -g -a "$APP" "$file" 2>/dev/null; then
         sleep 1
         if pgrep -f "$APP/Contents/MacOS/MMForge" > /dev/null 2>&1; then
             echo "PASS" >&2
@@ -61,6 +76,10 @@ check() {
             # App may have closed after loading — still a successful launch.
             echo "PASS (app exited after load)" >&2
             PASS=$((PASS + 1))
+        fi
+        # Silent cleanup: kill instances we launched, keep the user's.
+        if [ "$already_running" = "0" ]; then
+            pkill -f "$APP/Contents/MacOS/MMForge" 2>/dev/null || true
         fi
     else
         echo "FAIL" >&2

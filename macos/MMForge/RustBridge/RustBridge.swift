@@ -62,6 +62,13 @@ final class RustBridge {
         return String(cString: ptr)
     }
 
+    /// Cache format/parser version — embedded in disk cache keys so that
+    /// bumping it in the Rust core automatically invalidates all entries.
+    func cacheVersion() -> String {
+        guard let ptr = mmf_cache_version() else { return "no-cache-version" }
+        return String(cString: ptr)
+    }
+
     /// Parse a file (auto-detect format: STEP, STL, glTF/GLB) and return render-ready data.
     func parseFile(at path: String) throws -> (OpaquePointer, RenderPacketDTO) {
         guard let doc = mmf_parse_file(path) else {
@@ -506,6 +513,7 @@ extension RustBridge {
             _ = mmf_chunk_mesh_base_color(docPtr, chunkIndex, mi, &rgba)
 
             renderer.upload(
+                doc: docPtr, meshIndex: Int(mi),
                 positions: pos, normals: nor, vertexCount: vc,
                 indices: idx, indexCount: ic,
                 nodeIndex: nodeIdx,
@@ -530,6 +538,22 @@ extension RustBridge {
     /// Returns true on success.
     func writeLSM(doc: OpaquePointer, to path: String) -> Bool {
         mmf_document_write_lsm(UnsafeMutableRawPointer(doc), path) == 0
+    }
+
+    /// Serialize the document (with full tessellation mesh data merged in)
+    /// to an in-memory `Data`.  Returns nil on error.
+    ///
+    /// The serialization itself happens synchronously (safe: the document
+    /// pointer is only accessed inside this call); callers should hand the
+    /// returned `Data` to a background task for the actual disk I/O.
+    func lsmBytes(doc: OpaquePointer) -> Data? {
+        let buf = mmf_document_lsm_bytes(doc)
+        guard let ptr = buf.ptr, buf.len > 0 else { return nil }
+        let buffer = buf
+        return Data(bytesNoCopy: UnsafeMutableRawPointer(ptr), count: buf.len,
+                    deallocator: .custom { _, _ in
+                        mmf_bytes_free(buffer)
+                    })
     }
 }
 

@@ -150,6 +150,11 @@ final class DocumentViewModel: ObservableObject {
     @Published var loadingFileExtension: String = ""
     /// Source URL of the file being parsed (for cache key computation).
     var parseSourceURL: URL?
+    /// Last parsed file data — retained so "Re-parse Document" can force a
+    /// full re-parse without re-reading the file.  Data is COW, so holding
+    /// it here shares storage with the document, not a copy.
+    fileprivate var lastFileData: Data?
+    fileprivate var lastFileExtension: String = "step"
     /// Cache key for the current parse (nil if cache not applicable).
     fileprivate var currentCacheKey: String?
 
@@ -162,6 +167,14 @@ final class DocumentViewModel: ObservableObject {
 
     fileprivate(set) var rustDoc: OpaquePointer?
     fileprivate var renderer: MetalRenderer?
+
+    /// The renderer bound to this document, if any.
+    ///
+    /// The view layer reuses this instance when its Metal view is
+    /// recreated (the loading state tears the view down during re-parse);
+    /// uploaded mesh data lives in the renderer, not the view, so the
+    /// model survives view churn.
+    var boundRenderer: MetalRenderer? { renderer }
     /// Active background parse job (for cancellation).
     fileprivate var currentJob: OpaquePointer?
     /// Active cancellation token.
@@ -310,28 +323,40 @@ final class DocumentViewModel: ObservableObject {
         if let url = _parseTmpURL { try? FileManager.default.removeItem(at: url); _parseTmpURL = nil }
     }
 
-    func parseFile(data: Data, fileExtension: String = "step") {
+    func parseFile(data: Data, fileExtension: String = "step", force: Bool = false) {
         parseGeneration += 1
         let generation = parseGeneration
         freeCurrentDocument()
 
         guard !data.isEmpty else { state = .empty; return }
 
+        // Remember the source data so "Re-parse Document" can re-run the
+        // full pipeline without re-reading the file from disk.
+        lastFileData = data
+        lastFileExtension = fileExtension
+
         state = .loading
         parseStage = "detecting format"
         parseProgress = 0
 
-        // Compute cache key from the now-wired source URL.
-        currentCacheKey = parseSourceURL.flatMap { ModelCache.shared.cacheKey(for: $0) }
+        // Compute cache key from the now-wired source URL.  The parser
+        // version comes from the Rust core (mmf_cache_version) so that
+        // bumping it invalidates every cached entry automatically.
+        currentCacheKey = parseSourceURL.flatMap {
+            ModelCache.shared.cacheKey(for: $0, parserVersion: RustBridge.shared.cacheVersion())
+        }
         let cacheKey = currentCacheKey
         let ext = fileExtension.isEmpty ? "step" : fileExtension
         loadingFileExtension = ext
 
         // ── Fast path: cache hit → load LSM directly, skip OCCT parse ──
-        // NOTE: Disabled until mmf_document_write_lsm correctly serializes
-        // tessellation geometry (currently writes only 17KB of metadata).
-        // Re-enable by removing the `false &&` guard.
-        if false, let key = cacheKey, let cachedLSM = ModelCache.shared.load(key: key) {
+        // Serialization merges full tessellation mesh data into the LSM
+        // (mmf_document_lsm_bytes), so the cached document re-parses into
+        // a complete RenderPacket.  Verified by bridge e2e test
+        // `e2e_cache_roundtrip_preserves_mesh_data`.
+        // `force` (Re-parse Document) bypasses the read; the fresh result
+        // overwrites the entry on write.
+        if !force, let key = cacheKey, let cachedLSM = ModelCache.shared.load(key: key) {
             parseStage = "loading from cache"
             let tmpURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("mmforge_cache_\(UUID().uuidString).lsm")
@@ -343,7 +368,15 @@ final class DocumentViewModel: ObservableObject {
             Task.detached(priority: .userInitiated) { [weak self] in
                 // Write cache data to temp file.
                 do { try cacheData.write(to: tmpURL) }
-                catch { return }
+                catch {
+                    // Temp write failed — fall back to a full re-parse
+                    // instead of leaving the loading state stuck.
+                    await MainActor.run {
+                        guard let self, generation == self.parseGeneration else { return }
+                        self.startAsyncParse(data: data, ext: ext, generation: generation)
+                    }
+                    return
+                }
                 // Parse LSM on background thread — must NOT block MainActor.
                 let docPtr = mmf_parse_file(tmpURL.path)
                 await MainActor.run {
@@ -371,10 +404,22 @@ final class DocumentViewModel: ObservableObject {
         let tmpURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("mmforge_\(UUID().uuidString).\(ext)")
         _parseTmpURL = tmpURL
-        do { try data.write(to: tmpURL) }
-        catch { state = .error("Failed to write temp file: \(error.localizedDescription)"); return }
 
-        let path = tmpURL.path
+        // Write the temp file on a background thread — large files
+        // (e.g. 224 MB STEP) take ~1s on the main thread otherwise.
+        // The open job is created back on MainActor once the write
+        // completes, guarded by the generation counter.
+        Task.detached(priority: .userInitiated) { [weak self] in
+            try? data.write(to: tmpURL)
+            await MainActor.run {
+                guard let self, generation == self.parseGeneration else { return }
+                self.startOpenJob(path: tmpURL.path, tmpURL: tmpURL, generation: generation)
+            }
+        }
+    }
+
+    /// Create the background parse job (MainActor only).
+    private func startOpenJob(path: String, tmpURL: URL, generation: UInt64) {
         let cancelToken: UnsafeMutableRawPointer? = mmf_cancel_token_new()
         currentCancelToken = cancelToken
         let ctx = ParseCallbackContext(viewModel: self, generation: generation, tmpURL: tmpURL)
@@ -389,13 +434,11 @@ final class DocumentViewModel: ObservableObject {
         rustDoc = doc
         // Serialize LSM NOW while doc is guaranteed alive, then pass Data
         // (not raw pointer) to background for I/O — no use-after-free window.
-        if let key = currentCacheKey {
+        // Skip on cache hits: the entry was written when the model was first
+        // parsed, rewriting it here would duplicate the work.
+        if !fromCache, let key = currentCacheKey {
             let cacheKey = key
-            let outURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("mmforge_cache_write_\(UUID().uuidString).lsm")
-            let ok = RustBridge.shared.writeLSM(doc: doc, to: outURL.path)
-            let cachedData = ok ? (try? Data(contentsOf: outURL)) : nil
-            try? FileManager.default.removeItem(at: outURL)
+            let cachedData = RustBridge.shared.lsmBytes(doc: doc)
             if let data = cachedData {
                 Task.detached(priority: .background) {
                     ModelCache.shared.store(key: cacheKey, data: data)
@@ -530,10 +573,11 @@ extension DocumentViewModel {
         }
 
         // Upload each mesh, using mesh.geometryId to find the owning node.
-        for mesh in dto.meshes {
+        for (meshIdx, mesh) in dto.meshes.enumerated() {
             let nodeIdx = geomIdToNodeIdx[mesh.geometryId] ?? -1
             let node = nodeIdx >= 0 && nodeIdx < dto.nodes.count ? dto.nodes[nodeIdx] : nil
             renderer.upload(
+                doc: rustDoc, meshIndex: meshIdx,
                 positions: mesh.positions,
                 normals: mesh.normals,
                 vertexCount: mesh.vertexCount,
@@ -731,6 +775,14 @@ extension DocumentViewModel {
         state = .empty
         parseStage = ""
         parseProgress = 0
+    }
+
+    /// Force a full re-parse of the current document, bypassing the disk
+    /// cache.  The fresh result overwrites the cached entry (same key),
+    /// so this is how stale caches get refreshed after parser changes.
+    func reparseDocument() {
+        guard let data = lastFileData, !data.isEmpty else { return }
+        parseFile(data: data, fileExtension: lastFileExtension, force: true)
     }
 
     // MARK: - Camera / View

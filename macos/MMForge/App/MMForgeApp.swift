@@ -16,6 +16,8 @@ struct MMForgeApp: App {
             // Clear Recent Documents sits in the File menu area.
             CommandGroup(after: .saveItem) {
                 Divider()
+                ReParseCommandView()
+                Divider()
                 Button("Clear Recent Documents") {
                     NSDocumentController.shared.clearRecentDocuments(nil)
                     RecentDocumentStore.shared.clear()
@@ -44,7 +46,6 @@ struct MMForgeApp: App {
 /// Uses @FocusedObject to access the current document's view model.
 struct SelectionCommandsView: View {
     @FocusedObject private var viewModel: DocumentViewModel?
-
     var body: some View {
         Group {
             Button("Select Root") {
@@ -93,6 +94,29 @@ struct SelectionCommandsView: View {
             .disabled(viewModel?.nodeColorOverrides.isEmpty ?? true)
         }
     }
+}
+
+/// "Re-parse Document" — forces a full re-parse, bypassing the disk cache.
+/// The fresh result overwrites the cached entry, refreshing stale caches
+/// after parser changes.
+///
+/// Uses NotificationCenter instead of @FocusedObject: menu bar command
+/// views can't reliably resolve the focused document, which would leave
+/// the button permanently disabled.
+struct ReParseCommandView: View {
+    var body: some View {
+        Button("Re-parse Document") {
+            NotificationCenter.default.post(name: .mmforgeRequestReParse, object: nil)
+        }
+        .keyboardShortcut("r", modifiers: [.command, .shift])
+        .help("Force a full re-parse, bypassing the disk cache")
+    }
+}
+
+extension Notification.Name {
+    /// Posted by the File > "Re-parse Document" menu item; the focused
+    /// window's ContentView observes it and re-parses its document.
+    static let mmforgeRequestReParse = Notification.Name("mmforge.requestReParse")
 }
 
 /// Export menu commands.

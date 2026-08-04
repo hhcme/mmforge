@@ -33,6 +33,7 @@
 		A10025 /* OffscreenCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10029 /* OffscreenCoordinator.swift */; };
 		A10026 /* RecentDocumentStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10030 /* RecentDocumentStoreTests.swift */; };
 		A10027 /* OffscreenRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10031 /* OffscreenRenderTests.swift */; };
+		A10028 /* PerformancePathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10032 /* PerformancePathTests.swift */; };
 		035115407A454809A9951D15 /* BridgeAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BFCBDDB2C7D4543AD26A6C6 /* BridgeAcceptanceTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -76,6 +77,7 @@
 		B10029 /* OffscreenCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OffscreenCoordinator.swift; sourceTree = "<group>"; };
 		B10030 /* RecentDocumentStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentDocumentStoreTests.swift; sourceTree = "<group>"; };
 		B10031 /* OffscreenRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OffscreenRenderTests.swift; sourceTree = "<group>"; };
+		B10032 /* PerformancePathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformancePathTests.swift; sourceTree = "<group>"; };
 		C10001 /* MMForge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MMForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C10002 /* MMForgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MMForgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2BFCBDDB2C7D4543AD26A6C6 /* BridgeAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeAcceptanceTests.swift; sourceTree = "<group>"; };
@@ -206,6 +208,7 @@
 					2BFCBDDB2C7D4543AD26A6C6 /* BridgeAcceptanceTests.swift */,
 					B10030 /* RecentDocumentStoreTests.swift */,
 					B10031 /* OffscreenRenderTests.swift */,
+					B10032 /* PerformancePathTests.swift */,
 				);
 			path = MMForgeTests;
 			sourceTree = "<group>";
@@ -332,6 +335,7 @@
 				035115407A454809A9951D15 /* BridgeAcceptanceTests.swift in Sources */,
 				A10026 /* RecentDocumentStoreTests.swift in Sources */,
 				A10027 /* OffscreenRenderTests.swift in Sources */,
+				A10028 /* PerformancePathTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

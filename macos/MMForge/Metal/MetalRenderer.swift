@@ -136,7 +136,11 @@ struct GPUMesh {
     let boundsMax: simd_float3
     let materialColor: simd_float4
     /// BVH for CPU-side ray–triangle picking.
-    let bvh: MeshBVH
+    ///
+    /// Built on a background task after upload so the main thread never
+    /// blocks on it; `nodes` is empty until the build completes, and
+    /// picking skips meshes whose BVH is not ready yet.
+    var bvh: MeshBVH
 }
 
 /// Frustum plane extraction + AABB intersection, matching Rust Frustum.
@@ -230,6 +234,13 @@ struct OverlayUniforms {
     /// cleared in clearMeshes().  Enables O(1) visibility toggle instead of
     /// O(n) linear scan.
     private var _nodeToMeshIndices: [Int: [Int]] = [:]
+    /// Bumped in clearMeshes().  Background BVH build tasks capture the
+    /// generation at upload time and only attach their result if it still
+    /// matches — prevents attaching stale geometry to a replaced document.
+    private(set) var meshGeneration: UInt64 = 0
+    /// Number of BVH builds still in flight (main-thread only: incremented
+    /// in upload, decremented when the result attaches back on MainActor).
+    private(set) var pendingBVHBuildCount: Int = 0
     private var sceneBounds: (min: simd_float3, max: simd_float3) = (.zero, .zero)
     private(set) var camera = CameraState()
 
@@ -469,12 +480,30 @@ struct OverlayUniforms {
         return newBuf
     }
 
+    /// Convenience overload without a Rust document — uses the per-vertex
+    /// copy fallback (no interleaved fast path) and still builds the BVH
+    /// on a background task.
+    func upload(positions: UnsafePointer<Float>, normals: UnsafePointer<Float>,
+                vertexCount: Int, indices: UnsafePointer<UInt32>, indexCount: Int,
+                nodeIndex: Int, boundsMin: simd_float3, boundsMax: simd_float3,
+                materialColor: simd_float4 = simd_float4(0.7, 0.7, 0.72, 1.0)) {
+        upload(doc: nil, meshIndex: 0, positions: positions, normals: normals,
+               vertexCount: vertexCount, indices: indices, indexCount: indexCount,
+               nodeIndex: nodeIndex, boundsMin: boundsMin, boundsMax: boundsMax,
+               materialColor: materialColor)
+    }
+
     /// Upload interleaved vertex data + index data into shared GPU buffers.
     /// Each mesh is allocated a contiguous region; the shared buffers grow
     /// automatically.  All semantics (selection, highlight, visibility,
     /// color override, clipping, transparent sort, BVH picking) are
     /// preserved through the GPUMesh record and draw-time uniforms.
-    func upload(positions: UnsafePointer<Float>, normals: UnsafePointer<Float>,
+    ///
+    /// `doc`/`meshIndex` enable the Rust-side interleaved copy fast path
+    /// (one FFI call instead of a per-vertex Swift loop).  Pass nil doc to
+    /// fall back to the per-vertex loop.
+    func upload(doc: OpaquePointer?, meshIndex: Int,
+                positions: UnsafePointer<Float>, normals: UnsafePointer<Float>,
                 vertexCount: Int, indices: UnsafePointer<UInt32>, indexCount: Int,
                 nodeIndex: Int, boundsMin: simd_float3, boundsMax: simd_float3,
                 materialColor: simd_float4 = simd_float4(0.7, 0.7, 0.72, 1.0)) {
@@ -494,11 +523,22 @@ struct OverlayUniforms {
         }
         guard let vb = sharedVertexBuffer, let ib = sharedIndexBuffer else { return }
 
-        // Write interleaved vertex data at current offset.
+        // Write interleaved vertex data at current offset — fast path: let
+        // Rust interleave positions+normals straight into the GPU buffer.
         let dst = vb.contents().advanced(by: vertexBufferOffset)
-        for i in 0..<vertexCount {
-            dst.advanced(by: i * stride).copyMemory(from: positions.advanced(by: i * 3), byteCount: chunk)
-            dst.advanced(by: i * stride + chunk).copyMemory(from: normals.advanced(by: i * 3), byteCount: chunk)
+        let copied: Int
+        if let doc {
+            copied = Int(mmf_mesh_copy_interleaved(
+                doc, UInt32(meshIndex), dst, vbBytes))
+        } else {
+            copied = 0
+        }
+        if copied == 0 {
+            // Fallback: per-vertex interleave loop.
+            for i in 0..<vertexCount {
+                dst.advanced(by: i * stride).copyMemory(from: positions.advanced(by: i * 3), byteCount: chunk)
+                dst.advanced(by: i * stride + chunk).copyMemory(from: normals.advanced(by: i * 3), byteCount: chunk)
+            }
         }
 
         // Write index data at current offset.
@@ -510,20 +550,41 @@ struct OverlayUniforms {
 
         invalidateFrustumCache()
 
-        // Build BVH directly from the input pointers — no intermediate Swift Array copy.
-        let bvh = buildMeshBVH2(
-            positions: positions, vertexCount: vertexCount,
-            indices: indices, indexCount: indexCount
-        )
-
+        // BVH is built on a background task — copying the input data to
+        // Swift arrays here (~10-20 ms for 1M vertices) keeps the pointers
+        // valid, then the O(n log² n) build happens off the main thread.
+        // Picking skips meshes whose BVH is not ready yet.
         gpuMeshes.append(GPUMesh(
             vertexOffset: voff, indexOffset: ioff, indexCount: indexCount,
             visible: !hiddenNodeIndices.contains(nodeIndex),
             nodeIndex: nodeIndex, boundsMin: boundsMin, boundsMax: boundsMax,
             materialColor: materialColor,
-            bvh: bvh
+            bvh: MeshBVH(nodes: [], sortedTriIndices: [],
+                         positions: [], indices: [])
         ))
         _nodeToMeshIndices[nodeIndex, default: []].append(gpuMeshes.count - 1)
+
+        let meshRecordIndex = gpuMeshes.count - 1
+        let gen = meshGeneration
+        let posCopy = Array(UnsafeBufferPointer(start: positions, count: vertexCount * 3))
+        let idxCopy = Array(UnsafeBufferPointer(start: indices, count: indexCount))
+        pendingBVHBuildCount += 1
+
+        Task.detached(priority: .utility) {
+            let bvh = buildMeshBVH2(
+                positions: posCopy, vertexCount: vertexCount,
+                indices: idxCopy, indexCount: indexCount
+            )
+            await MainActor.run {
+                // Only attach if this renderer still owns the same mesh
+                // generation (clearMeshes/freeCurrentDocument bumped it).
+                if self.meshGeneration == gen,
+                   meshRecordIndex < self.gpuMeshes.count {
+                    self.gpuMeshes[meshRecordIndex].bvh = bvh
+                }
+                self.pendingBVHBuildCount -= 1
+            }
+        }
     }
 
     func setSceneBounds(min: simd_float3, max: simd_float3) {
@@ -539,7 +600,21 @@ struct OverlayUniforms {
         indexBufferOffset = 0
         selectedNodeIndex = nil
         hiddenNodeIndices = []
+        // Bump generation so in-flight BVH builds from a previous document
+        // never attach their results to this (possibly different) mesh list.
+        meshGeneration &+= 1
         invalidateFrustumCache()
+    }
+
+    /// Wait (asynchronously) until all background BVH builds have attached.
+    /// Test-only helper; returns false on timeout.
+    func waitForPendingBVHBuilds(timeoutSeconds: Double = 30) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while pendingBVHBuildCount > 0 {
+            if Date() > deadline { return false }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return true
     }
 
     /// Read-only access to GPU mesh list (DEBUG-only, for testing vertex layout).
@@ -772,6 +847,10 @@ struct OverlayUniforms {
             guard rayAABB(ray: ray, bmin: mesh.boundsMin, bmax: mesh.boundsMax,
                           tMin: clipMin, tMax: bestT) else { continue }
 
+            // BVH may still be building on a background task — skip until
+            // ready (empty node list) instead of picking up stale data.
+            guard !mesh.bvh.nodes.isEmpty else { continue }
+
             // BVH triangle hit.
             if let hit = mesh.bvh.intersect(ray: ray, tMin: clipMin, tMax: bestT) {
                 bestT = hit.t
@@ -793,6 +872,10 @@ struct OverlayUniforms {
         for mesh in gpuMeshes where mesh.visible {
             guard rayAABB(ray: ray, bmin: mesh.boundsMin, bmax: mesh.boundsMax,
                           tMin: clipMin, tMax: bestT) else { continue }
+
+            // BVH may still be building on a background task — skip until
+            // ready (empty node list) instead of picking up stale data.
+            guard !mesh.bvh.nodes.isEmpty else { continue }
 
             if let hit = mesh.bvh.intersect(ray: ray, tMin: clipMin, tMax: bestT) {
                 bestT = hit.t
@@ -961,9 +1044,18 @@ struct OverlayUniforms {
     /// (camera orbits down, pitch decreases).  This is the inverse of
     /// "orbiting around" — it makes the user feel like they are grabbing
     /// and moving the model directly.
+    ///
+    /// Free rotation: yaw and pitch are unbounded (spherical-coordinate
+    /// poles are not clamped), so the orbit can continue in any direction
+    /// without dead-ends — the view simply goes over the pole.  Both
+    /// angles are normalized to (-π, π] so long sessions don't accumulate
+    /// float error in sin/cos; the eye position is continuous under this
+    /// normalization.
     func rotate(dx: Float, dy: Float) {
         camera.yaw -= dx * 0.005
-        camera.pitch = max(-Float.pi/2 * 0.99, min(Float.pi/2 * 0.99, camera.pitch - dy * 0.005))
+        camera.pitch -= dy * 0.005
+        camera.yaw = camera.yaw.remainder(dividingBy: 2 * Float.pi)
+        camera.pitch = camera.pitch.remainder(dividingBy: 2 * Float.pi)
     }
 
     func zoom(delta: Float) {

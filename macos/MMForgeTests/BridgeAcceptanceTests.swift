@@ -719,9 +719,13 @@ final class BridgeAcceptanceTests: XCTestCase {
     }
 
     @MainActor
-    func test_headless_renderer_picking_deterministic_hit_and_hide() throws {
+    func test_headless_renderer_picking_deterministic_hit_and_hide() async throws {
         let (vm, renderer, _, doc) = try makeAssemblyWithHeadlessRenderer()
         defer { mmf_document_free(doc) }
+
+        // BVH is built on background tasks after upload — wait for it so
+        // the grid scan below sees fully-built pick data.
+        _ = await renderer.waitForPendingBVHBuilds()
 
         // Scan a grid over the viewport to find a real hit
         let viewSize = CGSize(width: 200, height: 200)
@@ -1456,5 +1460,76 @@ final class BridgeAcceptanceTests: XCTestCase {
         }
         XCTAssertGreaterThan(countNonBackgroundPixels(data, width: w, height: h), 10,
                              "selection render: >10 non-bg pixels")
+    }
+}
+
+// MARK: - Free orbit rotation (no pole dead-end)
+
+extension BridgeAcceptanceTests {
+    /// A private renderer so orbit tests never share camera state with
+    /// other tests (the shared headlessRenderer is reused across tests).
+    @MainActor
+    private func makeOrbitRenderer() throws -> MetalRenderer {
+        guard let dev = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("no Metal device")
+        }
+        let mv = MTKView(frame: NSRect(x: 0, y: 0, width: 100, height: 100), device: dev)
+        guard let renderer = MetalRenderer(mtkView: mv) else {
+            throw XCTSkip("MetalRenderer unavailable")
+        }
+        renderer.resetCamera()  // deterministic start: yaw=0, pitch=π/9
+        return renderer
+    }
+
+    /// Rotation must never dead-end: pitch crosses the poles and keeps
+    /// moving (the old clamp at ±89.1° blocked the drag).
+    @MainActor
+    func test_orbit_rotates_freely_without_dead_end() throws {
+        let renderer = try makeOrbitRenderer()
+
+        // Drag up past the top pole: pitch must exceed +90° (default pitch
+        // is π/9; dy=-400 adds +2.0 rad).
+        let yaw0 = renderer.camera.yaw
+        renderer.rotate(dx: 0, dy: -400)
+        XCTAssertGreaterThan(renderer.camera.pitch, Float.pi / 2,
+                             "pitch must cross the top pole, got \(renderer.camera.pitch)")
+        XCTAssertEqual(renderer.camera.yaw, yaw0, accuracy: 0.001,
+                       "pure vertical drag must not change yaw")
+
+        // Drag down past the bottom pole.
+        renderer.rotate(dx: 0, dy: 800)
+        XCTAssertLessThan(renderer.camera.pitch, -Float.pi / 2,
+                          "pitch must cross the bottom pole, got \(renderer.camera.pitch)")
+
+        // Long mixed rotation: angles stay bounded, camera stays finite.
+        for _ in 0..<200 {
+            renderer.rotate(dx: 3, dy: -1.5)
+        }
+        XCTAssertLessThanOrEqual(abs(renderer.camera.yaw), Float.pi + 0.001,
+                                 "yaw must stay normalized")
+        XCTAssertLessThanOrEqual(abs(renderer.camera.pitch), Float.pi + 0.001,
+                                 "pitch must stay normalized")
+        let eye = renderer.camera.eye
+        XCTAssertTrue(eye.x.isFinite && eye.y.isFinite && eye.z.isFinite,
+                      "eye must stay finite after long rotation")
+    }
+
+    /// Reaching the pole and continuing must move the camera continuously
+    /// (no jump), i.e. the orbit keeps working in the same drag direction.
+    @MainActor
+    func test_orbit_continuous_across_pole() throws {
+        let renderer = try makeOrbitRenderer()
+
+        // March pitch up in small steps across the top pole; each step must
+        // keep moving (no two consecutive identical pitches).
+        var previousPitch = renderer.camera.pitch
+        var moved = 0
+        for _ in 0..<500 {
+            renderer.rotate(dx: 0, dy: -1)
+            if renderer.camera.pitch != previousPitch { moved += 1 }
+            previousPitch = renderer.camera.pitch
+        }
+        XCTAssertGreaterThan(moved, 400,
+                             "orbit must keep moving across the pole (moved \(moved)/500)")
     }
 }

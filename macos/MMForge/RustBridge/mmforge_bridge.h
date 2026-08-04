@@ -23,6 +23,13 @@ const char* mmf_last_error(void);
 /** Get the library version string. */
 const char* mmf_version(void);
 
+/**
+ * Get the cache format/parser version string.
+ * Embedded in every disk cache key — bumping it in the Rust core
+ * invalidates all previously written cache entries automatically.
+ */
+const char* mmf_cache_version(void);
+
 /* ------------------------------------------------------------------ */
 /*  Document lifecycle                                                 */
 /* ------------------------------------------------------------------ */
@@ -451,6 +458,33 @@ int mmf_frustum_aabb_visible(const float* bounds_min, const float* bounds_max,
  * The resulting file can be re-parsed via mmf_parse_file() for fast cache loads.
  */
 int mmf_document_write_lsm(void* doc, const char* path);
+
+/**
+ * Opaque byte buffer owned by Rust.  Freed with mmf_bytes_free().
+ */
+typedef struct MmfByteBuffer {
+    uint8_t* ptr;
+    size_t   len;
+} MmfByteBuffer;
+
+/**
+ * Serialize the document (with full tessellation mesh data merged in) to
+ * an in-memory buffer.  Returns a buffer with ptr == NULL on error.
+ * The caller must free the buffer with mmf_bytes_free().
+ */
+MmfByteBuffer mmf_document_lsm_bytes(const MmfDocument* doc);
+
+/** Free a buffer returned by mmf_document_lsm_bytes(). */
+void mmf_bytes_free(MmfByteBuffer buf);
+
+/**
+ * Copy mesh positions+normals interleaved (24 bytes per vertex) into dst.
+ * Returns the number of vertices copied, or 0 when the mesh is invalid,
+ * dst is NULL, capacity_bytes is too small, or the mesh has no normals
+ * (caller falls back to the per-vertex Swift path).
+ */
+uint32_t mmf_mesh_copy_interleaved(const MmfDocument* doc, uint32_t index,
+                                   uint8_t* dst, size_t capacity_bytes);
 
 #ifdef __cplusplus
 }

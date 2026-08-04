@@ -190,7 +190,16 @@ struct MetalViewWrapper: NSViewRepresentable {
         // Allow reading the drawable texture for screenshot capture.
         mtkView.framebufferOnly = false
 
-        if let renderer = MetalRenderer(mtkView: mtkView) {
+        // Reuse the document's renderer when the view is recreated: the
+        // loading state (e.g. during Re-parse) tears this view down, and a
+        // fresh renderer would lose the meshes uploaded right before the
+        // view came back.  The renderer is a document-level resource.
+        if let existing = viewModel.boundRenderer {
+            mtkView.delegate = existing
+            existing.mtkView = mtkView  // re-attach the new drawable view
+            context.coordinator.renderer = existing
+            viewModel.setRenderer(existing)
+        } else if let renderer = MetalRenderer(mtkView: mtkView) {
             mtkView.delegate = renderer
             renderer.mtkView = mtkView  // store reference for screenshot capture
             context.coordinator.renderer = renderer

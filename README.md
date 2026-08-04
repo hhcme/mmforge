@@ -247,6 +247,33 @@ double-click to open):
 - **Metal GPU required**: Rendering needs Apple Silicon or Intel Mac with
   Metal-capable GPU.
 
+### Model Cache & Re-parse
+
+Parsed models are cached on disk (`~/Library/Application Support/MMForge/ModelCache/`,
+512 MB LRU).  Re-opening the same file skips the OCCT parse and loads the
+cached LSM in milliseconds (measured: 赛车.step 85 s → 0.085 s).
+
+Cache invalidation has three layers:
+
+1. **File identity**: key = path + size + mtime + content sample (SHA256
+   of first/last 4 KB).  Editing the source file changes the key.
+2. **Parser version**: the key embeds `mmf_cache_version()` from the Rust
+   core (`cache-v<crate-version>`).  Bump the `CACHE_VERSION` constant in
+   `crates/mmforge-bridge/src/lib.rs` after changing the parse/tessellation
+   pipeline — every cached entry becomes a miss automatically.
+3. **Manual re-parse**: the File menu "Re-parse Document" (⌘⇧R) forces a
+   full re-parse, bypassing the cache read; the fresh result overwrites the
+   cached entry.
+
+Batch refresh from the CLI (e.g. after a parser change, re-warm the cache
+for all fixtures with the new algorithm):
+
+```bash
+bash macos/scripts/refresh-model-cache.sh                # all testfile STEP files
+MMFORGE_BENCH_FILES="方盒子.step;躺板板.STEP" \
+  bash macos/scripts/refresh-model-cache.sh              # specific files
+```
+
 ---
 
 ## Repository
